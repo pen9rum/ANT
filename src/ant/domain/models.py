@@ -30,16 +30,32 @@ class Evidence(BaseModel):
     reason: str
 
 
+class WorkerObservation(BaseModel):
+    worker_id: str
+    territory_id: str
+    evidence: list[Evidence] = Field(default_factory=list)
+    unresolved_needs: list[UnresolvedNeed] = Field(default_factory=list)
+
+
 class UnresolvedNeed(BaseModel):
     description: str
     suggested_terms: list[str] = Field(default_factory=list)
     suggested_territories: list[str] = Field(default_factory=list)
 
 
+class RecruitmentRound(BaseModel):
+    round_index: int
+    query: str
+    selected_worker_ids: list[str] = Field(default_factory=list)
+    rationale: str
+    observations: list[WorkerObservation] = Field(default_factory=list)
+
+
 class EvidenceState(BaseModel):
     question: str
     evidence: list[Evidence] = Field(default_factory=list)
     unresolved_needs: list[UnresolvedNeed] = Field(default_factory=list)
+    rounds: list[RecruitmentRound] = Field(default_factory=list)
 
     def has_evidence(self) -> bool:
         return bool(self.evidence)

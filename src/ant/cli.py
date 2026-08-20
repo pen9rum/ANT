@@ -12,6 +12,8 @@ from ant.memory import IndexStore
 
 app = typer.Typer(no_args_is_help=True)
 INDEX_OPTION = typer.Option(Path(".ant"), "--index")
+MAX_ROUNDS_OPTION = typer.Option(2, "--max-rounds", min=1)
+SAVE_TRACE_OPTION = typer.Option(True, "--save-trace/--no-save-trace")
 
 
 @app.command()
@@ -29,10 +31,15 @@ def ask(
     question: str,
     repo: Path = Path("."),
     index_path: Path = INDEX_OPTION,
+    max_rounds: int = MAX_ROUNDS_OPTION,
+    save_trace: bool = SAVE_TRACE_OPTION,
 ) -> None:
     """Ask a local evidence question using saved worker cards."""
-    workers = IndexStore(index_path).load_workers()
-    state = LocalCoordinator(repo.resolve(), workers).ask(question)
+    store = IndexStore(index_path)
+    workers = store.load_workers()
+    state = LocalCoordinator(repo.resolve(), workers).ask(question, max_rounds=max_rounds)
+    if save_trace:
+        store.save_trace(state)
     typer.echo(json.dumps(state.model_dump(), indent=2))
 
 

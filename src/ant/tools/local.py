@@ -1,9 +1,26 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
 from ant.domain import Evidence
+
+TOKEN_RE = re.compile(r"[A-Za-z][A-Za-z0-9_]{2,}")
+STOP_WORDS = {
+    "are",
+    "for",
+    "handled",
+    "how",
+    "the",
+    "what",
+    "when",
+    "where",
+    "which",
+    "who",
+    "why",
+    "with",
+}
 
 
 @dataclass(frozen=True)
@@ -11,7 +28,11 @@ class LocalSearchTool:
     repo_root: Path
 
     def search(self, query: str, files: list[str], limit: int = 8) -> list[Evidence]:
-        terms = [term.lower() for term in query.split() if len(term) > 2]
+        terms = [
+            term.lower()
+            for term in TOKEN_RE.findall(query)
+            if len(term) > 2 and term.lower() not in STOP_WORDS
+        ]
         if not terms:
             return []
 
