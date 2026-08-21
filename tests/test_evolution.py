@@ -39,3 +39,21 @@ def test_evolve_workers_births_bridge_from_recurring_coalition(tmp_path: Path) -
     assert result.events[0].kind == "birth"
     stored_workers = IndexStore(index_path).load_workers()
     assert any(worker.id.startswith("worker-bridge") for worker in stored_workers)
+
+
+def test_evolve_workers_retires_empty_and_merges_overlap(tmp_path: Path) -> None:
+    index_path = tmp_path / ".ant"
+    workers = [
+        WorkerCard(id="worker-empty", territory_id="empty", name="empty", root="", files=[]),
+        WorkerCard(id="worker-a", territory_id="a", name="a", root="a", files=["shared.py"]),
+        WorkerCard(id="worker-b", territory_id="b", name="b", root="b", files=["shared.py"]),
+    ]
+    territories = [
+        Territory(id=worker.territory_id, root=worker.root, files=worker.files)
+        for worker in workers
+    ]
+    IndexStore(index_path).save(territories, workers)
+
+    result = evolve_workers(index_path, min_coalition_count=99, merge_overlap=0.9)
+
+    assert {event.kind for event in result.events} == {"retire", "merge"}

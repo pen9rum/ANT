@@ -46,11 +46,12 @@ class LocalCoordinator:
             observations = []
             for worker in selected:
                 worker_evidence = search.search(query, worker.files, limit=4)
-                for symbol in _candidate_symbols(query, worker_evidence):
-                    worker_evidence.extend(search.navigate(symbol, worker.files, limit=2))
-                    if len(worker_evidence) >= 8:
+                navigation_evidence = []
+                for symbol in _candidate_symbols(query, worker_evidence)[:4]:
+                    navigation_evidence.extend(search.navigate(symbol, worker.files, limit=2))
+                    if len(navigation_evidence) >= 4:
                         break
-                worker_evidence = _dedupe_evidence(worker_evidence)[:8]
+                worker_evidence = _dedupe_evidence([*navigation_evidence, *worker_evidence])[:8]
                 evidence.extend(worker_evidence)
                 observation = self.reasoner.observe(
                     question=query,
@@ -88,7 +89,15 @@ class LocalCoordinator:
 
         answer = ""
         if self.synthesizer and evidence:
-            answer = self.synthesizer.synthesize(question=question, evidence=evidence[:12])
+            coalition_workers = _last_coalition_workers(rounds)
+            if len(coalition_workers) > 1:
+                answer = self.synthesizer.synthesize_coalition(
+                    question=question,
+                    worker_ids=coalition_workers,
+                    evidence=evidence[:12],
+                )
+            else:
+                answer = self.synthesizer.synthesize(question=question, evidence=evidence[:12])
         usage = (
             self.synthesizer.drain_usage()
             if isinstance(self.synthesizer, UsageReporter)
@@ -125,6 +134,12 @@ class LocalCoordinator:
             }
             terms |= path_terms
             score = sum(1 for query_term in query_terms if _matches_term(query_term, terms))
+            if any(token[:1].isupper() for token in TOKEN_RE.findall(question)) and worker.root in {
+                "src",
+                "lib",
+                "ant",
+            }:
+                score += 2
             scored.append((score, worker))
         scored.sort(key=lambda item: item[0], reverse=True)
         selected = [worker for score, worker in scored[:limit] if score > 0]
@@ -144,20 +159,41 @@ def _matches_term(query_term: str, terms: set[str]) -> bool:
 
 
 def _candidate_symbols(query: str, evidence: list[Evidence]) -> list[str]:
-    symbols = set(TOKEN_RE.findall(query))
+    ordered = []
+    seen = set()
+    for symbol in TOKEN_RE.findall(query):
+        if symbol not in seen:
+            ordered.append(symbol)
+            seen.add(symbol)
     for item in evidence:
-        symbols.update(token for token in TOKEN_RE.findall(item.quote) if "_" in token)
-        symbols.update(token for token in TOKEN_RE.findall(item.quote) if token[:1].isupper())
-    return [symbol for symbol in symbols if len(symbol) > 3][:8]
+        for token in TOKEN_RE.findall(item.quote):
+            if token in seen or len(token) <= 3:
+                continue
+            if "_" in token or token[:1].isupper():
+                ordered.append(token)
+                seen.add(token)
+    return [symbol for symbol in ordered if len(symbol) > 3]
 
 
 def _dedupe_evidence(evidence: list[Evidence]) -> list[Evidence]:
-    seen = set()
     deduped = []
     for item in evidence:
-        key = (item.path, item.line_start, item.line_end)
-        if key in seen:
+        if _overlaps_existing(item, deduped):
             continue
-        seen.add(key)
         deduped.append(item)
     return deduped
+
+
+def _overlaps_existing(item: Evidence, existing: list[Evidence]) -> bool:
+    for other in existing:
+        if item.path != other.path:
+            continue
+        if item.line_start >= other.line_start and item.line_end <= other.line_end:
+            return True
+    return False
+
+
+def _last_coalition_workers(rounds: list[RecruitmentRound]) -> list[str]:
+    if not rounds:
+        return []
+    return rounds[-1].selected_worker_ids

@@ -7,12 +7,19 @@ import typer
 
 from ant.coordinator import LocalCoordinator
 from ant.environment import RepoEnvironment
-from ant.evaluation import build_report, load_examples, run_batch
+from ant.evaluation import (
+    build_report,
+    fetch_repositories,
+    load_examples,
+    load_repo_specs,
+    run_batch,
+)
 from ant.evolution import evolve_workers
 from ant.generation import generate_worker_cards
 from ant.git_refresh import refresh_changed_workers
 from ant.indexing import discover_territories
 from ant.memory import IndexStore
+from ant.memory.colony import ColonyMemoryStore
 from ant.providers import OpenAIProvider
 
 app = typer.Typer(no_args_is_help=True)
@@ -119,10 +126,45 @@ def refresh(
 
 
 @app.command()
-def evolve(index_path: Path = INDEX_OPTION, min_coalition_count: int = 2) -> None:
+def evolve(
+    index_path: Path = INDEX_OPTION,
+    min_coalition_count: int = 2,
+    retire_empty: bool = True,
+    merge_overlap: float = 0.9,
+) -> None:
     """Apply worker population evolution from recurring coalition memory."""
-    result = evolve_workers(index_path, min_coalition_count=min_coalition_count)
+    result = evolve_workers(
+        index_path,
+        min_coalition_count=min_coalition_count,
+        retire_empty=retire_empty,
+        merge_overlap=merge_overlap,
+    )
     typer.echo(result.model_dump_json(indent=2))
+
+
+@app.command()
+def revalidate(repo: Path = Path("."), index_path: Path = INDEX_OPTION) -> None:
+    """Revalidate stale memory records after repository changes."""
+    result = ColonyMemoryStore(index_path).revalidate_stale(repo.resolve())
+    typer.echo(json.dumps(result, indent=2))
+
+
+@app.command("sweqa-fetch-repos")
+def sweqa_fetch_repos(
+    target_dir: Path = Path("repos"),
+    source: str = "https://raw.githubusercontent.com/TIGER-AI-Lab/SWE-QA-Pro/main/eval/repos.txt",
+    limit: int | None = None,
+    repo_filter: str | None = typer.Option(None, "--repo"),
+) -> None:
+    """Clone and checkout SWE-QA-Pro repositories from repos.txt."""
+    specs = load_repo_specs(source)
+    paths = fetch_repositories(
+        target_dir=target_dir,
+        specs=specs,
+        limit=limit,
+        repo_filter=repo_filter,
+    )
+    typer.echo(json.dumps([str(path) for path in paths], indent=2))
 
 
 if __name__ == "__main__":

@@ -15,6 +15,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+bench = [
+  "datasets>=3.0",
+]
 dev = [
   "pytest>=8.2",
   "ruff>=0.6",
@@ -33,12 +36,14 @@ testpaths = ["tests"]
 [tool.ruff]
 line-length = 100
 target-version = "py312"
+exclude = ["repos", "output", ".ant"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
 
 [tool.pyright]
 include = ["src", "tests"]
+exclude = ["repos", "output", ".ant"]
 pythonVersion = "3.12"
 typeCheckingMode = "basic"
 venvPath = "."

@@ -29,6 +29,14 @@ class CardGenerator(Protocol):
 class AnswerSynthesizer(Protocol):
     def synthesize(self, *, question: str, evidence: list[Evidence]) -> str: ...
 
+    def synthesize_coalition(
+        self,
+        *,
+        question: str,
+        worker_ids: list[str],
+        evidence: list[Evidence],
+    ) -> str: ...
+
 
 @runtime_checkable
 class UsageReporter(Protocol):

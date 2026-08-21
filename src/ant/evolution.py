@@ -20,7 +20,12 @@ class EvolutionResult(BaseModel):
     worker_count: int = 0
 
 
-def evolve_workers(index_path: Path, min_coalition_count: int = 2) -> EvolutionResult:
+def evolve_workers(
+    index_path: Path,
+    min_coalition_count: int = 2,
+    retire_empty: bool = True,
+    merge_overlap: float = 0.9,
+) -> EvolutionResult:
     store = IndexStore(index_path)
     memory = ColonyMemoryStore(index_path)
     workers = store.load_workers()
@@ -62,6 +67,24 @@ def evolve_workers(index_path: Path, min_coalition_count: int = 2) -> EvolutionR
             )
         )
 
+    if retire_empty:
+        kept = []
+        for worker in workers:
+            if worker.files:
+                kept.append(worker)
+                continue
+            events.append(
+                EvolutionEvent(
+                    kind="retire",
+                    worker_id=worker.id,
+                    reason="Worker has no owned files after refresh.",
+                )
+            )
+        workers = kept
+
+    workers, merge_events = _merge_overlapping_workers(workers, threshold=merge_overlap)
+    events.extend(merge_events)
+
     territories = [
         Territory(
             id=worker.territory_id,
@@ -74,3 +97,51 @@ def evolve_workers(index_path: Path, min_coalition_count: int = 2) -> EvolutionR
     if events:
         store.save(territories, workers)
     return EvolutionResult(events=events, worker_count=len(workers))
+
+
+def _merge_overlapping_workers(
+    workers: list[WorkerCard],
+    threshold: float,
+) -> tuple[list[WorkerCard], list[EvolutionEvent]]:
+    events: list[EvolutionEvent] = []
+    consumed: set[str] = set()
+    merged: list[WorkerCard] = []
+    for index, worker in enumerate(workers):
+        if worker.id in consumed:
+            continue
+        worker_files = set(worker.files)
+        partner = None
+        for other in workers[index + 1 :]:
+            if other.id in consumed:
+                continue
+            other_files = set(other.files)
+            union = worker_files | other_files
+            if not union:
+                continue
+            overlap = len(worker_files & other_files) / len(union)
+            if overlap >= threshold:
+                partner = other
+                break
+        if partner is None:
+            merged.append(worker)
+            continue
+        consumed.update({worker.id, partner.id})
+        merged_worker = WorkerCard(
+            id=f"worker-merge-{worker.id.removeprefix('worker-')}-{partner.id.removeprefix('worker-')}",
+            territory_id=f"merge-{worker.territory_id}-{partner.territory_id}",
+            name=f"{worker.name} / {partner.name} merged",
+            root=worker.root or partner.root,
+            responsibilities=worker.responsibilities + partner.responsibilities,
+            searchable_terms=sorted(set(worker.searchable_terms) | set(partner.searchable_terms)),
+            files=sorted(worker_files | set(partner.files)),
+        )
+        merged.append(merged_worker)
+        events.append(
+            EvolutionEvent(
+                kind="merge",
+                worker_id=merged_worker.id,
+                reason="Workers have highly overlapping file ownership.",
+                source_worker_ids=[worker.id, partner.id],
+            )
+        )
+    return merged, events

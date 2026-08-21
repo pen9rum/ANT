@@ -44,3 +44,14 @@ def test_run_batch_writes_results(tmp_path: Path) -> None:
     assert (tmp_path / "results.jsonl").exists()
     report = build_report(tmp_path / "results.jsonl")
     assert report.count == 1
+
+
+def test_run_batch_skips_missing_swe_repo(tmp_path: Path) -> None:
+    results = run_batch(
+        examples=[EvalExample(id="q1", question="q", repo="owner/missing")],
+        repo_root=tmp_path / "repos",
+        index_path=tmp_path / ".ant",
+        out_path=tmp_path / "results.jsonl",
+    )
+
+    assert results[0].status == "skipped_missing_repo"

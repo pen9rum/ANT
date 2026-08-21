@@ -19,6 +19,7 @@ class BatchResult(BaseModel):
     question: str
     prediction: str
     score: EvalScore
+    status: str = "completed"
     trace_id: int | None = None
     metadata: dict = Field(default_factory=dict)
 
@@ -33,15 +34,41 @@ def run_batch(
     synthesize: str = "none",
     judge: str = "heuristic",
 ) -> list[BatchResult]:
-    store = IndexStore(index_path)
-    colony_memory = ColonyMemoryStore(index_path)
-    workers = store.load_workers()
     provider = OpenAIProvider() if synthesize == "openai" else None
-    coordinator = LocalCoordinator(repo_root, workers, synthesizer=provider)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     results: list[BatchResult] = []
     with out_path.open("w", encoding="utf-8") as handle:
         for example in examples:
+            example_repo = _resolve_repo(repo_root, example.repo)
+            if example_repo is None:
+                result = BatchResult(
+                    example_id=example.id,
+                    question=example.question,
+                    prediction="",
+                    score=EvalScore(
+                        exact_match=False,
+                        contains_answer=False,
+                        evidence_count=0,
+                        unresolved_need_count=0,
+                    ),
+                    status="skipped_missing_repo",
+                    metadata={"repo": example.repo},
+                )
+                results.append(result)
+                handle.write(json.dumps(result.model_dump(), ensure_ascii=True) + "\n")
+                continue
+
+            example_index = (
+                index_path if example.repo == "." else index_path / _repo_basename(example.repo)
+            )
+            if not (example_index / "workers.json").exists() and not (
+                example_index / "ant.sqlite3"
+            ).exists():
+                _build_index(example_repo, example_index)
+            store = IndexStore(example_index)
+            colony_memory = ColonyMemoryStore(example_index)
+            workers = store.load_workers()
+            coordinator = LocalCoordinator(example_repo, workers, synthesizer=provider)
             state = coordinator.ask(example.question, max_rounds=max_rounds)
             trace_id = store.save_trace(state)
             for round_state in state.rounds:
@@ -78,3 +105,31 @@ def run_batch(
 
 def _fallback_prediction(evidence) -> str:
     return "\n".join(f"{item.path}:{item.line_start}: {item.quote}" for item in evidence[:4])
+
+
+def _resolve_repo(repo_root: Path, repo: str) -> Path | None:
+    if repo == ".":
+        return repo_root
+    candidates = [
+        repo_root / repo,
+        repo_root / _repo_basename(repo),
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate.resolve()
+    return None
+
+
+def _repo_basename(repo: str) -> str:
+    return repo.rstrip("/").removesuffix(".git").split("/")[-1]
+
+
+def _build_index(repo: Path, index_path: Path) -> None:
+    from ant.environment import RepoEnvironment
+    from ant.generation import generate_worker_cards
+    from ant.indexing import discover_territories
+
+    environment = RepoEnvironment(repo)
+    territories = discover_territories(environment)
+    workers = generate_worker_cards(environment.root, territories)
+    IndexStore(index_path).save(territories, workers)

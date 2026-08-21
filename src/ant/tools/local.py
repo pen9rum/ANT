@@ -38,6 +38,7 @@ class LocalSearchTool:
         context_lines: int = 6,
     ) -> list[Evidence]:
         terms = _query_terms(query)
+        symbols = _query_symbols(query)
         if not terms:
             return []
 
@@ -46,7 +47,7 @@ class LocalSearchTool:
             path = self.repo_root / relative
             lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
             for index, line in enumerate(lines, start=1):
-                score = _line_score(line, terms)
+                score = _line_score(line, terms, symbols=symbols) + _path_score(relative, symbols)
                 if score <= 0:
                     continue
                 start = max(1, index - context_lines)
@@ -103,7 +104,15 @@ def _query_terms(query: str) -> list[str]:
     return sorted(set(terms))
 
 
-def _line_score(line: str, terms: list[str]) -> int:
+def _query_symbols(query: str) -> list[str]:
+    return [
+        token
+        for token in TOKEN_RE.findall(query)
+        if "_" in token or any(character.isupper() for character in token)
+    ]
+
+
+def _line_score(line: str, terms: list[str], symbols: list[str] | None = None) -> int:
     line_terms = set(_query_terms(line))
     lowered = line.lower()
     score = 0
@@ -112,6 +121,27 @@ def _line_score(line: str, terms: list[str]) -> int:
             score += 3
         elif term in lowered:
             score += 1
+    for symbol in symbols or []:
+        if symbol in line:
+            score += 8
+        if _is_definition_line(line.strip()) and symbol in line:
+            score += 8
+    return score
+
+
+def _path_score(relative: str, symbols: list[str]) -> int:
+    path = relative.replace("\\", "/")
+    score = 0
+    if path.endswith(".py"):
+        score += 2
+    if "/README" in path or path.endswith("README.md"):
+        score -= 4
+    if path.startswith("examples/"):
+        score -= 2
+    lowered = path.lower()
+    for symbol in symbols:
+        if symbol.lower() in lowered:
+            score += 4
     return score
 
 
@@ -124,7 +154,7 @@ def _merge_windows(
     for score, relative, start, lines, matched_line in candidates:
         end = start + len(lines) - 1
         ranges = occupied.setdefault(relative, [])
-        if any(not (end < used_start or start > used_end) for used_start, used_end in ranges):
+        if any(_is_contained(start, end, used_start, used_end) for used_start, used_end in ranges):
             continue
         ranges.append((start, end))
         evidence.append(
@@ -132,13 +162,17 @@ def _merge_windows(
                 path=relative,
                 line_start=start,
                 line_end=end,
-                quote="\n".join(lines).strip()[:1600],
+                quote="\n".join(lines).strip()[:4000],
                 reason=f"Scored local retrieval match ({score}) around: {matched_line[:120]}",
             )
         )
         if len(evidence) >= limit:
             break
     return evidence
+
+
+def _is_contained(start: int, end: int, used_start: int, used_end: int) -> bool:
+    return start >= used_start and end <= used_end
 
 
 def _is_definition_line(line: str) -> bool:

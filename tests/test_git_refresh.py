@@ -4,7 +4,7 @@ from pathlib import Path
 from ant.environment import RepoEnvironment
 from ant.git_refresh import refresh_changed_workers
 from ant.indexing import build_worker_cards, discover_territories
-from ant.memory import IndexStore
+from ant.memory import ColonyMemoryStore, IndexStore
 
 
 def test_refresh_changed_workers_updates_affected_territory(tmp_path: Path) -> None:
@@ -30,3 +30,4 @@ def test_refresh_changed_workers_updates_affected_territory(tmp_path: Path) -> N
     assert result.changed_files == ["src/app.py"]
     assert result.affected_territories == ["src"]
     assert result.stale_memory_count == 1
+    assert ColonyMemoryStore(index_path).revalidate_stale(repo)["revalidated"] == 1

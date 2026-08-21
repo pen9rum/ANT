@@ -74,6 +74,30 @@ class ColonyMemoryStore:
                     count += cursor.rowcount
         return count
 
+    def revalidate_stale(self, repo_root: Path) -> dict[str, int]:
+        repaired = 0
+        discarded = 0
+        with sqlite3.connect(self.db_path) as connection:
+            _create_schema(connection)
+            rows = connection.execute(
+                "select id, path from stale_memory where resolved_at is null"
+            ).fetchall()
+            for row_id, path in rows:
+                status = "revalidated" if (repo_root / path).exists() else "discarded"
+                if status == "revalidated":
+                    repaired += 1
+                else:
+                    discarded += 1
+                connection.execute(
+                    """
+                    update stale_memory
+                    set resolved_at = current_timestamp, reason = reason || ? 
+                    where id = ?
+                    """,
+                    (f" Revalidation status: {status}.", row_id),
+                )
+        return {"revalidated": repaired, "discarded": discarded}
+
 
 def _create_schema(connection: sqlite3.Connection) -> None:
     connection.executescript(

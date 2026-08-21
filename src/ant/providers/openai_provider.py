@@ -203,6 +203,27 @@ class OpenAIProvider:
         )
         return self.responses_text(prompt, max_output_tokens=512).text
 
+    def synthesize_coalition(
+        self,
+        *,
+        question: str,
+        worker_ids: list[str],
+        evidence: list[Evidence],
+    ) -> str:
+        evidence_text = "\n".join(
+            f"- {item.path}:{item.line_start}-{item.line_end}\n{item.quote}"
+            for item in evidence[:12]
+        )
+        prompt = (
+            "A temporary worker coalition is jointly answering a repository question.\n"
+            f"Workers: {', '.join(worker_ids)}\n"
+            "Cross-check evidence across territories, name conflicts or missing links, "
+            "and answer only what is supported.\n"
+            f"Question: {question}\n"
+            f"Evidence:\n{evidence_text}\n"
+        )
+        return self.responses_text(prompt, max_output_tokens=768).text
+
 
 def _extract_output_text(data: dict) -> str:
     parts: list[str] = []

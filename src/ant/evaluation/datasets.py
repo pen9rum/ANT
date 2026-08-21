@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from hashlib import sha1
 from pathlib import Path
 from typing import Any
 
@@ -69,9 +70,7 @@ def _coerce_example(row: dict[str, Any]) -> EvalExample:
         or row.get("ground_truth")
         or ""
     )
-    example_id = (
-        row.get("id") or row.get("instance_id") or row.get("qid") or str(abs(hash(question)))
-    )
+    example_id = row.get("id") or row.get("instance_id") or row.get("qid") or _stable_id(question)
     repo = row.get("repo") or row.get("repository") or row.get("repo_name") or "."
     return EvalExample(
         id=str(example_id),
@@ -89,3 +88,7 @@ def _dataset_alias(name: str) -> str:
         "swe-qa": "swe-qa/SWE-QA-Benchmark",
     }
     return aliases.get(name, name)
+
+
+def _stable_id(text: str) -> str:
+    return sha1(text.encode("utf-8")).hexdigest()[:16]
