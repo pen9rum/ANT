@@ -2,6 +2,7 @@ from pathlib import Path
 
 from ant.coordinator import LocalCoordinator
 from ant.domain import WorkerCard
+from ant.tools import LocalSearchTool
 
 
 def test_local_coordinator_returns_grounded_evidence(tmp_path: Path) -> None:
@@ -46,3 +47,31 @@ def test_local_coordinator_records_unresolved_needs(tmp_path: Path) -> None:
     assert not state.has_evidence()
     assert state.unresolved_needs
     assert state.rounds[0].observations[0].worker_id == "worker-docs"
+
+
+def test_local_search_returns_context_windows(tmp_path: Path) -> None:
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "coordinator.py").write_text(
+        "\n".join(
+            [
+                "class LocalCoordinator:",
+                "    def ask(self):",
+                "        selected = self._select_workers('query')",
+                "        return selected",
+                "",
+                "    def _select_workers(self, query):",
+                "        return []",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    evidence = LocalSearchTool(tmp_path).search(
+        "Where is worker selection handled?",
+        ["src/coordinator.py"],
+        limit=1,
+        context_lines=2,
+    )
+
+    assert evidence[0].line_end > evidence[0].line_start
+    assert "def _select_workers" in evidence[0].quote or "selected =" in evidence[0].quote
