@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from ant.domain import Evidence
+from ant.retrieval import BM25Index
 
 TOKEN_RE = re.compile(r"[A-Za-z][A-Za-z0-9_]{2,}")
 CAMEL_RE = re.compile(r"[A-Z]?[a-z]+|[A-Z]+(?=[A-Z]|$)")
@@ -46,10 +47,15 @@ class LocalSearchTool:
         for relative in files:
             path = self.repo_root / relative
             lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+            bm25_line_ids = set(_bm25_line_ids(relative, lines, terms, limit=80))
             for index, line in enumerate(lines, start=1):
-                score = _line_score(line, terms, symbols=symbols) + _path_score(relative, symbols)
-                if score <= 0:
+                line_score = _line_score(line, terms, symbols=symbols)
+                bm25_hit = f"{relative}:{index}" in bm25_line_ids
+                if line_score <= 0 and not bm25_hit:
                     continue
+                score = line_score + _path_score(relative, symbols)
+                if bm25_hit:
+                    score += 6
                 start = max(1, index - context_lines)
                 end = min(len(lines), index + context_lines)
                 candidates.append((score, relative, start, lines[start - 1 : end], line.strip()))
@@ -88,6 +94,31 @@ class LocalSearchTool:
             quote="\n".join(lines[start - 1 : end]).strip()[:2400],
             reason=f"Read bounded region around {path}:{line}.",
         )
+
+    def references(self, symbol: str, files: list[str], limit: int = 6) -> list[Evidence]:
+        results = self.search(symbol, files, limit=limit, context_lines=3)
+        return [
+            item.model_copy(update={"reason": f"Reference search for symbol {symbol}."})
+            for item in results
+        ]
+
+    def imports(self, module_or_symbol: str, files: list[str], limit: int = 6) -> list[Evidence]:
+        terms = _query_terms(module_or_symbol)
+        candidates: list[tuple[int, str, int, list[str], str]] = []
+        for relative in files:
+            lines = (self.repo_root / relative).read_text(
+                encoding="utf-8",
+                errors="replace",
+            ).splitlines()
+            for index, line in enumerate(lines, start=1):
+                stripped = line.strip()
+                if not (stripped.startswith("import ") or stripped.startswith("from ")):
+                    continue
+                score = _line_score(stripped, terms)
+                if score > 0:
+                    candidates.append((score + 3, relative, index, [line], stripped))
+        candidates.sort(key=lambda item: item[0], reverse=True)
+        return _merge_windows(candidates, limit=limit)
 
 
 def _query_terms(query: str) -> list[str]:
@@ -169,6 +200,15 @@ def _merge_windows(
         if len(evidence) >= limit:
             break
     return evidence
+
+
+def _bm25_line_ids(relative: str, lines: list[str], terms: list[str], limit: int) -> list[str]:
+    documents = [
+        (f"{relative}:{index}", " ".join(_query_terms(line)))
+        for index, line in enumerate(lines, start=1)
+        if line.strip()
+    ]
+    return [doc_id for _, doc_id in BM25Index(documents).search(terms, limit=limit)]
 
 
 def _is_contained(start: int, end: int, used_start: int, used_end: int) -> bool:

@@ -99,3 +99,16 @@ def test_local_search_can_navigate_to_definition_block(tmp_path: Path) -> None:
     assert evidence
     assert "def _select_workers" in evidence[0].quote
     assert "return selected" in evidence[0].quote
+
+
+def test_local_search_finds_references(tmp_path: Path) -> None:
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "model.py").write_text(
+        "class QAOA:\n    pass\n\nqaoa = QAOA()\n",
+        encoding="utf-8",
+    )
+
+    evidence = LocalSearchTool(tmp_path).references("QAOA", ["src/model.py"])
+
+    assert evidence
+    assert any("QAOA()" in item.quote for item in evidence)

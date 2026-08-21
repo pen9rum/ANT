@@ -9,10 +9,12 @@ from ant.domain import (
     RecruitmentRound,
     TokenUsage,
     UnresolvedNeed,
+    WorkerAction,
     WorkerCard,
 )
 from ant.providers import AnswerSynthesizer, MockLLMProvider, UsageReporter, WorkerReasoner
 from ant.tools import LocalSearchTool
+from ant.workers import AutonomousWorker, WorkerRunConfig
 
 TOKEN_RE = re.compile(r"[A-Za-z][A-Za-z0-9_]{2,}")
 
@@ -37,6 +39,7 @@ class LocalCoordinator:
         seen_worker_ids: set[str] = set()
         query = question
         search = LocalSearchTool(self.repo_root)
+        worker_config = WorkerRunConfig(max_tool_calls=8, evidence_limit=8)
 
         for round_index in range(max_rounds):
             selected = self._select_workers(query, seen_worker_ids=seen_worker_ids)
@@ -45,24 +48,25 @@ class LocalCoordinator:
 
             observations = []
             for worker in selected:
-                worker_evidence = search.search(query, worker.files, limit=4)
-                navigation_evidence = []
-                for symbol in _candidate_symbols(query, worker_evidence)[:4]:
-                    navigation_evidence.extend(search.navigate(symbol, worker.files, limit=2))
-                    if len(navigation_evidence) >= 4:
-                        break
-                worker_evidence = _dedupe_evidence([*navigation_evidence, *worker_evidence])[:8]
+                observation = AutonomousWorker(self.repo_root, worker, search).run(
+                    query,
+                    config=worker_config,
+                )
+                worker_evidence = observation.evidence
                 evidence.extend(worker_evidence)
-                observation = self.reasoner.observe(
+                reasoner_observation = self.reasoner.observe(
                     question=query,
                     worker_id=worker.id,
                     territory_id=worker.territory_id,
                     evidence_count=len(worker_evidence),
                 )
-                observation.evidence = worker_evidence
+                observation.unresolved_needs.extend(reasoner_observation.unresolved_needs)
                 observations.append(observation)
                 unresolved_needs.extend(observation.unresolved_needs)
                 seen_worker_ids.add(worker.id)
+
+            if len(observations) > 1:
+                _add_coalition_cross_checks(observations)
 
             rounds.append(
                 RecruitmentRound(
@@ -88,6 +92,7 @@ class LocalCoordinator:
             )
 
         answer = ""
+        evidence = _rank_global_evidence(evidence, question)[:12]
         if self.synthesizer and evidence:
             coalition_workers = _last_coalition_workers(rounds)
             if len(coalition_workers) > 1:
@@ -107,7 +112,7 @@ class LocalCoordinator:
         return EvidenceState(
             question=question,
             answer=answer,
-            evidence=evidence[:12],
+            evidence=evidence,
             unresolved_needs=unresolved_needs,
             rounds=rounds,
             usage=usage if isinstance(usage, TokenUsage) else TokenUsage(),
@@ -158,42 +163,50 @@ def _matches_term(query_term: str, terms: set[str]) -> bool:
     return any(query_term in term or term in query_term for term in terms)
 
 
-def _candidate_symbols(query: str, evidence: list[Evidence]) -> list[str]:
-    ordered = []
-    seen = set()
-    for symbol in TOKEN_RE.findall(query):
-        if symbol not in seen:
-            ordered.append(symbol)
-            seen.add(symbol)
-    for item in evidence:
-        for token in TOKEN_RE.findall(item.quote):
-            if token in seen or len(token) <= 3:
-                continue
-            if "_" in token or token[:1].isupper():
-                ordered.append(token)
-                seen.add(token)
-    return [symbol for symbol in ordered if len(symbol) > 3]
+def _rank_global_evidence(evidence: list[Evidence], question: str) -> list[Evidence]:
+    terms = {term.lower() for term in TOKEN_RE.findall(question) if len(term) > 2}
 
+    def score(item: Evidence) -> int:
+        quote = item.quote.lower()
+        path = item.path.replace("\\", "/")
+        value = 0
+        if "class " in quote:
+            value += 10
+        if "def " in quote:
+            value += 8
+        if path.startswith("src/"):
+            value += 5
+        if path.endswith(".py"):
+            value += 3
+        if path.endswith("setup.py") or path.endswith("README.md") or path.startswith("examples/"):
+            value -= 10
+        value += sum(1 for term in terms if term in quote)
+        return value
 
-def _dedupe_evidence(evidence: list[Evidence]) -> list[Evidence]:
-    deduped = []
-    for item in evidence:
-        if _overlaps_existing(item, deduped):
-            continue
-        deduped.append(item)
-    return deduped
-
-
-def _overlaps_existing(item: Evidence, existing: list[Evidence]) -> bool:
-    for other in existing:
-        if item.path != other.path:
-            continue
-        if item.line_start >= other.line_start and item.line_end <= other.line_end:
-            return True
-    return False
+    return sorted(evidence, key=score, reverse=True)
 
 
 def _last_coalition_workers(rounds: list[RecruitmentRound]) -> list[str]:
     if not rounds:
         return []
     return rounds[-1].selected_worker_ids
+
+
+def _add_coalition_cross_checks(observations) -> None:
+    for observation in observations:
+        peer_paths = sorted(
+            {
+                evidence.path
+                for peer in observations
+                if peer.worker_id != observation.worker_id
+                for evidence in peer.evidence
+            }
+        )
+        observation.actions.append(
+            WorkerAction(
+                tool="cross_check",
+                query=", ".join(peer_paths[:6]),
+                result_count=len(peer_paths),
+                rationale="One-pass coalition cross-check against peer evidence paths.",
+            )
+        )

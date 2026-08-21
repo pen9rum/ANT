@@ -38,11 +38,20 @@ class Evidence(BaseModel):
     reason: str
 
 
+class WorkerAction(BaseModel):
+    tool: str
+    query: str
+    result_count: int = 0
+    rationale: str = ""
+
+
 class WorkerObservation(BaseModel):
     worker_id: str
     territory_id: str
     evidence: list[Evidence] = Field(default_factory=list)
     unresolved_needs: list[UnresolvedNeed] = Field(default_factory=list)
+    actions: list[WorkerAction] = Field(default_factory=list)
+    stop_reason: str = ""
 
 
 class UnresolvedNeed(BaseModel):

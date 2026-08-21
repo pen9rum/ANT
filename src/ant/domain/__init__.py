@@ -5,6 +5,7 @@ from ant.domain.models import (
     Territory,
     TokenUsage,
     UnresolvedNeed,
+    WorkerAction,
     WorkerCard,
     WorkerObservation,
     as_posix,
@@ -18,6 +19,7 @@ __all__ = [
     "TokenUsage",
     "UnresolvedNeed",
     "WorkerCard",
+    "WorkerAction",
     "WorkerObservation",
     "as_posix",
 ]
