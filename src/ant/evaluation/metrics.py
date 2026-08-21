@@ -8,6 +8,11 @@ class EvalScore(BaseModel):
     contains_answer: bool
     evidence_count: int
     unresolved_need_count: int
+    correctness: int = 0
+    completeness: int = 0
+    relevance: int = 0
+    clarity: int = 0
+    reasoning: int = 0
 
 
 def evaluate_answer(

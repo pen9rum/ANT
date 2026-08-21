@@ -3,8 +3,15 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from ant.domain import Evidence, EvidenceState, RecruitmentRound, UnresolvedNeed, WorkerCard
-from ant.providers import AnswerSynthesizer, MockLLMProvider, WorkerReasoner
+from ant.domain import (
+    Evidence,
+    EvidenceState,
+    RecruitmentRound,
+    TokenUsage,
+    UnresolvedNeed,
+    WorkerCard,
+)
+from ant.providers import AnswerSynthesizer, MockLLMProvider, UsageReporter, WorkerReasoner
 from ant.tools import LocalSearchTool
 
 TOKEN_RE = re.compile(r"[A-Za-z][A-Za-z0-9_]{2,}")
@@ -77,6 +84,11 @@ class LocalCoordinator:
         answer = ""
         if self.synthesizer and evidence:
             answer = self.synthesizer.synthesize(question=question, evidence=evidence[:12])
+        usage = (
+            self.synthesizer.drain_usage()
+            if isinstance(self.synthesizer, UsageReporter)
+            else None
+        )
 
         return EvidenceState(
             question=question,
@@ -84,6 +96,7 @@ class LocalCoordinator:
             evidence=evidence[:12],
             unresolved_needs=unresolved_needs,
             rounds=rounds,
+            usage=usage if isinstance(usage, TokenUsage) else TokenUsage(),
         )
 
     def _select_workers(

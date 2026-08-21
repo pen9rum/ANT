@@ -26,6 +26,8 @@ class TokenUsage(BaseModel):
     input_tokens: int = 0
     output_tokens: int = 0
     total_tokens: int = 0
+    latency_ms: int = 0
+    estimated_cost_usd: float = 0.0
 
 
 class Evidence(BaseModel):

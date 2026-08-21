@@ -17,7 +17,8 @@ class EvalExample(BaseModel):
 
 def load_examples(path: str, split: str = "test", limit: int | None = None) -> list[EvalExample]:
     if path.startswith("hf://"):
-        return _load_huggingface_examples(path.removeprefix("hf://"), split=split, limit=limit)
+        dataset_name = _dataset_alias(path.removeprefix("hf://"))
+        return _load_huggingface_examples(dataset_name, split=split, limit=limit)
     return _load_jsonl_examples(Path(path), limit=limit)
 
 
@@ -53,12 +54,25 @@ def _load_huggingface_examples(
 
 
 def _coerce_example(row: dict[str, Any]) -> EvalExample:
-    question = row.get("question") or row.get("problem_statement") or row.get("query") or ""
-    answer = row.get("answer") or row.get("gold") or row.get("expected_answer") or ""
+    question = (
+        row.get("question")
+        or row.get("problem_statement")
+        or row.get("query")
+        or row.get("prompt")
+        or ""
+    )
+    answer = (
+        row.get("answer")
+        or row.get("reference_answer")
+        or row.get("gold")
+        or row.get("expected_answer")
+        or row.get("ground_truth")
+        or ""
+    )
     example_id = (
         row.get("id") or row.get("instance_id") or row.get("qid") or str(abs(hash(question)))
     )
-    repo = row.get("repo") or row.get("repository") or "."
+    repo = row.get("repo") or row.get("repository") or row.get("repo_name") or "."
     return EvalExample(
         id=str(example_id),
         question=str(question),
@@ -66,3 +80,12 @@ def _coerce_example(row: dict[str, Any]) -> EvalExample:
         repo=str(repo),
         metadata=row,
     )
+
+
+def _dataset_alias(name: str) -> str:
+    aliases = {
+        "swe-qa-pro": "TIGER-Lab/SWE-QA-Pro-Bench",
+        "SWE-QA-Pro": "TIGER-Lab/SWE-QA-Pro-Bench",
+        "swe-qa": "swe-qa/SWE-QA-Benchmark",
+    }
+    return aliases.get(name, name)

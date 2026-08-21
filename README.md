@@ -61,8 +61,13 @@ Run a JSONL or Hugging Face batch:
 
 ```powershell
 ant eval output\tiny_eval.jsonl --index .ant --out output\results.jsonl
-ant eval hf://TIGER-Lab/SWE-QA-Pro --split test --limit 5 --index .ant
+ant eval hf://swe-qa-pro --split test --limit 5 --index .ant --synthesize openai
+ant report output\results.jsonl --out output\summary.json
 ```
+
+Each eval row includes the prediction, evidence counts, unresolved need counts, and judge
+scores. The summary report aggregates exact match, answer containment, evidence coverage,
+and five 1-10 LLM-judge dimensions when `--judge openai` is used.
 
 Refresh only workers affected by local git changes:
 

@@ -7,7 +7,7 @@ import typer
 
 from ant.coordinator import LocalCoordinator
 from ant.environment import RepoEnvironment
-from ant.evaluation import load_examples, run_batch
+from ant.evaluation import build_report, load_examples, run_batch
 from ant.generation import generate_worker_cards
 from ant.git_refresh import refresh_changed_workers
 from ant.indexing import discover_territories
@@ -72,6 +72,8 @@ def eval_command(
     limit: int | None = None,
     max_rounds: int = MAX_ROUNDS_OPTION,
     synthesize: str = SYNTHESIZE_OPTION,
+    judge: str = "heuristic",
+    report: Path | None = None,
 ) -> None:
     """Run a small batch evaluation from JSONL or hf://dataset_name."""
     examples = load_examples(dataset, split=split, limit=limit)
@@ -82,8 +84,19 @@ def eval_command(
         out_path=out,
         max_rounds=max_rounds,
         synthesize=synthesize,
+        judge=judge,
     )
+    report_path = report or out.with_suffix(".summary.json")
+    summary = build_report(out, report_path)
     typer.echo(f"Wrote {len(results)} results to {out}.")
+    typer.echo(f"Wrote summary to {report_path}: {summary.model_dump_json()}")
+
+
+@app.command("report")
+def report_command(results: Path, out: Path | None = None) -> None:
+    """Aggregate an eval JSONL file into a summary report."""
+    summary = build_report(results, out)
+    typer.echo(summary.model_dump_json(indent=2))
 
 
 @app.command()

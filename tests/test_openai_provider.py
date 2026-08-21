@@ -2,7 +2,7 @@ import os
 from pathlib import Path
 
 from ant.providers import OpenAIProvider
-from ant.providers.openai_provider import _extract_output_text
+from ant.providers.openai_provider import _extract_output_text, _extract_usage, _loads_json_object
 
 
 def test_openai_provider_loads_org_and_project_from_dotenv(
@@ -50,3 +50,18 @@ def test_extract_output_text_from_responses_payload() -> None:
         )
         == "OK"
     )
+
+
+def test_extract_usage_and_json_object() -> None:
+    usage = _extract_usage(
+        {
+            "usage": {
+                "input_tokens": 10,
+                "output_tokens": 5,
+                "total_tokens": 15,
+            }
+        }
+    )
+
+    assert usage.total_tokens == 15
+    assert _loads_json_object("```json\n{\"ok\": true}\n```") == {"ok": True}

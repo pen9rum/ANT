@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Protocol
+from typing import Protocol, runtime_checkable
 
 from ant.domain import Evidence, WorkerCard, WorkerObservation
 
@@ -28,3 +28,8 @@ class CardGenerator(Protocol):
 
 class AnswerSynthesizer(Protocol):
     def synthesize(self, *, question: str, evidence: list[Evidence]) -> str: ...
+
+
+@runtime_checkable
+class UsageReporter(Protocol):
+    def drain_usage(self) -> object: ...

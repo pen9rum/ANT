@@ -7,7 +7,8 @@ from pydantic import BaseModel, Field
 
 from ant.coordinator import LocalCoordinator
 from ant.evaluation.datasets import EvalExample
-from ant.evaluation.metrics import EvalScore, evaluate_answer
+from ant.evaluation.judge import judge_answer
+from ant.evaluation.metrics import EvalScore
 from ant.memory import IndexStore
 from ant.providers import OpenAIProvider
 
@@ -29,6 +30,7 @@ def run_batch(
     out_path: Path,
     max_rounds: int = 2,
     synthesize: str = "none",
+    judge: str = "heuristic",
 ) -> list[BatchResult]:
     store = IndexStore(index_path)
     workers = store.load_workers()
@@ -41,11 +43,13 @@ def run_batch(
             state = coordinator.ask(example.question, max_rounds=max_rounds)
             trace_id = store.save_trace(state)
             prediction = state.answer or _fallback_prediction(state.evidence)
-            score = evaluate_answer(
+            score = judge_answer(
+                question=example.question,
                 prediction=prediction,
                 expected=example.answer,
                 evidence_count=len(state.evidence),
                 unresolved_need_count=len(state.unresolved_needs),
+                judge=judge,
             )
             result = BatchResult(
                 example_id=example.id,

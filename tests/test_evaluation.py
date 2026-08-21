@@ -2,7 +2,8 @@ import json
 from pathlib import Path
 
 from ant.environment import RepoEnvironment
-from ant.evaluation import EvalExample, load_examples, run_batch
+from ant.evaluation import EvalExample, build_report, load_examples, run_batch
+from ant.evaluation.datasets import _dataset_alias
 from ant.indexing import build_worker_cards, discover_territories
 from ant.memory import IndexStore
 
@@ -18,6 +19,7 @@ def test_load_jsonl_examples(tmp_path: Path) -> None:
 
     assert examples[0].id == "q1"
     assert examples[0].question == "Where is auth?"
+    assert _dataset_alias("swe-qa-pro") == "TIGER-Lab/SWE-QA-Pro-Bench"
 
 
 def test_run_batch_writes_results(tmp_path: Path) -> None:
@@ -40,3 +42,5 @@ def test_run_batch_writes_results(tmp_path: Path) -> None:
     assert len(results) == 1
     assert results[0].score.evidence_count > 0
     assert (tmp_path / "results.jsonl").exists()
+    report = build_report(tmp_path / "results.jsonl")
+    assert report.count == 1
