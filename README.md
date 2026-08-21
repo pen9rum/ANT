@@ -29,12 +29,14 @@ Index a repository:
 
 ```powershell
 ant index C:\path\to\repo --out .ant
+ant index C:\path\to\repo --out .ant --llm-cards
 ```
 
 Ask a local evidence question:
 
 ```powershell
 ant ask "Where is authentication handled?" --index .ant --max-rounds 2
+ant ask "Where is authentication handled?" --index .ant --max-rounds 2 --synthesize openai
 ```
 
 By default, `ask` stores the full evidence state and recruitment trace in `.ant/ant.sqlite3`.
@@ -53,6 +55,19 @@ Run a minimal provider check with:
 
 ```powershell
 ant openai-smoke
+```
+
+Run a JSONL or Hugging Face batch:
+
+```powershell
+ant eval output\tiny_eval.jsonl --index .ant --out output\results.jsonl
+ant eval hf://TIGER-Lab/SWE-QA-Pro --split test --limit 5 --index .ant
+```
+
+Refresh only workers affected by local git changes:
+
+```powershell
+ant refresh --index .ant --base HEAD
 ```
 
 ## Version Control

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Protocol
 
-from ant.domain import WorkerObservation
+from ant.domain import Evidence, WorkerCard, WorkerObservation
 
 
 class WorkerReasoner(Protocol):
@@ -14,3 +14,17 @@ class WorkerReasoner(Protocol):
         territory_id: str,
         evidence_count: int,
     ) -> WorkerObservation: ...
+
+
+class CardGenerator(Protocol):
+    def generate_card(
+        self,
+        *,
+        repo_root: str,
+        territory_root: str,
+        files: list[str],
+    ) -> WorkerCard: ...
+
+
+class AnswerSynthesizer(Protocol):
+    def synthesize(self, *, question: str, evidence: list[Evidence]) -> str: ...

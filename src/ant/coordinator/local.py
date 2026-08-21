@@ -4,7 +4,7 @@ import re
 from pathlib import Path
 
 from ant.domain import Evidence, EvidenceState, RecruitmentRound, UnresolvedNeed, WorkerCard
-from ant.providers import MockLLMProvider, WorkerReasoner
+from ant.providers import AnswerSynthesizer, MockLLMProvider, WorkerReasoner
 from ant.tools import LocalSearchTool
 
 TOKEN_RE = re.compile(r"[A-Za-z][A-Za-z0-9_]{2,}")
@@ -16,10 +16,12 @@ class LocalCoordinator:
         repo_root: Path,
         workers: list[WorkerCard],
         reasoner: WorkerReasoner | None = None,
+        synthesizer: AnswerSynthesizer | None = None,
     ) -> None:
         self.repo_root = repo_root
         self.workers = workers
         self.reasoner = reasoner or MockLLMProvider()
+        self.synthesizer = synthesizer
 
     def ask(self, question: str, max_rounds: int = 2) -> EvidenceState:
         evidence: list[Evidence] = []
@@ -72,8 +74,13 @@ class LocalCoordinator:
                 )
             )
 
+        answer = ""
+        if self.synthesizer and evidence:
+            answer = self.synthesizer.synthesize(question=question, evidence=evidence[:12])
+
         return EvidenceState(
             question=question,
+            answer=answer,
             evidence=evidence[:12],
             unresolved_needs=unresolved_needs,
             rounds=rounds,

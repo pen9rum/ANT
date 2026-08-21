@@ -8,6 +8,7 @@ from urllib import request
 from openai import OpenAI
 
 from ant.config import load_dotenv
+from ant.domain import Evidence, TokenUsage, UnresolvedNeed, WorkerCard, WorkerObservation
 
 
 @dataclass(frozen=True)
@@ -16,6 +17,13 @@ class OpenAISettings:
     model: str
     organization: str | None = None
     project: str | None = None
+
+
+@dataclass(frozen=True)
+class ResponseResult:
+    text: str
+    usage: TokenUsage
+    raw: dict
 
 
 class OpenAIProvider:
@@ -48,21 +56,29 @@ class OpenAIProvider:
         )
 
     def smoke_test(self, prompt: str = "Reply exactly: OK") -> str:
+        return self.responses_text(prompt, max_output_tokens=16).text
+
+    def responses_text(self, prompt: str, max_output_tokens: int = 512) -> ResponseResult:
         if self.settings.organization and self.settings.project:
-            return self._responses_create_raw(prompt)
+            return self._responses_create_raw(prompt, max_output_tokens=max_output_tokens)
         response = self.client().responses.create(
             model=self.model,
             input=prompt,
-            max_output_tokens=16,
+            max_output_tokens=max_output_tokens,
         )
-        return response.output_text
+        raw = response.model_dump()
+        return ResponseResult(
+            text=response.output_text,
+            usage=_extract_usage(raw),
+            raw=raw,
+        )
 
-    def _responses_create_raw(self, prompt: str) -> str:
+    def _responses_create_raw(self, prompt: str, max_output_tokens: int) -> ResponseResult:
         payload = json.dumps(
             {
                 "model": self.model,
                 "input": prompt,
-                "max_output_tokens": 16,
+                "max_output_tokens": max_output_tokens,
             }
         ).encode("utf-8")
         api_request = request.Request(
@@ -78,7 +94,77 @@ class OpenAIProvider:
         )
         with request.urlopen(api_request, timeout=30) as response:
             data = json.loads(response.read().decode("utf-8"))
-        return _extract_output_text(data)
+        return ResponseResult(text=_extract_output_text(data), usage=_extract_usage(data), raw=data)
+
+    def generate_card(self, *, repo_root: str, territory_root: str, files: list[str]) -> WorkerCard:
+        file_sample = "\n".join(files[:80])
+        prompt = (
+            "Create a concise JSON worker card for a codebase territory.\n"
+            f"Repository: {repo_root}\n"
+            f"Territory root: {territory_root or 'repository root'}\n"
+            f"Files:\n{file_sample}\n"
+            "Return JSON with keys: name, responsibilities, searchable_terms.\n"
+        )
+        result = self.responses_text(prompt, max_output_tokens=512)
+        data = _loads_json_object(result.text)
+        root = territory_root
+        territory_id = root or "root"
+        return WorkerCard(
+            id=f"worker-{territory_id}",
+            territory_id=territory_id,
+            name=str(data.get("name") or f"{root or 'root'} worker"),
+            root=root,
+            responsibilities=[str(item) for item in data.get("responsibilities", [])][:8],
+            searchable_terms=[str(item).lower() for item in data.get("searchable_terms", [])][:24],
+            files=files,
+        )
+
+    def observe(
+        self,
+        *,
+        question: str,
+        worker_id: str,
+        territory_id: str,
+        evidence_count: int,
+    ) -> WorkerObservation:
+        prompt = (
+            "Return a JSON worker observation for a code navigation task.\n"
+            f"Question: {question}\n"
+            f"Worker: {worker_id}\n"
+            f"Territory: {territory_id}\n"
+            f"Evidence count: {evidence_count}\n"
+            "Return JSON with key unresolved_needs as a list of objects with "
+            "description, suggested_terms, suggested_territories.\n"
+        )
+        result = self.responses_text(prompt, max_output_tokens=512)
+        data = _loads_json_object(result.text)
+        needs = data.get("unresolved_needs", [])
+        unresolved_needs = [
+            UnresolvedNeed(
+                description=str(item.get("description", "")),
+                suggested_terms=[str(term) for term in item.get("suggested_terms", [])],
+                suggested_territories=[str(term) for term in item.get("suggested_territories", [])],
+            )
+            for item in needs
+            if isinstance(item, dict)
+        ]
+        return WorkerObservation(
+            worker_id=worker_id,
+            territory_id=territory_id,
+            unresolved_needs=unresolved_needs,
+        )
+
+    def synthesize(self, *, question: str, evidence: list[Evidence]) -> str:
+        evidence_text = "\n".join(
+            f"- {item.path}:{item.line_start} {item.quote}" for item in evidence[:12]
+        )
+        prompt = (
+            "Answer the codebase question using only the evidence below. "
+            "If evidence is insufficient, say what is missing.\n"
+            f"Question: {question}\n"
+            f"Evidence:\n{evidence_text}\n"
+        )
+        return self.responses_text(prompt, max_output_tokens=512).text
 
 
 def _extract_output_text(data: dict) -> str:
@@ -88,3 +174,25 @@ def _extract_output_text(data: dict) -> str:
             if content.get("type") == "output_text":
                 parts.append(content.get("text", ""))
     return "".join(parts)
+
+
+def _extract_usage(data: dict) -> TokenUsage:
+    usage = data.get("usage") or {}
+    return TokenUsage(
+        input_tokens=int(usage.get("input_tokens") or 0),
+        output_tokens=int(usage.get("output_tokens") or 0),
+        total_tokens=int(usage.get("total_tokens") or 0),
+    )
+
+
+def _loads_json_object(text: str) -> dict:
+    cleaned = text.strip()
+    if cleaned.startswith("```"):
+        cleaned = cleaned.strip("`")
+        if cleaned.startswith("json"):
+            cleaned = cleaned[4:].strip()
+    start = cleaned.find("{")
+    end = cleaned.rfind("}")
+    if start != -1 and end != -1:
+        cleaned = cleaned[start : end + 1]
+    return json.loads(cleaned)

@@ -22,6 +22,12 @@ class WorkerCard(BaseModel):
     files: list[str] = Field(default_factory=list)
 
 
+class TokenUsage(BaseModel):
+    input_tokens: int = 0
+    output_tokens: int = 0
+    total_tokens: int = 0
+
+
 class Evidence(BaseModel):
     path: str
     line_start: int
@@ -53,9 +59,11 @@ class RecruitmentRound(BaseModel):
 
 class EvidenceState(BaseModel):
     question: str
+    answer: str = ""
     evidence: list[Evidence] = Field(default_factory=list)
     unresolved_needs: list[UnresolvedNeed] = Field(default_factory=list)
     rounds: list[RecruitmentRound] = Field(default_factory=list)
+    usage: TokenUsage = Field(default_factory=TokenUsage)
 
     def has_evidence(self) -> bool:
         return bool(self.evidence)
