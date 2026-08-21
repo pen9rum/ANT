@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime
 from pathlib import Path
 
 import typer
@@ -75,7 +76,9 @@ def eval_command(
     dataset: str,
     repo: Path = Path("."),
     index_path: Path = INDEX_OPTION,
-    out: Path = Path("output/eval_results.jsonl"),
+    out: Path | None = None,
+    run_id: str | None = None,
+    run_dir: Path | None = None,
     split: str = "test",
     limit: int | None = None,
     max_rounds: int = MAX_ROUNDS_OPTION,
@@ -84,6 +87,8 @@ def eval_command(
     report: Path | None = None,
 ) -> None:
     """Run a small batch evaluation from JSONL or hf://dataset_name."""
+    resolved_run_dir = _resolve_run_dir(run_id=run_id, run_dir=run_dir)
+    out = out or resolved_run_dir / "results.jsonl"
     examples = load_examples(dataset, split=split, limit=limit)
     results = run_batch(
         examples=examples,
@@ -94,8 +99,24 @@ def eval_command(
         synthesize=synthesize,
         judge=judge,
     )
-    report_path = report or out.with_suffix(".summary.json")
+    report_path = report or resolved_run_dir / "summary.json"
     summary = build_report(out, report_path)
+    manifest = {
+        "dataset": dataset,
+        "repo": str(repo),
+        "index": str(index_path),
+        "split": split,
+        "limit": limit,
+        "max_rounds": max_rounds,
+        "synthesize": synthesize,
+        "judge": judge,
+        "results": str(out),
+        "summary": str(report_path),
+    }
+    (resolved_run_dir / "manifest.json").write_text(
+        json.dumps(manifest, indent=2),
+        encoding="utf-8",
+    )
     typer.echo(f"Wrote {len(results)} results to {out}.")
     typer.echo(f"Wrote summary to {report_path}: {summary.model_dump_json()}")
 
@@ -165,6 +186,16 @@ def sweqa_fetch_repos(
         repo_filter=repo_filter,
     )
     typer.echo(json.dumps([str(path) for path in paths], indent=2))
+
+
+def _resolve_run_dir(run_id: str | None, run_dir: Path | None) -> Path:
+    if run_dir is not None:
+        run_dir.mkdir(parents=True, exist_ok=True)
+        return run_dir
+    run_id = run_id or datetime.now().strftime("%Y%m%d-%H%M%S")
+    path = Path("output") / "runs" / run_id
+    path.mkdir(parents=True, exist_ok=True)
+    return path
 
 
 if __name__ == "__main__":
