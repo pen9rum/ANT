@@ -44,6 +44,15 @@ Use OpenAI later by setting:
 
 ```powershell
 $env:OPENAI_API_KEY="..."
+$env:OPENAI_ORG_ID="org-..."
+$env:OPENAI_PROJECT_ID="proj_..."
+```
+
+The local `.env` file is also loaded by the CLI and can contain the same values.
+Run a minimal provider check with:
+
+```powershell
+ant openai-smoke
 ```
 
 ## Version Control

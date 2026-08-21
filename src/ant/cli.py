@@ -9,6 +9,7 @@ from ant.coordinator import LocalCoordinator
 from ant.environment import RepoEnvironment
 from ant.indexing import build_worker_cards, discover_territories
 from ant.memory import IndexStore
+from ant.providers import OpenAIProvider
 
 app = typer.Typer(no_args_is_help=True)
 INDEX_OPTION = typer.Option(Path(".ant"), "--index")
@@ -41,6 +42,13 @@ def ask(
     if save_trace:
         store.save_trace(state)
     typer.echo(json.dumps(state.model_dump(), indent=2))
+
+
+@app.command("openai-smoke")
+def openai_smoke() -> None:
+    """Run a minimal Responses API call using .env settings."""
+    provider = OpenAIProvider()
+    typer.echo(provider.smoke_test())
 
 
 if __name__ == "__main__":
