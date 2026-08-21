@@ -39,7 +39,7 @@ class LocalCoordinator:
         seen_worker_ids: set[str] = set()
         query = question
         search = LocalSearchTool(self.repo_root)
-        worker_config = WorkerRunConfig(max_tool_calls=8, evidence_limit=8)
+        worker_config = WorkerRunConfig(max_tool_calls=10, evidence_limit=8)
 
         for round_index in range(max_rounds):
             selected = self._select_workers(query, seen_worker_ids=seen_worker_ids)

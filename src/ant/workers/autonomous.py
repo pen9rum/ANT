@@ -21,7 +21,7 @@ SKIP_SYMBOLS = {
 
 @dataclass(frozen=True)
 class WorkerRunConfig:
-    max_tool_calls: int = 8
+    max_tool_calls: int = 10
     evidence_limit: int = 8
 
 
@@ -78,6 +78,45 @@ class AutonomousWorker:
                 )
             )
             evidence.extend(ref_results)
+            if tool_calls >= config.max_tool_calls:
+                break
+            caller_results = self.tools.callers(symbol, self.card.files, limit=1)
+            tool_calls += 1
+            actions.append(
+                WorkerAction(
+                    tool="callers",
+                    query=symbol,
+                    result_count=len(caller_results),
+                    rationale="Find caller blocks that invoke the current symbol.",
+                )
+            )
+            evidence.extend(caller_results)
+            if tool_calls >= config.max_tool_calls:
+                break
+            callee_results = self.tools.callees(symbol, self.card.files, limit=1)
+            tool_calls += 1
+            actions.append(
+                WorkerAction(
+                    tool="callees",
+                    query=symbol,
+                    result_count=len(callee_results),
+                    rationale="Navigate from the current implementation to called helpers.",
+                )
+            )
+            evidence.extend(callee_results)
+            if tool_calls >= config.max_tool_calls:
+                break
+            assignment_results = self.tools.assignments(symbol, self.card.files, limit=1)
+            tool_calls += 1
+            actions.append(
+                WorkerAction(
+                    tool="assignments",
+                    query=symbol,
+                    result_count=len(assignment_results),
+                    rationale="Inspect local assignments related to the current symbol.",
+                )
+            )
+            evidence.extend(assignment_results)
 
         evidence = _rank_evidence(_dedupe(evidence), need)[: config.evidence_limit]
         needs = []

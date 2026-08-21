@@ -112,3 +112,31 @@ def test_local_search_finds_references(tmp_path: Path) -> None:
 
     assert evidence
     assert any("QAOA()" in item.quote for item in evidence)
+
+
+def test_local_search_finds_callers_callees_and_assignments(tmp_path: Path) -> None:
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "model.py").write_text(
+        "\n".join(
+            [
+                "def helper():",
+                "    return 1",
+                "",
+                "def target():",
+                "    value = helper()",
+                "    return value",
+                "",
+                "def caller():",
+                "    return target()",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    tool = LocalSearchTool(tmp_path)
+
+    assert any("def caller" in item.quote for item in tool.callers("target", ["src/model.py"]))
+    assert any("def helper" in item.quote for item in tool.callees("target", ["src/model.py"]))
+    assert any(
+        "value = helper()" in item.quote
+        for item in tool.assignments("value", ["src/model.py"])
+    )

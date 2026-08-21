@@ -120,6 +120,67 @@ class LocalSearchTool:
         candidates.sort(key=lambda item: item[0], reverse=True)
         return _merge_windows(candidates, limit=limit)
 
+    def callers(self, symbol: str, files: list[str], limit: int = 6) -> list[Evidence]:
+        terms = _query_terms(symbol)
+        candidates: list[tuple[int, str, int, list[str], str]] = []
+        for relative in files:
+            lines = (self.repo_root / relative).read_text(
+                encoding="utf-8",
+                errors="replace",
+            ).splitlines()
+            for index, line in enumerate(lines, start=1):
+                stripped = line.strip()
+                if not _is_definition_line(stripped):
+                    continue
+                end = _block_end(lines, index)
+                block = "\n".join(lines[index - 1 : end])
+                if f"{symbol}(" not in block or _definition_name(stripped) == symbol:
+                    continue
+                candidates.append(
+                    (
+                        10 + _line_score(block, terms),
+                        relative,
+                        index,
+                        lines[index - 1 : end],
+                        stripped,
+                    )
+                )
+        candidates.sort(key=lambda item: item[0], reverse=True)
+        return _merge_windows(candidates, limit=limit)
+
+    def callees(self, symbol: str, files: list[str], limit: int = 6) -> list[Evidence]:
+        definitions = self.navigate(symbol, files, limit=2)
+        call_names: list[str] = []
+        for item in definitions:
+            for call in re.findall(r"\b([A-Za-z_][A-Za-z0-9_]*)\s*\(", item.quote):
+                if call not in {symbol, "if", "for", "while", "return"} and call not in call_names:
+                    call_names.append(call)
+        evidence: list[Evidence] = []
+        for call in call_names[:limit]:
+            evidence.extend(self.navigate(call, files, limit=1))
+            if len(evidence) >= limit:
+                break
+        return [
+            item.model_copy(update={"reason": f"Callee navigation from symbol {symbol}."})
+            for item in evidence[:limit]
+        ]
+
+    def assignments(self, symbol: str, files: list[str], limit: int = 6) -> list[Evidence]:
+        pattern = re.compile(rf"(^|\W)(self\.)?{re.escape(symbol)}\s*=")
+        candidates: list[tuple[int, str, int, list[str], str]] = []
+        for relative in files:
+            lines = (self.repo_root / relative).read_text(
+                encoding="utf-8",
+                errors="replace",
+            ).splitlines()
+            for index, line in enumerate(lines, start=1):
+                if not pattern.search(line):
+                    continue
+                start = max(1, index - 3)
+                end = min(len(lines), index + 3)
+                candidates.append((10, relative, start, lines[start - 1 : end], line.strip()))
+        return _merge_windows(candidates, limit=limit)
+
 
 def _query_terms(query: str) -> list[str]:
     terms: list[str] = []
@@ -224,6 +285,11 @@ def _is_definition_line(line: str) -> bool:
         or line.startswith("export function ")
         or line.startswith("const ")
     )
+
+
+def _definition_name(line: str) -> str:
+    match = re.match(r"(?:async\s+def|def|class)\s+([A-Za-z_][A-Za-z0-9_]*)", line)
+    return match.group(1) if match else ""
 
 
 def _block_end(lines: list[str], start_line: int) -> int:
