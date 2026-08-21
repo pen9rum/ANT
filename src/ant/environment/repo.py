@@ -12,6 +12,7 @@ IGNORED_DIRS = {
     "venv",
     "__pycache__",
     "node_modules",
+    "output",
     "dist",
     "build",
     ".pytest_cache",

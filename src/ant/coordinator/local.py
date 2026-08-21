@@ -112,7 +112,14 @@ class LocalCoordinator:
             if worker.id in seen_worker_ids:
                 continue
             terms = set(worker.searchable_terms) | {worker.root.lower(), worker.name.lower()}
-            score = len(query_terms & terms)
+            path_terms = {
+                token.lower()
+                for file in worker.files
+                for token in TOKEN_RE.findall(file)
+                if len(token) > 2
+            }
+            terms |= path_terms
+            score = sum(1 for query_term in query_terms if _matches_term(query_term, terms))
             scored.append((score, worker))
         scored.sort(key=lambda item: item[0], reverse=True)
         selected = [worker for score, worker in scored[:limit] if score > 0]
@@ -125,3 +132,7 @@ class LocalCoordinator:
         for need in needs:
             terms.extend(need.suggested_terms)
         return " ".join([question, *terms])
+
+
+def _matches_term(query_term: str, terms: set[str]) -> bool:
+    return any(query_term in term or term in query_term for term in terms)

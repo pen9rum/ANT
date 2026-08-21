@@ -7,6 +7,7 @@ from pathlib import Path
 from ant.domain import Territory, WorkerCard
 
 TOKEN_RE = re.compile(r"[A-Za-z][A-Za-z0-9_]{2,}")
+CAMEL_RE = re.compile(r"[A-Z]?[a-z]+|[A-Z]+(?=[A-Z]|$)")
 
 
 def build_worker_cards(repo_root: Path, territories: list[Territory]) -> list[WorkerCard]:
@@ -32,5 +33,14 @@ def _top_terms(repo_root: Path, files: list[str], limit: int = 16) -> list[str]:
     for relative in files[:80]:
         text = (repo_root / relative).read_text(encoding="utf-8", errors="replace")
         counter.update(token.lower() for token in TOKEN_RE.findall(text))
+        counter.update(_split_path_terms(relative))
     stop = {"from", "import", "return", "class", "function", "const", "with", "this", "that"}
     return [term for term, _ in counter.most_common() if term not in stop][:limit]
+
+
+def _split_path_terms(relative: str) -> list[str]:
+    terms = []
+    for token in TOKEN_RE.findall(relative):
+        terms.append(token.lower())
+        terms.extend(part.lower() for part in CAMEL_RE.findall(token))
+    return terms
