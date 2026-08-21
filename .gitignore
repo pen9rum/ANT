@@ -6,6 +6,7 @@ __pycache__/
 .pyright/
 .env
 .ant/
+output/
 dist/
 build/
 *.egg-info/
