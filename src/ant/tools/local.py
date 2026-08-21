@@ -56,6 +56,38 @@ class LocalSearchTool:
         candidates.sort(key=lambda item: item[0], reverse=True)
         return _merge_windows(candidates[: limit * 2], limit=limit)
 
+    def navigate(self, symbol: str, files: list[str], limit: int = 6) -> list[Evidence]:
+        terms = _query_terms(symbol)
+        if not terms:
+            return []
+        candidates: list[tuple[int, str, int, list[str], str]] = []
+        for relative in files:
+            path = self.repo_root / relative
+            lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+            for index, line in enumerate(lines, start=1):
+                stripped = line.strip()
+                if not _is_definition_line(stripped):
+                    continue
+                score = _line_score(stripped, terms)
+                if score <= 0:
+                    continue
+                end = _block_end(lines, index)
+                candidates.append((score + 4, relative, index, lines[index - 1 : end], stripped))
+        candidates.sort(key=lambda item: item[0], reverse=True)
+        return _merge_windows(candidates, limit=limit)
+
+    def read_region(self, path: str, line: int, context_lines: int = 12) -> Evidence:
+        lines = (self.repo_root / path).read_text(encoding="utf-8", errors="replace").splitlines()
+        start = max(1, line - context_lines)
+        end = min(len(lines), line + context_lines)
+        return Evidence(
+            path=path,
+            line_start=start,
+            line_end=end,
+            quote="\n".join(lines[start - 1 : end]).strip()[:2400],
+            reason=f"Read bounded region around {path}:{line}.",
+        )
+
 
 def _query_terms(query: str) -> list[str]:
     terms: list[str] = []
@@ -107,3 +139,30 @@ def _merge_windows(
         if len(evidence) >= limit:
             break
     return evidence
+
+
+def _is_definition_line(line: str) -> bool:
+    return (
+        line.startswith("def ")
+        or line.startswith("class ")
+        or line.startswith("async def ")
+        or line.startswith("function ")
+        or line.startswith("export function ")
+        or line.startswith("const ")
+    )
+
+
+def _block_end(lines: list[str], start_line: int) -> int:
+    base_line = lines[start_line - 1]
+    base_indent = len(base_line) - len(base_line.lstrip())
+    end = start_line
+    for index in range(start_line, len(lines)):
+        line = lines[index]
+        if not line.strip():
+            end = index + 1
+            continue
+        indent = len(line) - len(line.lstrip())
+        if indent <= base_indent and index + 1 > start_line:
+            break
+        end = index + 1
+    return end

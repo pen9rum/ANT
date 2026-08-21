@@ -8,6 +8,7 @@ import typer
 from ant.coordinator import LocalCoordinator
 from ant.environment import RepoEnvironment
 from ant.evaluation import build_report, load_examples, run_batch
+from ant.evolution import evolve_workers
 from ant.generation import generate_worker_cards
 from ant.git_refresh import refresh_changed_workers
 from ant.indexing import discover_territories
@@ -115,6 +116,13 @@ def refresh(
         generator=generator,
     )
     typer.echo(json.dumps(result.model_dump(), indent=2))
+
+
+@app.command()
+def evolve(index_path: Path = INDEX_OPTION, min_coalition_count: int = 2) -> None:
+    """Apply worker population evolution from recurring coalition memory."""
+    result = evolve_workers(index_path, min_coalition_count=min_coalition_count)
+    typer.echo(result.model_dump_json(indent=2))
 
 
 if __name__ == "__main__":

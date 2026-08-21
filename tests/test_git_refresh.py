@@ -29,3 +29,4 @@ def test_refresh_changed_workers_updates_affected_territory(tmp_path: Path) -> N
 
     assert result.changed_files == ["src/app.py"]
     assert result.affected_territories == ["src"]
+    assert result.stale_memory_count == 1

@@ -75,3 +75,27 @@ def test_local_search_returns_context_windows(tmp_path: Path) -> None:
 
     assert evidence[0].line_end > evidence[0].line_start
     assert "def _select_workers" in evidence[0].quote or "selected =" in evidence[0].quote
+
+
+def test_local_search_can_navigate_to_definition_block(tmp_path: Path) -> None:
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "coordinator.py").write_text(
+        "\n".join(
+            [
+                "class LocalCoordinator:",
+                "    def ask(self):",
+                "        return self._select_workers('query')",
+                "",
+                "    def _select_workers(self, query):",
+                "        selected = []",
+                "        return selected",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    evidence = LocalSearchTool(tmp_path).navigate("_select_workers", ["src/coordinator.py"])
+
+    assert evidence
+    assert "def _select_workers" in evidence[0].quote
+    assert "return selected" in evidence[0].quote

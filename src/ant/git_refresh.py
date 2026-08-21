@@ -9,7 +9,7 @@ from ant.domain import Territory
 from ant.environment import RepoEnvironment
 from ant.generation import generate_worker_cards
 from ant.indexing import discover_territories
-from ant.memory import IndexStore
+from ant.memory import ColonyMemoryStore, IndexStore
 from ant.providers import CardGenerator
 
 
@@ -17,6 +17,7 @@ class RefreshResult(BaseModel):
     changed_files: list[str] = Field(default_factory=list)
     affected_territories: list[str] = Field(default_factory=list)
     worker_count: int = 0
+    stale_memory_count: int = 0
 
 
 def changed_files(repo_root: Path, base: str = "HEAD") -> list[str]:
@@ -38,11 +39,12 @@ def refresh_changed_workers(
     generator: CardGenerator | None = None,
 ) -> RefreshResult:
     changed = changed_files(repo_root, base=base)
+    stale_count = ColonyMemoryStore(index_path).mark_stale(changed)
     environment = RepoEnvironment(repo_root)
     territories = discover_territories(environment)
     affected = _affected_territories(changed, territories)
     if not affected:
-        return RefreshResult(changed_files=changed)
+        return RefreshResult(changed_files=changed, stale_memory_count=stale_count)
 
     store = IndexStore(index_path)
     existing = {worker.territory_id: worker for worker in store.load_workers()}
@@ -55,6 +57,7 @@ def refresh_changed_workers(
         changed_files=changed,
         affected_territories=sorted(affected),
         worker_count=len(existing),
+        stale_memory_count=stale_count,
     )
 
 

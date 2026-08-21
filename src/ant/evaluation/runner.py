@@ -10,6 +10,7 @@ from ant.evaluation.datasets import EvalExample
 from ant.evaluation.judge import judge_answer
 from ant.evaluation.metrics import EvalScore
 from ant.memory import IndexStore
+from ant.memory.colony import CoalitionRecord, ColonyMemoryStore
 from ant.providers import OpenAIProvider
 
 
@@ -33,6 +34,7 @@ def run_batch(
     judge: str = "heuristic",
 ) -> list[BatchResult]:
     store = IndexStore(index_path)
+    colony_memory = ColonyMemoryStore(index_path)
     workers = store.load_workers()
     provider = OpenAIProvider() if synthesize == "openai" else None
     coordinator = LocalCoordinator(repo_root, workers, synthesizer=provider)
@@ -42,6 +44,16 @@ def run_batch(
         for example in examples:
             state = coordinator.ask(example.question, max_rounds=max_rounds)
             trace_id = store.save_trace(state)
+            for round_state in state.rounds:
+                if len(round_state.selected_worker_ids) > 1:
+                    colony_memory.record_coalition(
+                        CoalitionRecord(
+                            worker_ids=round_state.selected_worker_ids,
+                            question=example.question,
+                            evidence_count=len(state.evidence),
+                            unresolved_need_count=len(state.unresolved_needs),
+                        )
+                    )
             prediction = state.answer or _fallback_prediction(state.evidence)
             score = judge_answer(
                 question=example.question,

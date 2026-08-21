@@ -46,6 +46,11 @@ class LocalCoordinator:
             observations = []
             for worker in selected:
                 worker_evidence = search.search(query, worker.files, limit=4)
+                for symbol in _candidate_symbols(query, worker_evidence):
+                    worker_evidence.extend(search.navigate(symbol, worker.files, limit=2))
+                    if len(worker_evidence) >= 8:
+                        break
+                worker_evidence = _dedupe_evidence(worker_evidence)[:8]
                 evidence.extend(worker_evidence)
                 observation = self.reasoner.observe(
                     question=query,
@@ -136,3 +141,23 @@ class LocalCoordinator:
 
 def _matches_term(query_term: str, terms: set[str]) -> bool:
     return any(query_term in term or term in query_term for term in terms)
+
+
+def _candidate_symbols(query: str, evidence: list[Evidence]) -> list[str]:
+    symbols = set(TOKEN_RE.findall(query))
+    for item in evidence:
+        symbols.update(token for token in TOKEN_RE.findall(item.quote) if "_" in token)
+        symbols.update(token for token in TOKEN_RE.findall(item.quote) if token[:1].isupper())
+    return [symbol for symbol in symbols if len(symbol) > 3][:8]
+
+
+def _dedupe_evidence(evidence: list[Evidence]) -> list[Evidence]:
+    seen = set()
+    deduped = []
+    for item in evidence:
+        key = (item.path, item.line_start, item.line_end)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(item)
+    return deduped
