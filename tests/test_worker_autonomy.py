@@ -50,3 +50,52 @@ def test_autonomous_worker_records_tool_actions(tmp_path: Path) -> None:
     assert observation.evidence
     assert [action.tool for action in observation.actions][:2] == ["search", "navigate"]
     assert any("FALQON" in item.quote for item in observation.evidence)
+
+
+def test_budget_exhaustion_creates_unresolved_need(tmp_path: Path) -> None:
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "backend.py").write_text(
+        "class Backend:\n    def measurement(self):\n        return None\n",
+        encoding="utf-8",
+    )
+    card = WorkerCard(
+        id="worker-src",
+        territory_id="src",
+        name="src worker",
+        root="src",
+        searchable_terms=["backend", "measurement"],
+        files=["src/backend.py"],
+    )
+
+    observation = AutonomousWorker(tmp_path, card, LocalSearchTool(tmp_path)).run(
+        "Where does measurement data flow to final outcomes?",
+        WorkerRunConfig(max_tool_calls=1, evidence_limit=4),
+    )
+
+    assert observation.stop_reason == "budget_exhausted"
+    assert observation.unresolved_needs
+
+
+def test_worker_ranks_repo_symbols_above_question_words(tmp_path: Path) -> None:
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "backend.py").write_text(
+        "class Backend:\n    def measurement(self):\n        return None\n",
+        encoding="utf-8",
+    )
+    card = WorkerCard(
+        id="worker-src",
+        territory_id="src",
+        name="src worker",
+        root="src",
+        searchable_terms=["backend", "measurement"],
+        files=["src/backend.py"],
+    )
+
+    observation = AutonomousWorker(tmp_path, card, LocalSearchTool(tmp_path)).run(
+        "Where does Backend measurement happen?",
+        WorkerRunConfig(max_tool_calls=10, evidence_limit=4),
+    )
+
+    navigated = [action.query for action in observation.actions if action.tool == "navigate"]
+    assert "Backend" in navigated
+    assert "Where" not in navigated

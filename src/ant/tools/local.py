@@ -181,6 +181,36 @@ class LocalSearchTool:
                 candidates.append((10, relative, start, lines[start - 1 : end], line.strip()))
         return _merge_windows(candidates, limit=limit)
 
+    def rank_symbols(self, symbols: list[str], files: list[str], limit: int = 8) -> list[str]:
+        if not symbols:
+            return []
+        definitions = _definition_names(self.repo_root, files)
+        imports = _imported_names(self.repo_root, files)
+        paths = " ".join(files).lower()
+        scored: list[tuple[int, int, str]] = []
+        seen = set()
+        for index, symbol in enumerate(symbols):
+            if symbol in seen:
+                continue
+            seen.add(symbol)
+            lowered = symbol.lower()
+            score = 0
+            if symbol in definitions:
+                score += 100
+            if symbol in imports:
+                score += 50
+            if "_" in symbol:
+                score += 20
+            if any(character.isupper() for character in symbol):
+                score += 15
+            if lowered in paths:
+                score += 10
+            if score <= 0:
+                continue
+            scored.append((score, -index, symbol))
+        scored.sort(reverse=True)
+        return [symbol for _, _, symbol in scored[:limit]]
+
 
 def _query_terms(query: str) -> list[str]:
     terms: list[str] = []
@@ -290,6 +320,41 @@ def _is_definition_line(line: str) -> bool:
 def _definition_name(line: str) -> str:
     match = re.match(r"(?:async\s+def|def|class)\s+([A-Za-z_][A-Za-z0-9_]*)", line)
     return match.group(1) if match else ""
+
+
+def _definition_names(repo_root: Path, files: list[str]) -> set[str]:
+    names = set()
+    for relative in files:
+        lines = (repo_root / relative).read_text(encoding="utf-8", errors="replace").splitlines()
+        for line in lines:
+            name = _definition_name(line.strip())
+            if name:
+                names.add(name)
+    return names
+
+
+def _imported_names(repo_root: Path, files: list[str]) -> set[str]:
+    names = set()
+    for relative in files:
+        lines = (repo_root / relative).read_text(encoding="utf-8", errors="replace").splitlines()
+        for line in lines:
+            stripped = line.strip()
+            if stripped.startswith("from ") and " import " in stripped:
+                imported = stripped.split(" import ", 1)[1]
+                names.update(_names_from_import_clause(imported))
+            elif stripped.startswith("import "):
+                names.update(_names_from_import_clause(stripped.removeprefix("import ")))
+    return names
+
+
+def _names_from_import_clause(clause: str) -> set[str]:
+    names = set()
+    for part in clause.split(","):
+        token = part.strip().split(" as ", 1)[-1].strip()
+        token = token.split(".", 1)[0]
+        if re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", token):
+            names.add(token)
+    return names
 
 
 def _block_end(lines: list[str], start_line: int) -> int:

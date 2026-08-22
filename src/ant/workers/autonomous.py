@@ -8,14 +8,31 @@ from ant.tools import LocalSearchTool
 
 SYMBOL_RE = re.compile(r"\b(?:class|def)\s+([A-Za-z_][A-Za-z0-9_]*)")
 BASE_RE = re.compile(r"\bclass\s+[A-Za-z_][A-Za-z0-9_]*\(([^)]*)\)")
-SKIP_SYMBOLS = {
+DOC_LABELS = {
     "Args",
     "Example",
     "Note",
-    "Quantum",
     "Return",
     "Returns",
+}
+QUESTION_WORDS = {
+    "How",
+    "It",
     "What",
+    "Where",
+}
+TERM_STOPWORDS = {
+    "and",
+    "are",
+    "does",
+    "from",
+    "how",
+    "into",
+    "the",
+    "through",
+    "what",
+    "where",
+    "with",
 }
 
 
@@ -49,7 +66,12 @@ class AutonomousWorker:
         )
         evidence.extend(search_results)
 
-        for symbol in _candidate_symbols(need, evidence):
+        candidate_symbols = self.tools.rank_symbols(
+            _candidate_symbols(need, evidence),
+            self.card.files,
+            limit=8,
+        )
+        for symbol in candidate_symbols:
             if tool_calls >= config.max_tool_calls:
                 break
             nav_results = self.tools.navigate(symbol, self.card.files, limit=2)
@@ -119,7 +141,13 @@ class AutonomousWorker:
             evidence.extend(assignment_results)
 
         evidence = _rank_evidence(_dedupe(evidence), need)[: config.evidence_limit]
-        needs = []
+        needs = _detect_unresolved_needs(
+            card=self.card,
+            need=need,
+            evidence=evidence,
+            actions=actions,
+            budget_exhausted=tool_calls >= config.max_tool_calls,
+        )
         if not evidence:
             needs.append(
                 UnresolvedNeed(
@@ -143,7 +171,7 @@ def _candidate_symbols(query: str, evidence: list[Evidence]) -> list[str]:
 
     def add(symbol: str) -> None:
         cleaned = "".join(ch for ch in symbol.strip() if ch.isalnum() or ch == "_")
-        if len(cleaned) <= 3 or cleaned in seen or cleaned in SKIP_SYMBOLS:
+        if len(cleaned) <= 3 or cleaned in seen or cleaned in DOC_LABELS | QUESTION_WORDS:
             return
         if "_" in cleaned or cleaned[:1].isupper():
             ordered.append(cleaned)
@@ -160,6 +188,54 @@ def _candidate_symbols(query: str, evidence: list[Evidence]) -> list[str]:
         for token in text.replace("(", " ").replace(")", " ").replace(".", " ").split():
             add(token)
     return ordered[:8]
+
+
+def _detect_unresolved_needs(
+    *,
+    card: WorkerCard,
+    need: str,
+    evidence: list[Evidence],
+    actions: list[WorkerAction],
+    budget_exhausted: bool,
+) -> list[UnresolvedNeed]:
+    needs: list[UnresolvedNeed] = []
+    suggested_terms = _suggested_need_terms(need)
+
+    if budget_exhausted:
+        needs.append(
+            UnresolvedNeed(
+                description=f"{card.id} exhausted tool budget before coverage was confirmed.",
+                suggested_terms=suggested_terms[:6],
+                suggested_territories=[card.territory_id],
+            )
+        )
+    if evidence and not any("class " in item.quote or "def " in item.quote for item in evidence):
+        needs.append(
+            UnresolvedNeed(
+                description=f"{card.id} found references but no implementation block.",
+                suggested_terms=suggested_terms[:6],
+                suggested_territories=[card.territory_id],
+            )
+        )
+    if actions and all(action.result_count == 0 for action in actions if action.tool != "search"):
+        needs.append(
+            UnresolvedNeed(
+                description=f"{card.id} follow-up navigation produced no supporting results.",
+                suggested_terms=suggested_terms[:6],
+                suggested_territories=[card.territory_id],
+            )
+        )
+    return needs
+
+
+def _suggested_need_terms(need: str) -> list[str]:
+    terms = []
+    for token in re.findall(r"[A-Za-z][A-Za-z0-9_]{3,}", need):
+        lowered = token.lower()
+        if token in DOC_LABELS or token in QUESTION_WORDS or lowered in TERM_STOPWORDS:
+            continue
+        terms.append(token)
+    return sorted(set(terms))
 
 
 def _dedupe(evidence: list[Evidence]) -> list[Evidence]:
