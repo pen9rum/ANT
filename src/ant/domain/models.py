@@ -36,6 +36,9 @@ class Evidence(BaseModel):
     line_end: int
     quote: str
     reason: str
+    claim: str = ""
+    worker_id: str = ""
+    symbols: list[str] = Field(default_factory=list)
 
 
 class WorkerAction(BaseModel):
@@ -45,26 +48,59 @@ class WorkerAction(BaseModel):
     rationale: str = ""
 
 
+class ExecutionDiagnostic(BaseModel):
+    kind: str
+    message: str
+    tool: str = ""
+    suggested_terms: list[str] = Field(default_factory=list)
+
+
 class WorkerObservation(BaseModel):
     worker_id: str
     territory_id: str
     evidence: list[Evidence] = Field(default_factory=list)
     unresolved_needs: list[UnresolvedNeed] = Field(default_factory=list)
+    diagnostics: list[ExecutionDiagnostic] = Field(default_factory=list)
     actions: list[WorkerAction] = Field(default_factory=list)
     stop_reason: str = ""
 
 
 class UnresolvedNeed(BaseModel):
     description: str
+    kind: str = "missing_detail"
+    known: list[str] = Field(default_factory=list)
+    missing: str = ""
+    scope: str = "unknown"
+    source_worker_id: str = ""
+    evidence_ids: list[str] = Field(default_factory=list)
     suggested_terms: list[str] = Field(default_factory=list)
     suggested_territories: list[str] = Field(default_factory=list)
+
+
+class WorkerRoutingScore(BaseModel):
+    worker_id: str
+    territory_id: str
+    final_score: int
+    query_hits: list[str] = Field(default_factory=list)
+    suggested_term_hits: list[str] = Field(default_factory=list)
+    territory_hint_score: int = 0
+    source_worker_bonus: int = 0
+    source_path_bonus: int = 0
+    test_path_penalty: int = 0
+    seen_worker_penalty: int = 0
 
 
 class RecruitmentRound(BaseModel):
     round_index: int
     query: str
+    input_need: str = ""
+    candidate_worker_ids: list[str] = Field(default_factory=list)
+    routing_scores: list[WorkerRoutingScore] = Field(default_factory=list)
     selected_worker_ids: list[str] = Field(default_factory=list)
     rationale: str
+    selection_reason: str = ""
+    coalition_formed: bool = False
+    coalition_reason: str = ""
     observations: list[WorkerObservation] = Field(default_factory=list)
 
 

@@ -55,15 +55,12 @@ class LocalSearchTool:
         for relative in files:
             path = self.repo_root / relative
             lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
-            bm25_line_ids = set(_bm25_line_ids(relative, lines, terms, limit=80))
+            candidates.extend(_bm25_block_candidates(relative, lines, terms, limit=24))
             for index, line in enumerate(lines, start=1):
                 line_score = _line_score(line, terms, symbols=symbols)
-                bm25_hit = f"{relative}:{index}" in bm25_line_ids
-                if line_score <= 0 and not bm25_hit:
+                if line_score <= 0:
                     continue
                 score = line_score + _path_score(relative, symbols)
-                if bm25_hit:
-                    score += 6
                 start = max(1, index - context_lines)
                 end = min(len(lines), index + context_lines)
                 candidates.append((score, relative, start, lines[start - 1 : end], line.strip()))
@@ -114,10 +111,14 @@ class LocalSearchTool:
         terms = _query_terms(module_or_symbol)
         candidates: list[tuple[int, str, int, list[str], str]] = []
         for relative in files:
-            lines = (self.repo_root / relative).read_text(
-                encoding="utf-8",
-                errors="replace",
-            ).splitlines()
+            lines = (
+                (self.repo_root / relative)
+                .read_text(
+                    encoding="utf-8",
+                    errors="replace",
+                )
+                .splitlines()
+            )
             for index, line in enumerate(lines, start=1):
                 stripped = line.strip()
                 if not (stripped.startswith("import ") or stripped.startswith("from ")):
@@ -132,10 +133,14 @@ class LocalSearchTool:
         terms = _query_terms(symbol)
         candidates: list[tuple[int, str, int, list[str], str]] = []
         for relative in files:
-            lines = (self.repo_root / relative).read_text(
-                encoding="utf-8",
-                errors="replace",
-            ).splitlines()
+            lines = (
+                (self.repo_root / relative)
+                .read_text(
+                    encoding="utf-8",
+                    errors="replace",
+                )
+                .splitlines()
+            )
             for index, line in enumerate(lines, start=1):
                 stripped = line.strip()
                 if not _is_definition_line(stripped):
@@ -174,27 +179,46 @@ class LocalSearchTool:
         ]
 
     def assignments(self, symbol: str, files: list[str], limit: int = 6) -> list[Evidence]:
-        pattern = re.compile(rf"(^|\W)(self\.)?{re.escape(symbol)}\s*=")
+        occurrence = re.compile(rf"\b(?:self\.)?{re.escape(symbol)}\b")
+        assignment = re.compile(rf"(^|\W)(?:self\.)?{re.escape(symbol)}\s*=")
         candidates: list[tuple[int, str, int, list[str], str]] = []
         for relative in files:
-            lines = (self.repo_root / relative).read_text(
-                encoding="utf-8",
-                errors="replace",
-            ).splitlines()
+            lines = (
+                (self.repo_root / relative)
+                .read_text(
+                    encoding="utf-8",
+                    errors="replace",
+                )
+                .splitlines()
+            )
             for index, line in enumerate(lines, start=1):
-                if not pattern.search(line):
+                if not occurrence.search(line):
                     continue
                 start = max(1, index - 3)
                 end = min(len(lines), index + 3)
-                candidates.append((10, relative, start, lines[start - 1 : end], line.strip()))
-        return _merge_windows(candidates, limit=limit)
+                score = 12 if assignment.search(line) else 6
+                if "return " in line or "(" in line:
+                    score += 2
+                candidates.append((score, relative, start, lines[start - 1 : end], line.strip()))
+        results = _merge_windows(sorted(candidates, reverse=True), limit=limit)
+        return [
+            item.model_copy(update={"reason": f"Local data-flow use of symbol {symbol}."})
+            for item in results
+        ]
 
-    def rank_symbols(self, symbols: list[str], files: list[str], limit: int = 8) -> list[str]:
+    def rank_symbols(
+        self,
+        symbols: list[str],
+        files: list[str],
+        limit: int = 8,
+        need: str = "",
+    ) -> list[str]:
         if not symbols:
             return []
         definitions = _definition_names(self.repo_root, files)
         imports = _imported_names(self.repo_root, files)
         paths = " ".join(files).lower()
+        need_terms = set(_query_terms(need))
         scored: list[tuple[int, int, str]] = []
         seen = set()
         for index, symbol in enumerate(symbols):
@@ -204,7 +228,7 @@ class LocalSearchTool:
             lowered = symbol.lower()
             score = 0
             if symbol in definitions:
-                score += 100
+                score += 40
             if symbol in imports:
                 score += 50
             if "_" in symbol:
@@ -213,6 +237,10 @@ class LocalSearchTool:
                 score += 15
             if lowered in paths:
                 score += 10
+            symbol_terms = set(_query_terms(symbol))
+            score += 30 * len(symbol_terms & need_terms)
+            if lowered in need.lower():
+                score += 40
             if score <= 0:
                 continue
             scored.append((score, -index, symbol))
@@ -303,13 +331,57 @@ def _merge_windows(
     return evidence
 
 
-def _bm25_line_ids(relative: str, lines: list[str], terms: list[str], limit: int) -> list[str]:
+def _bm25_block_candidates(
+    relative: str,
+    lines: list[str],
+    terms: list[str],
+    limit: int,
+) -> list[tuple[int, str, int, list[str], str]]:
+    """Rank coherent definition/paragraph blocks, not isolated physical lines."""
+    regions = _retrieval_regions(lines)
     documents = [
-        (f"{relative}:{index}", " ".join(_query_terms(line)))
-        for index, line in enumerate(lines, start=1)
-        if line.strip()
+        (str(index), " ".join(_query_terms("\n".join(block))))
+        for index, (_, block) in enumerate(regions)
     ]
-    return [doc_id for _, doc_id in BM25Index(documents).search(terms, limit=limit)]
+    hits = BM25Index(documents).search(terms, limit=limit)
+    candidates = []
+    for score, doc_id in hits:
+        start, block = regions[int(doc_id)]
+        matched = next((line.strip() for line in block if line.strip()), "")
+        block_terms = set(_query_terms("\n".join(block)))
+        coverage = sum(term in block_terms for term in terms)
+        candidates.append((round(score * 4) + 6 + coverage * 10, relative, start, block, matched))
+    return candidates
+
+
+def _retrieval_regions(lines: list[str]) -> list[tuple[int, list[str]]]:
+    regions: list[tuple[int, list[str]]] = []
+    index = 1
+    while index <= len(lines):
+        if not lines[index - 1].strip():
+            index += 1
+            continue
+        if _is_definition_line(lines[index - 1].strip()):
+            end = _block_end(lines, index)
+            if lines[index - 1].lstrip().startswith("class "):
+                nested_definition = next(
+                    (
+                        cursor
+                        for cursor in range(index + 1, end + 1)
+                        if _is_definition_line(lines[cursor - 1].strip())
+                    ),
+                    end + 1,
+                )
+                end = min(end, nested_definition - 1, index + 11)
+        else:
+            end = min(len(lines), index + 7)
+            for cursor in range(index, end):
+                if not lines[cursor].strip():
+                    end = cursor
+                    break
+        regions.append((index, lines[index - 1 : end]))
+        index = max(index + 1, end + 1)
+    return regions
 
 
 def _is_contained(start: int, end: int, used_start: int, used_end: int) -> bool:

@@ -64,4 +64,16 @@ def test_extract_usage_and_json_object() -> None:
     )
 
     assert usage.total_tokens == 15
-    assert _loads_json_object("```json\n{\"ok\": true}\n```") == {"ok": True}
+    assert _loads_json_object('```json\n{"ok": true}\n```') == {"ok": True}
+
+
+def test_responses_kwargs_include_reasoning_effort_only_when_configured(
+    monkeypatch,
+) -> None:
+    monkeypatch.delenv("ANT_MODEL", raising=False)
+
+    provider = OpenAIProvider(model="gpt-5-2025-08-07", reasoning_effort="low")
+    default_provider = OpenAIProvider(model="gpt-4.1")
+
+    assert provider._responses_kwargs("judge", 128)["reasoning"] == {"effort": "low"}
+    assert "reasoning" not in default_provider._responses_kwargs("synthesize", 128)

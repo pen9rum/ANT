@@ -1,6 +1,7 @@
 from ant.domain.models import (
     Evidence,
     EvidenceState,
+    ExecutionDiagnostic,
     RecruitmentRound,
     Territory,
     TokenUsage,
@@ -8,12 +9,14 @@ from ant.domain.models import (
     WorkerAction,
     WorkerCard,
     WorkerObservation,
+    WorkerRoutingScore,
     as_posix,
 )
 
 __all__ = [
     "Evidence",
     "EvidenceState",
+    "ExecutionDiagnostic",
     "RecruitmentRound",
     "Territory",
     "TokenUsage",
@@ -21,5 +24,6 @@ __all__ = [
     "WorkerCard",
     "WorkerAction",
     "WorkerObservation",
+    "WorkerRoutingScore",
     "as_posix",
 ]

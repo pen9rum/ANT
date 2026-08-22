@@ -45,10 +45,7 @@ class BM25Index:
             score += self._idf(term) * (
                 frequency
                 * (self.k1 + 1)
-                / (
-                    frequency
-                    + self.k1 * (1 - self.b + self.b * doc_length / self.avg_doc_length)
-                )
+                / (frequency + self.k1 * (1 - self.b + self.b * doc_length / self.avg_doc_length))
             )
         return score
 

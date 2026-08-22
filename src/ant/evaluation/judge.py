@@ -4,6 +4,10 @@ from ant.evaluation.metrics import EvalScore, evaluate_answer
 from ant.providers import OpenAIProvider
 from ant.providers.openai_provider import _loads_json_object
 
+OFFICIAL_SWE_QA_PRO_JUDGE_MODEL = "gpt-5-2025-08-07"
+OFFICIAL_SWE_QA_PRO_JUDGE_REASONING_EFFORT = "low"
+OFFICIAL_SWE_QA_PRO_JUDGE_MAX_OUTPUT_TOKENS = 1024
+
 JUDGE_PROMPT = """\
 You are judging repository-level code question answering.
 Score strictly from the provided reference answer and candidate answer.
@@ -39,10 +43,13 @@ def judge_answer(
     if judge != "openai" or not expected:
         return score
 
-    provider = OpenAIProvider()
+    provider = OpenAIProvider(
+        model=OFFICIAL_SWE_QA_PRO_JUDGE_MODEL,
+        reasoning_effort=OFFICIAL_SWE_QA_PRO_JUDGE_REASONING_EFFORT,
+    )
     result = provider.responses_json(
         JUDGE_PROMPT.format(question=question, reference=expected, candidate=prediction),
-        max_output_tokens=256,
+        max_output_tokens=OFFICIAL_SWE_QA_PRO_JUDGE_MAX_OUTPUT_TOKENS,
     )
     data = _loads_json_object(result.text)
     return score.model_copy(

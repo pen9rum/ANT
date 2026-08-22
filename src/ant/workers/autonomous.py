@@ -3,7 +3,14 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-from ant.domain import Evidence, UnresolvedNeed, WorkerAction, WorkerCard, WorkerObservation
+from ant.domain import (
+    Evidence,
+    ExecutionDiagnostic,
+    UnresolvedNeed,
+    WorkerAction,
+    WorkerCard,
+    WorkerObservation,
+)
 from ant.tools.local import (
     STOP_WORDS,
     LocalSearchTool,
@@ -49,6 +56,7 @@ class AutonomousWorker:
             _candidate_symbols(need, evidence),
             self.card.files,
             limit=8,
+            need=need,
         )
         for symbol in candidate_symbols:
             if tool_calls >= config.max_tool_calls:
@@ -120,25 +128,19 @@ class AutonomousWorker:
             evidence.extend(assignment_results)
 
         evidence = _rank_evidence(_dedupe(evidence), need)[: config.evidence_limit]
-        needs = _detect_unresolved_needs(
+        needs, diagnostics = _detect_unresolved_needs(
             card=self.card,
             need=need,
             evidence=evidence,
             actions=actions,
             budget_exhausted=tool_calls >= config.max_tool_calls,
         )
-        if not evidence:
-            needs.append(
-                UnresolvedNeed(
-                    description=f"{self.card.id} exhausted local tools without evidence.",
-                    suggested_terms=need.split()[:6],
-                )
-            )
         return WorkerObservation(
             worker_id=self.card.id,
             territory_id=self.card.territory_id,
             evidence=evidence,
             unresolved_needs=needs,
+            diagnostics=diagnostics,
             actions=actions,
             stop_reason="budget_exhausted" if tool_calls >= config.max_tool_calls else "complete",
         )
@@ -176,35 +178,39 @@ def _detect_unresolved_needs(
     evidence: list[Evidence],
     actions: list[WorkerAction],
     budget_exhausted: bool,
-) -> list[UnresolvedNeed]:
+) -> tuple[list[UnresolvedNeed], list[ExecutionDiagnostic]]:
     needs: list[UnresolvedNeed] = []
+    diagnostics: list[ExecutionDiagnostic] = []
     suggested_terms = _suggested_need_terms(need)
 
     if budget_exhausted:
-        needs.append(
-            UnresolvedNeed(
-                description=f"{card.id} exhausted tool budget before coverage was confirmed.",
+        diagnostics.append(
+            ExecutionDiagnostic(
+                kind="budget_exhausted",
+                message=f"{card.id} exhausted its tool budget before coverage was confirmed.",
+                tool="worker_loop",
                 suggested_terms=suggested_terms[:6],
-                suggested_territories=[card.territory_id],
             )
         )
     if evidence and not any("class " in item.quote or "def " in item.quote for item in evidence):
-        needs.append(
-            UnresolvedNeed(
-                description=f"{card.id} found references but no implementation block.",
+        diagnostics.append(
+            ExecutionDiagnostic(
+                kind="missing_implementation_block",
+                message=f"{card.id} found references but no implementation block.",
+                tool="navigation",
                 suggested_terms=suggested_terms[:6],
-                suggested_territories=[card.territory_id],
             )
         )
     if actions and all(action.result_count == 0 for action in actions if action.tool != "search"):
-        needs.append(
-            UnresolvedNeed(
-                description=f"{card.id} follow-up navigation produced no supporting results.",
+        diagnostics.append(
+            ExecutionDiagnostic(
+                kind="empty_navigation",
+                message=f"{card.id} follow-up navigation produced no supporting results.",
+                tool="navigation",
                 suggested_terms=suggested_terms[:6],
-                suggested_territories=[card.territory_id],
             )
         )
-    return needs
+    return needs, diagnostics
 
 
 def _suggested_need_terms(need: str) -> list[str]:

@@ -31,9 +31,7 @@ def build_report(results_path: Path, out_path: Path | None = None) -> EvalReport
         exact_match_rate=_mean([row["score"]["exact_match"] for row in rows]),
         contains_answer_rate=_mean([row["score"]["contains_answer"] for row in rows]),
         avg_evidence_count=_mean([row["score"]["evidence_count"] for row in rows]),
-        avg_unresolved_need_count=_mean(
-            [row["score"]["unresolved_need_count"] for row in rows]
-        ),
+        avg_unresolved_need_count=_mean([row["score"]["unresolved_need_count"] for row in rows]),
         avg_correctness=_mean([row["score"].get("correctness", 0) for row in rows]),
         avg_completeness=_mean([row["score"].get("completeness", 0) for row in rows]),
         avg_relevance=_mean([row["score"].get("relevance", 0) for row in rows]),

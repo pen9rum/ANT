@@ -17,6 +17,7 @@ from ant.providers.pricing import estimate_cost_usd
 class OpenAISettings:
     api_key: str
     model: str
+    reasoning_effort: str | None = None
     organization: str | None = None
     project: str | None = None
 
@@ -31,15 +32,17 @@ class ResponseResult:
 class OpenAIProvider:
     """Thin wrapper so orchestration code does not depend directly on the SDK."""
 
-    def __init__(self, model: str | None = None) -> None:
+    def __init__(self, model: str | None = None, reasoning_effort: str | None = None) -> None:
         load_dotenv()
         self.settings = OpenAISettings(
             api_key=os.getenv("OPENAI_API_KEY", ""),
             model=model or os.getenv("ANT_MODEL", "gpt-5.4-nano"),
+            reasoning_effort=reasoning_effort,
             organization=os.getenv("OPENAI_ORG_ID"),
             project=os.getenv("OPENAI_PROJECT_ID"),
         )
         self.model = self.settings.model
+        self.reasoning_effort = self.settings.reasoning_effort
         self._usage = TokenUsage()
 
     def is_configured(self) -> bool:
@@ -66,11 +69,8 @@ class OpenAIProvider:
         if self.settings.organization and self.settings.project:
             result = self._responses_create_raw(prompt, max_output_tokens=max_output_tokens)
             return self._record_result(_with_latency_and_cost(result, self.model, start))
-        response = self.client().responses.create(
-            model=self.model,
-            input=prompt,
-            max_output_tokens=max_output_tokens,
-        )
+        request_kwargs = self._responses_kwargs(prompt, max_output_tokens)
+        response = self.client().responses.create(**request_kwargs)
         raw = response.model_dump()
         return ResponseResult(
             text=response.output_text,
@@ -111,13 +111,7 @@ class OpenAIProvider:
             return self.responses_text(repair_prompt, max_output_tokens=max_output_tokens)
 
     def _responses_create_raw(self, prompt: str, max_output_tokens: int) -> ResponseResult:
-        payload = json.dumps(
-            {
-                "model": self.model,
-                "input": prompt,
-                "max_output_tokens": max_output_tokens,
-            }
-        ).encode("utf-8")
+        payload = json.dumps(self._responses_kwargs(prompt, max_output_tokens)).encode("utf-8")
         api_request = request.Request(
             "https://api.openai.com/v1/responses",
             data=payload,
@@ -132,6 +126,16 @@ class OpenAIProvider:
         with request.urlopen(api_request, timeout=30) as response:
             data = json.loads(response.read().decode("utf-8"))
         return ResponseResult(text=_extract_output_text(data), usage=_extract_usage(data), raw=data)
+
+    def _responses_kwargs(self, prompt: str, max_output_tokens: int) -> dict:
+        kwargs: dict = {
+            "model": self.model,
+            "input": prompt,
+            "max_output_tokens": max_output_tokens,
+        }
+        if self.reasoning_effort:
+            kwargs["reasoning"] = {"effort": self.reasoning_effort}
+        return kwargs
 
     def generate_card(self, *, repo_root: str, territory_root: str, files: list[str]) -> WorkerCard:
         file_sample = "\n".join(files[:80])
@@ -162,16 +166,25 @@ class OpenAIProvider:
         question: str,
         worker_id: str,
         territory_id: str,
-        evidence_count: int,
+        evidence: list[Evidence],
     ) -> WorkerObservation:
+        evidence_text = "\n".join(
+            f"[{index}] {item.path}:{item.line_start}-{item.line_end}\n{item.quote[:1200]}"
+            for index, item in enumerate(evidence[:8])
+        )
         prompt = (
-            "Return a JSON worker observation for a code navigation task.\n"
+            "Identify at most one grounded semantic knowledge gap for a code navigation task. "
+            "A gap is missing information needed to answer the original question after considering "
+            "the evidence; it is not a tool failure, lack of confidence, or budget condition. "
+            "Return an empty unresolved_needs list if the evidence already supports an answer.\n"
             f"Question: {question}\n"
             f"Worker: {worker_id}\n"
             f"Territory: {territory_id}\n"
-            f"Evidence count: {evidence_count}\n"
+            f"Evidence:\n{evidence_text}\n"
             "Return JSON with key unresolved_needs as a list of objects with "
-            "description, suggested_terms, suggested_territories.\n"
+            "known (list of grounded claims), missing (specific missing relation), scope "
+            "(local, cross_territory, or unknown), evidence_ids (list of evidence indices), "
+            "suggested_terms, and suggested_territories. description should equal missing.\n"
         )
         result = self.responses_json(prompt, max_output_tokens=512)
         data = _loads_json_object(result.text)
@@ -179,6 +192,12 @@ class OpenAIProvider:
         unresolved_needs = [
             UnresolvedNeed(
                 description=str(item.get("description", "")),
+                kind=str(item.get("kind", "missing_detail")),
+                known=[str(claim) for claim in item.get("known", [])][:4],
+                missing=str(item.get("missing", item.get("description", ""))),
+                scope=str(item.get("scope", "unknown")),
+                source_worker_id=worker_id,
+                evidence_ids=[str(value) for value in item.get("evidence_ids", [])][:8],
                 suggested_terms=[str(term) for term in item.get("suggested_terms", [])],
                 suggested_territories=[str(term) for term in item.get("suggested_territories", [])],
             )

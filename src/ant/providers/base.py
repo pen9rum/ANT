@@ -12,7 +12,7 @@ class WorkerReasoner(Protocol):
         question: str,
         worker_id: str,
         territory_id: str,
-        evidence_count: int,
+        evidence: list[Evidence],
     ) -> WorkerObservation: ...
 
 

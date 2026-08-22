@@ -4,6 +4,8 @@ from pathlib import Path
 from ant.environment import RepoEnvironment
 from ant.evaluation import EvalExample, build_report, load_examples, run_batch
 from ant.evaluation.datasets import _dataset_alias
+from ant.evaluation.judge import judge_answer
+from ant.evaluation.metrics import EvalScore
 from ant.indexing import build_worker_cards, discover_territories
 from ant.memory import IndexStore
 
@@ -55,3 +57,46 @@ def test_run_batch_skips_missing_swe_repo(tmp_path: Path) -> None:
     )
 
     assert results[0].status == "skipped_missing_repo"
+
+
+def test_openai_judge_uses_official_sweqa_evaluator_model(monkeypatch) -> None:
+    captured = {}
+
+    class FakeProvider:
+        def __init__(self, model=None, reasoning_effort=None):
+            captured["model"] = model
+            captured["reasoning_effort"] = reasoning_effort
+
+        def responses_json(self, prompt, max_output_tokens=512):
+            captured["prompt"] = prompt
+            captured["max_output_tokens"] = max_output_tokens
+
+            class Result:
+                text = json.dumps(
+                    {
+                        "correctness": 6,
+                        "completeness": 5,
+                        "relevance": 7,
+                        "clarity": 8,
+                        "reasoning": 4,
+                    }
+                )
+
+            return Result()
+
+    monkeypatch.setattr("ant.evaluation.judge.OpenAIProvider", FakeProvider)
+
+    score = judge_answer(
+        question="q",
+        prediction="candidate",
+        expected="reference",
+        evidence_count=1,
+        unresolved_need_count=0,
+        judge="openai",
+    )
+
+    assert captured["model"] == "gpt-5-2025-08-07"
+    assert captured["reasoning_effort"] == "low"
+    assert captured["max_output_tokens"] == 1024
+    assert isinstance(score, EvalScore)
+    assert score.correctness == 6

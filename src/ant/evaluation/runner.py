@@ -61,9 +61,10 @@ def run_batch(
             example_index = (
                 index_path if example.repo == "." else index_path / _repo_basename(example.repo)
             )
-            if not (example_index / "workers.json").exists() and not (
-                example_index / "ant.sqlite3"
-            ).exists():
+            if (
+                not (example_index / "workers.json").exists()
+                and not (example_index / "ant.sqlite3").exists()
+            ):
                 _build_index(example_repo, example_index)
             store = IndexStore(example_index)
             colony_memory = ColonyMemoryStore(example_index)
@@ -72,7 +73,7 @@ def run_batch(
             state = coordinator.ask(example.question, max_rounds=max_rounds)
             trace_id = store.save_trace(state)
             for round_state in state.rounds:
-                if len(round_state.selected_worker_ids) > 1:
+                if round_state.coalition_formed:
                     colony_memory.record_coalition(
                         CoalitionRecord(
                             worker_ids=round_state.selected_worker_ids,
