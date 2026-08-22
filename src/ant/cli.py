@@ -53,15 +53,42 @@ def ask(
 ) -> None:
     """Ask a local evidence question using saved worker cards."""
     store = IndexStore(index_path)
+    colony_memory = ColonyMemoryStore(index_path)
     workers = store.load_workers()
     provider = OpenAIProvider() if synthesize == "openai" else None
-    state = LocalCoordinator(repo.resolve(), workers, synthesizer=provider).ask(
+    memory_routes = colony_memory.matching_routes(question.split())
+    state = LocalCoordinator(
+        repo.resolve(),
+        workers,
+        synthesizer=provider,
+        memory_routes=memory_routes,
+    ).ask(
         question,
         max_rounds=max_rounds,
     )
     if save_trace:
         store.save_trace(state)
     typer.echo(json.dumps(state.model_dump(), indent=2))
+
+
+@app.command("symbols")
+def symbols(index_path: Path = INDEX_OPTION, query: str = "") -> None:
+    """Inspect the persisted repository symbol manifest."""
+    store = IndexStore(index_path)
+    symbol_items = store.load_symbol_manifest()
+    if query:
+        lowered = query.lower()
+        symbol_items = [
+            entry
+            for entry in symbol_items
+            if isinstance((symbol := entry.get("symbol")), dict)
+            and (
+                lowered in str(symbol.get("name", "")).lower()
+                or lowered in str(symbol.get("qualname", "")).lower()
+                or any(lowered in str(base).lower() for base in symbol.get("bases", []))
+            )
+        ]
+    typer.echo(json.dumps(symbol_items, indent=2))
 
 
 @app.command("openai-smoke")

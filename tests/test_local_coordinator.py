@@ -1,7 +1,9 @@
 from pathlib import Path
 
 from ant.coordinator import LocalCoordinator
+from ant.coordinator.local import _matches_term
 from ant.domain import UnresolvedNeed, WorkerCard, WorkerObservation
+from ant.memory import MemoryRoute
 from ant.tools import LocalSearchTool
 
 
@@ -29,6 +31,13 @@ def test_local_coordinator_returns_grounded_evidence(tmp_path: Path) -> None:
     assert state.rounds[0].selected_worker_ids == ["worker-src"]
     assert state.rounds[0].routing_scores[0].worker_id == "worker-src"
     assert "authenticate" in state.rounds[0].routing_scores[0].query_hits
+
+
+def test_routing_matcher_avoids_arbitrary_substrings() -> None:
+    assert not _matches_term("into", {"quantum_info"})
+    assert not _matches_term("fusedgate", {"gate"})
+    assert _matches_term("sample", {"sample_shots"})
+    assert _matches_term("fusedgate", {"fusedgate"})
 
 
 def test_local_coordinator_records_unresolved_needs(tmp_path: Path) -> None:
@@ -391,6 +400,170 @@ def test_cross_territory_source_need_prefers_implementation_over_tests(
 
     assert state.rounds[0].selected_worker_ids == ["worker-tests"]
     assert state.rounds[1].selected_worker_ids == ["worker-models"]
+
+
+def test_initial_implementation_question_prefers_source_over_tests(
+    tmp_path: Path,
+) -> None:
+    for root in ("src/models", "tests"):
+        (tmp_path / root).mkdir(parents=True)
+    (tmp_path / "src" / "models" / "variational.py").write_text(
+        "class QAOA:\n    pass\n\nclass FALQON(QAOA):\n    pass\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "tests" / "test_variational.py").write_text(
+        "def test_qaoa_falqon():\n    assert 'QAOA FALQON subclass implementation'\n",
+        encoding="utf-8",
+    )
+    workers = [
+        WorkerCard(
+            id="worker-tests",
+            territory_id="tests",
+            name="tests",
+            root="tests",
+            searchable_terms=["QAOA", "FALQON", "subclass", "implementation"],
+            files=["tests/test_variational.py"],
+        ),
+        WorkerCard(
+            id="worker-src-models",
+            territory_id="src-models",
+            name="models",
+            root="src/models",
+            searchable_terms=["QAOA", "FALQON"],
+            files=["src/models/variational.py"],
+        ),
+    ]
+
+    state = LocalCoordinator(tmp_path, workers).ask(
+        "Where is the QAOA subclass implementation?", max_rounds=1
+    )
+
+    assert state.rounds[0].selected_worker_ids == ["worker-src-models"]
+
+
+def test_memory_route_soft_bonus_can_select_known_worker(tmp_path: Path) -> None:
+    for root in ("backends", "docs"):
+        (tmp_path / root).mkdir()
+    (tmp_path / "backends" / "numpy.py").write_text(
+        "def sample_shots(probabilities):\n    return probabilities\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "docs" / "guide.py").write_text(
+        "def measurement_notes():\n    return 'measurement overview'\n",
+        encoding="utf-8",
+    )
+    workers = [
+        WorkerCard(
+            id="worker-docs",
+            territory_id="docs",
+            name="docs",
+            root="docs",
+            searchable_terms=["measurement"],
+            files=["docs/guide.py"],
+        ),
+        WorkerCard(
+            id="worker-backends",
+            territory_id="backends",
+            name="backends",
+            root="backends",
+            searchable_terms=["sample_shots"],
+            files=["backends/numpy.py"],
+        ),
+    ]
+
+    state = LocalCoordinator(
+        tmp_path,
+        workers,
+        memory_routes=[
+            MemoryRoute(
+                need_terms=["measurement"],
+                worker_ids=["worker-backends"],
+                weight=3.0,
+            )
+        ],
+    ).ask("How are measurement samples produced?", max_rounds=1)
+
+    assert state.rounds[0].selected_worker_ids == ["worker-backends"]
+    assert state.rounds[0].routing_scores[0].memory_route_bonus > 0
+
+
+def test_inheritance_question_reports_coverage_gap_without_subclass_evidence(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "models.py").write_text(
+        "class QAOA:\n    pass\n",
+        encoding="utf-8",
+    )
+    worker = WorkerCard(
+        id="worker-src",
+        territory_id="src",
+        name="src",
+        root="src",
+        searchable_terms=["QAOA"],
+        files=["src/models.py"],
+    )
+
+    state = LocalCoordinator(tmp_path, [worker]).ask(
+        "What subclasses inherit from QAOA?", max_rounds=1
+    )
+
+    assert state.unresolved_needs
+    assert state.unresolved_needs[0].need_type == "subclass_lookup"
+    assert "QAOA" in state.unresolved_needs[0].relevant_symbols
+
+
+def test_no_evidence_returns_structured_negative_presence_need(tmp_path: Path) -> None:
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "models.py").write_text(
+        "class Present:\n    pass\n",
+        encoding="utf-8",
+    )
+    worker = WorkerCard(
+        id="worker-src",
+        territory_id="src",
+        name="src",
+        root="src",
+        searchable_terms=["Present"],
+        files=["src/models.py"],
+    )
+
+    state = LocalCoordinator(tmp_path, [worker]).ask(
+        "Is MissingVisualizer implemented?", max_rounds=1
+    )
+
+    assert state.unresolved_needs[0].kind == "coverage_gap"
+    assert state.unresolved_needs[0].need_type == "implementation_location"
+    assert "MissingVisualizer" in state.unresolved_needs[0].relevant_symbols
+    assert state.absence_proofs[0].searched_worker_ids == ["worker-src"]
+    assert state.absence_proofs[0].searched_paths == ["src/models.py"]
+    assert state.absence_proofs[0].conclusion == "not_found"
+
+
+def test_source_test_question_requires_evidence_from_both_sides(tmp_path: Path) -> None:
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "service.py").write_text(
+        "def authenticate():\n    return True\n", encoding="utf-8"
+    )
+    worker = WorkerCard(
+        id="worker-src",
+        territory_id="src",
+        name="src",
+        root="src",
+        searchable_terms=["authenticate"],
+        files=["src/service.py"],
+    )
+
+    state = LocalCoordinator(tmp_path, [worker]).ask(
+        "Where is authenticate implemented and tested?", max_rounds=1
+    )
+
+    coalition_need = next(
+        need for need in state.unresolved_needs if need.need_type == "source_test_coalition"
+    )
+    assert coalition_need.kind == "coverage_gap"
+    assert coalition_need.scope == "cross_territory"
+    assert coalition_need.missing == "test coverage"
 
 
 def test_local_search_returns_context_windows(tmp_path: Path) -> None:

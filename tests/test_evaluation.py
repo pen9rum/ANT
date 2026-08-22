@@ -7,7 +7,7 @@ from ant.evaluation.datasets import _dataset_alias
 from ant.evaluation.judge import judge_answer
 from ant.evaluation.metrics import EvalScore
 from ant.indexing import build_worker_cards, discover_territories
-from ant.memory import IndexStore
+from ant.memory import ColonyMemoryStore, IndexStore
 
 
 def test_load_jsonl_examples(tmp_path: Path) -> None:
@@ -46,6 +46,9 @@ def test_run_batch_writes_results(tmp_path: Path) -> None:
     assert (tmp_path / "results.jsonl").exists()
     report = build_report(tmp_path / "results.jsonl")
     assert report.count == 1
+    routes = ColonyMemoryStore(index_path).matching_routes(["authenticate"])
+    assert routes
+    assert routes[0].worker_ids == ["worker-root"]
 
 
 def test_run_batch_skips_missing_swe_repo(tmp_path: Path) -> None:

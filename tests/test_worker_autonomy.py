@@ -48,8 +48,54 @@ def test_autonomous_worker_records_tool_actions(tmp_path: Path) -> None:
     )
 
     assert observation.evidence
-    assert [action.tool for action in observation.actions][:2] == ["search", "navigate"]
+    assert [action.tool for action in observation.actions][:2] == ["search", "subclasses"]
     assert any("FALQON" in item.quote for item in observation.evidence)
+    assert any(
+        action.tool == "subclasses" and action.query == "QAOA"
+        for action in observation.actions
+    )
+
+
+def test_local_search_resolves_symbols_and_subclasses_with_ast_index(tmp_path: Path) -> None:
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "models.py").write_text(
+        "class QAOA:\n"
+        "    pass\n\n"
+        "class FALQON(QAOA):\n"
+        "    def minimize(self):\n"
+        "        return None\n\n"
+        "def helper():\n"
+        "    return FALQON()\n",
+        encoding="utf-8",
+    )
+    tool = LocalSearchTool(tmp_path)
+
+    definitions = tool.resolve_symbol("QAOA", ["src/models.py"])
+    subclasses = tool.subclasses("QAOA", ["src/models.py"])
+    callers = tool.indexed_callers("FALQON", ["src/models.py"])
+
+    assert definitions[0].line_start == 1
+    assert "class FALQON(QAOA)" in subclasses[0].quote
+    assert subclasses[0].claim == "Defines class FALQON inheriting from QAOA."
+    assert callers[0].symbols[:2] == ["helper", "helper"]
+
+
+def test_local_search_resolves_import_to_definition(tmp_path: Path) -> None:
+    (tmp_path / "src" / "pkg").mkdir(parents=True)
+    (tmp_path / "src" / "pkg" / "models.py").write_text(
+        "class CircuitResult:\n    pass\n", encoding="utf-8"
+    )
+    (tmp_path / "src" / "pkg" / "backend.py").write_text(
+        "from .models import CircuitResult\n", encoding="utf-8"
+    )
+    files = ["src/pkg/models.py", "src/pkg/backend.py"]
+
+    evidence = LocalSearchTool(tmp_path).resolve_import(
+        "CircuitResult", "src/pkg/backend.py", files
+    )
+
+    assert evidence[0].path == "src/pkg/models.py"
+    assert evidence[0].line_start == 1
 
 
 def test_budget_exhaustion_creates_execution_diagnostic(tmp_path: Path) -> None:
@@ -168,3 +214,37 @@ def test_worker_ranks_repo_symbols_above_question_words(tmp_path: Path) -> None:
     navigated = [action.query for action in observation.actions if action.tool == "navigate"]
     assert "Backend" in navigated
     assert "Where" not in navigated
+
+
+def test_worker_uses_call_and_data_flow_tools_for_flow_questions(tmp_path: Path) -> None:
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "backend.py").write_text(
+        "from .states import CircuitResult\n\n"
+        "def sample_shots(probabilities):\n"
+        "    samples = draw_samples(probabilities)\n"
+        "    return samples\n\n"
+        "def execute_circuit():\n"
+        "    probabilities = calculate_probabilities()\n"
+        "    samples = sample_shots(probabilities)\n"
+        "    return CircuitResult(samples)\n",
+        encoding="utf-8",
+    )
+    card = WorkerCard(
+        id="worker-backends",
+        territory_id="backends",
+        name="backend worker",
+        root="src",
+        searchable_terms=["sample_shots", "probabilities", "CircuitResult"],
+        files=["src/backend.py"],
+    )
+
+    observation = AutonomousWorker(tmp_path, card, LocalSearchTool(tmp_path)).run(
+        "How do probabilities flow into sampled measurement outcomes through sample_shots?",
+        WorkerRunConfig(max_tool_calls=10, evidence_limit=8),
+    )
+
+    tools = [action.tool for action in observation.actions]
+    assert "imports" in tools
+    assert "callers" in tools
+    assert "assignments" in tools
+    assert any("execute_circuit" in item.quote for item in observation.evidence)

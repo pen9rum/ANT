@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from ant.domain import Evidence
 from ant.retrieval import BM25Index
 from ant.tools.path_prior import has_low_value_part, has_source_part, is_low_value_path
+from ant.tools.symbol_index import SymbolDefinition, SymbolIndex, build_symbol_index
 
 TOKEN_RE = re.compile(r"[A-Za-z][A-Za-z0-9_]{2,}")
 CAMEL_RE = re.compile(r"[A-Z]?[a-z]+|[A-Z]+(?=[A-Z]|$)")
@@ -38,6 +39,12 @@ STOP_WORDS = {
 @dataclass(frozen=True)
 class LocalSearchTool:
     repo_root: Path
+    _symbol_indexes: dict[tuple[str, ...], SymbolIndex] = field(
+        default_factory=dict,
+        init=False,
+        compare=False,
+        repr=False,
+    )
 
     def search(
         self,
@@ -87,6 +94,62 @@ class LocalSearchTool:
                 candidates.append((score + 4, relative, index, lines[index - 1 : end], stripped))
         candidates.sort(key=lambda item: item[0], reverse=True)
         return _merge_windows(candidates, limit=limit)
+
+    def resolve_symbol(self, symbol: str, files: list[str], limit: int = 6) -> list[Evidence]:
+        index = self.symbol_index(files)
+        definitions = index.by_name.get(symbol, [])
+        if not definitions and "." in symbol:
+            definitions = index.by_name.get(symbol.rsplit(".", 1)[-1], [])
+        return _definitions_to_evidence(
+            self.repo_root,
+            sorted(definitions, key=lambda item: (item.path, item.line))[:limit],
+            reason=f"Resolved symbol definition for {symbol}.",
+        )
+
+    def resolve_import(
+        self, symbol: str, from_path: str, files: list[str], limit: int = 6
+    ) -> list[Evidence]:
+        definitions = self.symbol_index(files).resolve_import(symbol, from_path)
+        return _definitions_to_evidence(
+            self.repo_root,
+            sorted(definitions, key=lambda item: (item.path, item.line))[:limit],
+            reason=f"Resolved import binding for {symbol} from {from_path}.",
+        )
+
+    def subclasses(self, symbol: str, files: list[str], limit: int = 8) -> list[Evidence]:
+        index = self.symbol_index(files)
+        names = {symbol, symbol.rsplit(".", 1)[-1]}
+        definitions = []
+        seen = set()
+        for name in names:
+            for definition in index.subclasses.get(name, []):
+                key = (definition.path, definition.line, definition.qualname)
+                if key in seen:
+                    continue
+                seen.add(key)
+                definitions.append(definition)
+        definitions.sort(key=lambda item: (item.path, item.line))
+        return _definitions_to_evidence(
+            self.repo_root,
+            definitions[:limit],
+            reason=f"Subclass lookup for base symbol {symbol}.",
+        )
+
+    def indexed_callers(self, symbol: str, files: list[str], limit: int = 6) -> list[Evidence]:
+        index = self.symbol_index(files)
+        definitions = index.callers.get(symbol, [])
+        definitions.sort(key=lambda item: (item.path, item.line, item.qualname))
+        return _definitions_to_evidence(
+            self.repo_root,
+            definitions[:limit],
+            reason=f"Indexed caller lookup for symbol {symbol}.",
+        )
+
+    def symbol_index(self, files: list[str]) -> SymbolIndex:
+        key = tuple(sorted(files))
+        if key not in self._symbol_indexes:
+            self._symbol_indexes[key] = build_symbol_index(self.repo_root, list(key))
+        return self._symbol_indexes[key]
 
     def read_region(self, path: str, line: int, context_lines: int = 12) -> Evidence:
         lines = (self.repo_root / path).read_text(encoding="utf-8", errors="replace").splitlines()
@@ -329,6 +392,43 @@ def _merge_windows(
         if len(evidence) >= limit:
             break
     return evidence
+
+
+def _definitions_to_evidence(
+    repo_root: Path,
+    definitions: list[SymbolDefinition],
+    reason: str,
+) -> list[Evidence]:
+    evidence = []
+    for definition in definitions:
+        lines = (
+            (repo_root / definition.path)
+            .read_text(encoding="utf-8", errors="replace")
+            .splitlines()
+        )
+        start = max(1, definition.line)
+        end = min(len(lines), max(definition.end_line, definition.line))
+        evidence.append(
+            Evidence(
+                path=definition.path,
+                line_start=start,
+                line_end=end,
+                quote="\n".join(lines[start - 1 : end]).strip()[:4000],
+                reason=reason,
+                claim=_definition_claim(definition),
+                symbols=[definition.name, definition.qualname, *definition.bases],
+            )
+        )
+    return evidence
+
+
+def _definition_claim(definition: SymbolDefinition) -> str:
+    if definition.kind == "class" and definition.bases:
+        return (
+            f"Defines class {definition.qualname or definition.name} "
+            f"inheriting from {', '.join(definition.bases)}."
+        )
+    return f"Defines {definition.kind} {definition.qualname or definition.name}."
 
 
 def _bm25_block_candidates(

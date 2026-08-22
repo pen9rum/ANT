@@ -1,4 +1,6 @@
 from ant.domain.models import (
+    AbsenceProof,
+    CodeSymbol,
     Evidence,
     EvidenceState,
     ExecutionDiagnostic,
@@ -14,7 +16,9 @@ from ant.domain.models import (
 )
 
 __all__ = [
+    "AbsenceProof",
     "Evidence",
+    "CodeSymbol",
     "EvidenceState",
     "ExecutionDiagnostic",
     "RecruitmentRound",

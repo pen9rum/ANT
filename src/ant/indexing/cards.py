@@ -4,7 +4,8 @@ import re
 from collections import Counter
 from pathlib import Path
 
-from ant.domain import Territory, WorkerCard
+from ant.domain import CodeSymbol, Territory, WorkerCard
+from ant.tools.symbol_index import build_symbol_index
 
 TOKEN_RE = re.compile(r"[A-Za-z][A-Za-z0-9_]{2,}")
 CAMEL_RE = re.compile(r"[A-Z]?[a-z]+|[A-Z]+(?=[A-Z]|$)")
@@ -18,6 +19,7 @@ def build_worker_cards(repo_root: Path, territories: list[Territory]) -> list[Wo
     cards: list[WorkerCard] = []
     for territory in territories:
         terms = _top_terms(repo_root, territory.files)
+        symbols = _owned_symbols(repo_root, territory.files)
         cards.append(
             WorkerCard(
                 id=f"worker-{territory.id}",
@@ -27,6 +29,7 @@ def build_worker_cards(repo_root: Path, territories: list[Territory]) -> list[Wo
                 responsibilities=[territory.summary],
                 searchable_terms=terms,
                 files=territory.files,
+                symbols=symbols,
             )
         )
     return cards
@@ -84,3 +87,18 @@ def _split_terms(relative: str) -> list[str]:
         terms.append(token.lower())
         terms.extend(part.lower() for part in CAMEL_RE.findall(token))
     return terms
+
+
+def _owned_symbols(repo_root: Path, files: list[str], limit: int = 160) -> list[CodeSymbol]:
+    index = build_symbol_index(repo_root, files)
+    return [
+        CodeSymbol(
+            name=definition.name,
+            kind=definition.kind,
+            path=definition.path,
+            line=definition.line,
+            qualname=definition.qualname,
+            bases=list(definition.bases),
+        )
+        for definition in sorted(index.definitions, key=lambda item: (item.path, item.line))[:limit]
+    ]

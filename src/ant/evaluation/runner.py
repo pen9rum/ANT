@@ -10,7 +10,7 @@ from ant.evaluation.datasets import EvalExample
 from ant.evaluation.judge import judge_answer
 from ant.evaluation.metrics import EvalScore
 from ant.memory import IndexStore
-from ant.memory.colony import CoalitionRecord, ColonyMemoryStore
+from ant.memory.colony import CoalitionRecord, ColonyMemoryStore, MemoryRoute
 from ant.providers import OpenAIProvider
 
 
@@ -69,7 +69,13 @@ def run_batch(
             store = IndexStore(example_index)
             colony_memory = ColonyMemoryStore(example_index)
             workers = store.load_workers()
-            coordinator = LocalCoordinator(example_repo, workers, synthesizer=provider)
+            memory_routes = colony_memory.matching_routes(example.question.split())
+            coordinator = LocalCoordinator(
+                example_repo,
+                workers,
+                synthesizer=provider,
+                memory_routes=memory_routes,
+            )
             state = coordinator.ask(example.question, max_rounds=max_rounds)
             trace_id = store.save_trace(state)
             for round_state in state.rounds:
@@ -91,6 +97,16 @@ def run_batch(
                 unresolved_need_count=len(state.unresolved_needs),
                 judge=judge,
             )
+            if _is_high_quality_route(score):
+                worker_ids = _selected_route_workers(state.rounds)
+                if worker_ids:
+                    colony_memory.save_route(
+                        MemoryRoute(
+                            need_terms=_route_terms(example.question),
+                            worker_ids=worker_ids,
+                            weight=_route_weight(score),
+                        )
+                    )
             result = BatchResult(
                 example_id=example.id,
                 question=example.question,
@@ -106,6 +122,39 @@ def run_batch(
 
 def _fallback_prediction(evidence) -> str:
     return "\n".join(f"{item.path}:{item.line_start}: {item.quote}" for item in evidence[:4])
+
+
+def _is_high_quality_route(score: EvalScore) -> bool:
+    if score.exact_match or score.contains_answer:
+        return True
+    if score.correctness is None or score.completeness is None:
+        return False
+    return score.correctness >= 8 and score.completeness >= 8
+
+
+def _selected_route_workers(rounds) -> list[str]:
+    worker_ids = [
+        worker_id
+        for round_state in rounds
+        for worker_id in round_state.selected_worker_ids
+    ]
+    return list(dict.fromkeys(worker_ids))
+
+
+def _route_terms(question: str) -> list[str]:
+    return sorted(
+        {
+            token.lower()
+            for token in question.replace("_", " ").split()
+            if len(token) > 2 and token.isascii()
+        }
+    )[:16]
+
+
+def _route_weight(score: EvalScore) -> float:
+    if score.correctness is not None and score.completeness is not None:
+        return round((score.correctness + score.completeness) / 4, 2)
+    return 2.0
 
 
 def _resolve_repo(repo_root: Path, repo: str) -> Path | None:

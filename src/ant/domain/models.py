@@ -20,6 +20,16 @@ class WorkerCard(BaseModel):
     responsibilities: list[str] = Field(default_factory=list)
     searchable_terms: list[str] = Field(default_factory=list)
     files: list[str] = Field(default_factory=list)
+    symbols: list[CodeSymbol] = Field(default_factory=list)
+
+
+class CodeSymbol(BaseModel):
+    name: str
+    kind: str
+    path: str
+    line: int
+    qualname: str = ""
+    bases: list[str] = Field(default_factory=list)
 
 
 class TokenUsage(BaseModel):
@@ -68,6 +78,7 @@ class WorkerObservation(BaseModel):
 class UnresolvedNeed(BaseModel):
     description: str
     kind: str = "missing_detail"
+    need_type: str = "unknown"
     known: list[str] = Field(default_factory=list)
     missing: str = ""
     scope: str = "unknown"
@@ -75,6 +86,7 @@ class UnresolvedNeed(BaseModel):
     evidence_ids: list[str] = Field(default_factory=list)
     suggested_terms: list[str] = Field(default_factory=list)
     suggested_territories: list[str] = Field(default_factory=list)
+    relevant_symbols: list[str] = Field(default_factory=list)
 
 
 class WorkerRoutingScore(BaseModel):
@@ -83,9 +95,11 @@ class WorkerRoutingScore(BaseModel):
     final_score: int
     query_hits: list[str] = Field(default_factory=list)
     suggested_term_hits: list[str] = Field(default_factory=list)
+    relevant_symbol_hits: list[str] = Field(default_factory=list)
     territory_hint_score: int = 0
     source_worker_bonus: int = 0
     source_path_bonus: int = 0
+    memory_route_bonus: int = 0
     test_path_penalty: int = 0
     seen_worker_penalty: int = 0
 
@@ -110,10 +124,22 @@ class EvidenceState(BaseModel):
     evidence: list[Evidence] = Field(default_factory=list)
     unresolved_needs: list[UnresolvedNeed] = Field(default_factory=list)
     rounds: list[RecruitmentRound] = Field(default_factory=list)
+    absence_proofs: list[AbsenceProof] = Field(default_factory=list)
     usage: TokenUsage = Field(default_factory=TokenUsage)
 
     def has_evidence(self) -> bool:
         return bool(self.evidence)
+
+
+class AbsenceProof(BaseModel):
+    query: str
+    relevant_symbols: list[str] = Field(default_factory=list)
+    searched_worker_ids: list[str] = Field(default_factory=list)
+    searched_territories: list[str] = Field(default_factory=list)
+    searched_paths: list[str] = Field(default_factory=list)
+    tools: list[str] = Field(default_factory=list)
+    exhaustive: bool = False
+    conclusion: str = "inconclusive"
 
 
 def as_posix(path: Path) -> str:

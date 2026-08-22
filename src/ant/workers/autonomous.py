@@ -58,10 +58,79 @@ class AutonomousWorker:
             limit=8,
             need=need,
         )
+        flow_or_call_path = _asks_for_flow_or_call_path(need)
+        if _asks_for_inheritance(need):
+            for symbol in candidate_symbols:
+                if tool_calls >= config.max_tool_calls:
+                    break
+                subclass_results = self.tools.subclasses(symbol, self.card.files, limit=4)
+                tool_calls += 1
+                actions.append(
+                    WorkerAction(
+                        tool="subclasses",
+                        query=symbol,
+                        result_count=len(subclass_results),
+                        rationale=(
+                            "Find class definitions that inherit from the surfaced base symbol."
+                        ),
+                    )
+                )
+                evidence.extend(subclass_results)
+
+        if flow_or_call_path:
+            for symbol in candidate_symbols[:4]:
+                if tool_calls >= config.max_tool_calls:
+                    break
+                import_results = self.tools.imports(symbol, self.card.files, limit=2)
+                tool_calls += 1
+                actions.append(
+                    WorkerAction(
+                        tool="imports",
+                        query=symbol,
+                        result_count=len(import_results),
+                        rationale=(
+                            "Resolve imports before following call/data-flow across implementation."
+                        ),
+                    )
+                )
+                evidence.extend(import_results)
+                if tool_calls >= config.max_tool_calls:
+                    break
+                caller_results = self.tools.indexed_callers(symbol, self.card.files, limit=2)
+                if not caller_results:
+                    caller_results = self.tools.callers(symbol, self.card.files, limit=2)
+                tool_calls += 1
+                actions.append(
+                    WorkerAction(
+                        tool="callers",
+                        query=symbol,
+                        result_count=len(caller_results),
+                        rationale="Follow call path into blocks that invoke the current symbol.",
+                    )
+                )
+                evidence.extend(caller_results)
+                if tool_calls >= config.max_tool_calls:
+                    break
+                assignment_results = self.tools.assignments(symbol, self.card.files, limit=2)
+                tool_calls += 1
+                actions.append(
+                    WorkerAction(
+                        tool="assignments",
+                        query=symbol,
+                        result_count=len(assignment_results),
+                        rationale=(
+                            "Trace local data-flow uses and assignments for the current symbol."
+                        ),
+                    )
+                )
+                evidence.extend(assignment_results)
+
         for symbol in candidate_symbols:
             if tool_calls >= config.max_tool_calls:
                 break
-            nav_results = self.tools.navigate(symbol, self.card.files, limit=2)
+            nav_results = self.tools.resolve_symbol(symbol, self.card.files, limit=2)
+            if not nav_results:
+                nav_results = self.tools.navigate(symbol, self.card.files, limit=2)
             tool_calls += 1
             actions.append(
                 WorkerAction(
@@ -89,7 +158,9 @@ class AutonomousWorker:
             evidence.extend(ref_results)
             if tool_calls >= config.max_tool_calls:
                 break
-            caller_results = self.tools.callers(symbol, self.card.files, limit=1)
+            caller_results = self.tools.indexed_callers(symbol, self.card.files, limit=1)
+            if not caller_results:
+                caller_results = self.tools.callers(symbol, self.card.files, limit=1)
             tool_calls += 1
             actions.append(
                 WorkerAction(
@@ -169,6 +240,41 @@ def _candidate_symbols(query: str, evidence: list[Evidence]) -> list[str]:
         for token in text.replace("(", " ").replace(")", " ").replace(".", " ").split():
             add(token)
     return ordered[:8]
+
+
+def _asks_for_inheritance(need: str) -> bool:
+    lowered = need.lower()
+    indicators = [
+        "subclass",
+        "subclasses",
+        "inherit",
+        "inherits",
+        "inherited",
+        "base class",
+        "derived",
+    ]
+    return any(indicator in lowered for indicator in indicators)
+
+
+def _asks_for_flow_or_call_path(need: str) -> bool:
+    lowered = need.lower()
+    indicators = [
+        "call path",
+        "code path",
+        "data flow",
+        "data-flow",
+        "flow",
+        "pipeline",
+        "through",
+        "from",
+        "into",
+        "sample",
+        "probabilities",
+        "frequencies",
+        "measurement",
+        "handled",
+    ]
+    return any(indicator in lowered for indicator in indicators)
 
 
 def _detect_unresolved_needs(

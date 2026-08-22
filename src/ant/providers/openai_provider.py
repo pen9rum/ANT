@@ -4,13 +4,22 @@ import json
 import os
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from urllib import request
 
 from openai import OpenAI
 
 from ant.config import load_dotenv
-from ant.domain import Evidence, TokenUsage, UnresolvedNeed, WorkerCard, WorkerObservation
+from ant.domain import (
+    CodeSymbol,
+    Evidence,
+    TokenUsage,
+    UnresolvedNeed,
+    WorkerCard,
+    WorkerObservation,
+)
 from ant.providers.pricing import estimate_cost_usd
+from ant.tools.symbol_index import build_symbol_index
 
 
 @dataclass(frozen=True)
@@ -72,12 +81,17 @@ class OpenAIProvider:
         request_kwargs = self._responses_kwargs(prompt, max_output_tokens)
         response = self.client().responses.create(**request_kwargs)
         raw = response.model_dump()
-        return ResponseResult(
-            text=response.output_text,
-            usage=_extract_usage(raw),
-            raw=raw,
+        return self._record_result(
+            _with_latency_and_cost(
+                ResponseResult(
+                    text=response.output_text,
+                    usage=_extract_usage(raw),
+                    raw=raw,
+                ),
+                self.model,
+                start,
+            )
         )
-        return self._record_result(_with_latency_and_cost(result, self.model, start))
 
     def drain_usage(self) -> TokenUsage:
         usage = self._usage
@@ -150,6 +164,7 @@ class OpenAIProvider:
         data = _loads_json_object(result.text)
         root = territory_root
         territory_id = root or "root"
+        symbols = _owned_symbols(Path(repo_root), files)
         return WorkerCard(
             id=f"worker-{territory_id}",
             territory_id=territory_id,
@@ -158,6 +173,7 @@ class OpenAIProvider:
             responsibilities=[str(item) for item in data.get("responsibilities", [])][:8],
             searchable_terms=[str(item).lower() for item in data.get("searchable_terms", [])][:24],
             files=files,
+            symbols=symbols,
         )
 
     def observe(
@@ -182,9 +198,12 @@ class OpenAIProvider:
             f"Territory: {territory_id}\n"
             f"Evidence:\n{evidence_text}\n"
             "Return JSON with key unresolved_needs as a list of objects with "
-            "known (list of grounded claims), missing (specific missing relation), scope "
+            "known (list of grounded claims), missing (specific missing relation), "
+            "need_type (one of subclass_lookup, call_path, implementation_location, "
+            "behavior_flow, negative_presence, data_flow, unknown), scope "
             "(local, cross_territory, or unknown), evidence_ids (list of evidence indices), "
-            "suggested_terms, and suggested_territories. description should equal missing.\n"
+            "relevant_symbols, suggested_terms, and suggested_territories. "
+            "description should equal missing.\n"
         )
         result = self.responses_json(prompt, max_output_tokens=512)
         data = _loads_json_object(result.text)
@@ -193,11 +212,13 @@ class OpenAIProvider:
             UnresolvedNeed(
                 description=str(item.get("description", "")),
                 kind=str(item.get("kind", "missing_detail")),
+                need_type=str(item.get("need_type", "unknown")),
                 known=[str(claim) for claim in item.get("known", [])][:4],
                 missing=str(item.get("missing", item.get("description", ""))),
                 scope=str(item.get("scope", "unknown")),
                 source_worker_id=worker_id,
                 evidence_ids=[str(value) for value in item.get("evidence_ids", [])][:8],
+                relevant_symbols=[str(symbol) for symbol in item.get("relevant_symbols", [])],
                 suggested_terms=[str(term) for term in item.get("suggested_terms", [])],
                 suggested_territories=[str(term) for term in item.get("suggested_territories", [])],
             )
@@ -283,3 +304,18 @@ def _loads_json_object(text: str) -> dict:
     if start != -1 and end != -1:
         cleaned = cleaned[start : end + 1]
     return json.loads(cleaned)
+
+
+def _owned_symbols(repo_root: Path, files: list[str], limit: int = 160) -> list[CodeSymbol]:
+    index = build_symbol_index(repo_root, files)
+    return [
+        CodeSymbol(
+            name=definition.name,
+            kind=definition.kind,
+            path=definition.path,
+            line=definition.line,
+            qualname=definition.qualname,
+            bases=list(definition.bases),
+        )
+        for definition in sorted(index.definitions, key=lambda item: (item.path, item.line))[:limit]
+    ]

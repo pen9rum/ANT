@@ -90,3 +90,24 @@ def test_worker_card_keeps_class_names_before_function_names(tmp_path: Path) -> 
 
     assert terms.index("QAOA") < terms.index("helper_10")
     assert terms.index("FALQON") < terms.index("helper_10")
+
+
+def test_worker_card_includes_typed_owned_symbols(tmp_path: Path) -> None:
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "variational.py").write_text(
+        "class QAOA:\n"
+        "    pass\n\n"
+        "class FALQON(QAOA):\n"
+        "    pass\n\n"
+        "def optimize():\n"
+        "    return FALQON()\n",
+        encoding="utf-8",
+    )
+
+    territories = discover_territories(RepoEnvironment(tmp_path))
+    workers = build_worker_cards(tmp_path, territories)
+
+    symbols = {symbol.name: symbol for symbol in workers[0].symbols}
+    assert symbols["QAOA"].kind == "class"
+    assert symbols["FALQON"].bases == ["QAOA"]
+    assert symbols["optimize"].kind == "function"

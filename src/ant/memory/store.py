@@ -4,7 +4,7 @@ import json
 import sqlite3
 from pathlib import Path
 
-from ant.domain import EvidenceState, Territory, WorkerCard
+from ant.domain import CodeSymbol, EvidenceState, Territory, WorkerCard
 
 
 class IndexStore:
@@ -20,6 +20,10 @@ class IndexStore:
         )
         (self.path / "workers.json").write_text(
             json.dumps([item.model_dump() for item in workers], indent=2),
+            encoding="utf-8",
+        )
+        (self.path / "symbols.json").write_text(
+            json.dumps(_symbol_manifest(workers), indent=2),
             encoding="utf-8",
         )
         with self._connect() as connection:
@@ -48,6 +52,22 @@ class IndexStore:
 
         data = json.loads((self.path / "workers.json").read_text(encoding="utf-8"))
         return [WorkerCard.model_validate(item) for item in data]
+
+    def load_symbols(self) -> list[CodeSymbol]:
+        return [
+            CodeSymbol.model_validate(item["symbol"])
+            for item in self.load_symbol_manifest()
+            if isinstance(item.get("symbol"), dict)
+        ]
+
+    def load_symbol_manifest(self) -> list[dict[str, object]]:
+        path = self.path / "symbols.json"
+        if path.exists():
+            return list(json.loads(path.read_text(encoding="utf-8")))
+        manifest = []
+        for worker in self.load_workers():
+            manifest.extend(_symbol_manifest([worker]))
+        return manifest
 
     def save_trace(self, state: EvidenceState) -> int:
         self.path.mkdir(parents=True, exist_ok=True)
@@ -88,3 +108,29 @@ class IndexStore:
             );
             """
         )
+
+
+def _symbol_manifest(workers: list[WorkerCard]) -> list[dict[str, object]]:
+    manifest = []
+    for worker in workers:
+        for symbol in worker.symbols:
+            manifest.append(
+                {
+                    "worker_id": worker.id,
+                    "territory_id": worker.territory_id,
+                    "symbol": symbol.model_dump(),
+                }
+            )
+    return sorted(
+        manifest,
+        key=lambda item: (
+            str(item["territory_id"]),
+            str(item["worker_id"]),
+            str(cast_symbol(item["symbol"]).get("path", "")),
+            int(cast_symbol(item["symbol"]).get("line", 0)),
+        ),
+    )
+
+
+def cast_symbol(value: object) -> dict:
+    return value if isinstance(value, dict) else {}

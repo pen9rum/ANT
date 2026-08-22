@@ -59,6 +59,35 @@ class ColonyMemoryStore:
                 (json.dumps(route.need_terms), json.dumps(route.worker_ids), route.weight),
             )
 
+    def matching_routes(self, terms: list[str], limit: int = 5) -> list[MemoryRoute]:
+        if not terms:
+            return []
+        query_terms = {term.lower() for term in terms}
+        routes = []
+        with sqlite3.connect(self.db_path) as connection:
+            _create_schema(connection)
+            rows = connection.execute(
+                "select need_terms, worker_ids, weight from routes order by weight desc, id desc"
+            ).fetchall()
+        for need_terms_json, worker_ids_json, weight in rows:
+            need_terms = [str(term) for term in json.loads(need_terms_json)]
+            overlap = query_terms & {term.lower() for term in need_terms}
+            if not overlap:
+                continue
+            routes.append(
+                (
+                    len(overlap),
+                    float(weight),
+                    MemoryRoute(
+                        need_terms=need_terms,
+                        worker_ids=[str(worker_id) for worker_id in json.loads(worker_ids_json)],
+                        weight=float(weight),
+                    ),
+                )
+            )
+        routes.sort(key=lambda item: (item[0], item[1]), reverse=True)
+        return [route for _, _, route in routes[:limit]]
+
     def mark_stale(self, changed_files: list[str]) -> int:
         if not changed_files:
             return 0
