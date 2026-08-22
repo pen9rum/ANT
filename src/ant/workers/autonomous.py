@@ -4,36 +4,15 @@ import re
 from dataclasses import dataclass
 
 from ant.domain import Evidence, UnresolvedNeed, WorkerAction, WorkerCard, WorkerObservation
-from ant.tools import LocalSearchTool
+from ant.tools.local import (
+    STOP_WORDS,
+    LocalSearchTool,
+)
+from ant.tools.path_prior import has_low_value_part, has_source_part, is_low_value_path
 
 SYMBOL_RE = re.compile(r"\b(?:class|def)\s+([A-Za-z_][A-Za-z0-9_]*)")
 BASE_RE = re.compile(r"\bclass\s+[A-Za-z_][A-Za-z0-9_]*\(([^)]*)\)")
-DOC_LABELS = {
-    "Args",
-    "Example",
-    "Note",
-    "Return",
-    "Returns",
-}
-QUESTION_WORDS = {
-    "How",
-    "It",
-    "What",
-    "Where",
-}
-TERM_STOPWORDS = {
-    "and",
-    "are",
-    "does",
-    "from",
-    "how",
-    "into",
-    "the",
-    "through",
-    "what",
-    "where",
-    "with",
-}
+DOC_LABEL_RE = re.compile(r"^(Args|Example|Examples|Note|Notes|Return|Returns|Raises)$")
 
 
 @dataclass(frozen=True)
@@ -171,7 +150,7 @@ def _candidate_symbols(query: str, evidence: list[Evidence]) -> list[str]:
 
     def add(symbol: str) -> None:
         cleaned = "".join(ch for ch in symbol.strip() if ch.isalnum() or ch == "_")
-        if len(cleaned) <= 3 or cleaned in seen or cleaned in DOC_LABELS | QUESTION_WORDS:
+        if len(cleaned) <= 3 or cleaned in seen or _is_non_navigation_token(cleaned):
             return
         if "_" in cleaned or cleaned[:1].isupper():
             ordered.append(cleaned)
@@ -232,10 +211,14 @@ def _suggested_need_terms(need: str) -> list[str]:
     terms = []
     for token in re.findall(r"[A-Za-z][A-Za-z0-9_]{3,}", need):
         lowered = token.lower()
-        if token in DOC_LABELS or token in QUESTION_WORDS or lowered in TERM_STOPWORDS:
+        if _is_non_navigation_token(token) or lowered in STOP_WORDS:
             continue
         terms.append(token)
     return sorted(set(terms))
+
+
+def _is_non_navigation_token(token: str) -> bool:
+    return bool(DOC_LABEL_RE.match(token)) or token.lower() in STOP_WORDS
 
 
 def _dedupe(evidence: list[Evidence]) -> list[Evidence]:
@@ -264,9 +247,9 @@ def _rank_evidence(evidence: list[Evidence], need: str) -> list[Evidence]:
             value += 6
         if path.endswith(".py"):
             value += 3
-        if path.startswith("src/"):
+        if has_source_part(path):
             value += 2
-        if path.endswith("setup.py") or path.endswith("README.md") or path.startswith("examples/"):
+        if is_low_value_path(path) or has_low_value_part(path):
             value -= 8
         value += sum(1 for term in terms if term in quote)
         return value

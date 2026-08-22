@@ -14,6 +14,7 @@ from ant.domain import (
 )
 from ant.providers import AnswerSynthesizer, MockLLMProvider, UsageReporter, WorkerReasoner
 from ant.tools import LocalSearchTool
+from ant.tools.path_prior import has_low_value_part, has_source_part, is_low_value_path
 from ant.workers import AutonomousWorker, WorkerRunConfig
 
 TOKEN_RE = re.compile(r"[A-Za-z][A-Za-z0-9_]{2,}")
@@ -139,12 +140,7 @@ class LocalCoordinator:
             }
             terms |= path_terms
             score = sum(1 for query_term in query_terms if _matches_term(query_term, terms))
-            if any(token[:1].isupper() for token in TOKEN_RE.findall(question)) and worker.root in {
-                "src",
-                "lib",
-                "ant",
-            }:
-                score += 2
+            score += _source_path_bonus(worker)
             scored.append((score, worker))
         scored.sort(key=lambda item: item[0], reverse=True)
         selected = [worker for score, worker in scored[:limit] if score > 0]
@@ -163,6 +159,18 @@ def _matches_term(query_term: str, terms: set[str]) -> bool:
     return any(query_term in term or term in query_term for term in terms)
 
 
+def _source_path_bonus(worker: WorkerCard) -> int:
+    files = worker.files or [worker.root]
+    source_like = sum(
+        1
+        for file in files
+        if has_source_part(file)
+    )
+    if not files:
+        return 0
+    return 2 if source_like / len(files) >= 0.5 else 0
+
+
 def _rank_global_evidence(evidence: list[Evidence], question: str) -> list[Evidence]:
     terms = {term.lower() for term in TOKEN_RE.findall(question) if len(term) > 2}
 
@@ -178,7 +186,9 @@ def _rank_global_evidence(evidence: list[Evidence], question: str) -> list[Evide
             value += 5
         if path.endswith(".py"):
             value += 3
-        if path.endswith("setup.py") or path.endswith("README.md") or path.startswith("examples/"):
+        if is_low_value_path(path):
+            value -= 10
+        if has_low_value_part(path):
             value -= 10
         value += sum(1 for term in terms if term in quote)
         return value

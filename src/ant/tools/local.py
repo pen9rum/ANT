@@ -6,17 +6,25 @@ from pathlib import Path
 
 from ant.domain import Evidence
 from ant.retrieval import BM25Index
+from ant.tools.path_prior import has_low_value_part, has_source_part, is_low_value_path
 
 TOKEN_RE = re.compile(r"[A-Za-z][A-Za-z0-9_]{2,}")
 CAMEL_RE = re.compile(r"[A-Z]?[a-z]+|[A-Z]+(?=[A-Z]|$)")
 STOP_WORDS = {
+    "and",
     "are",
     "codebase",
+    "does",
     "for",
     "handled",
     "how",
+    "into",
+    "not",
+    "return",
+    "returns",
     "this",
     "the",
+    "through",
     "what",
     "when",
     "where",
@@ -256,10 +264,12 @@ def _path_score(relative: str, symbols: list[str]) -> int:
     score = 0
     if path.endswith(".py"):
         score += 2
-    if "/README" in path or path.endswith("README.md"):
+    if is_low_value_path(path):
         score -= 4
-    if path.startswith("examples/"):
+    if has_low_value_part(path):
         score -= 2
+    if has_source_part(path):
+        score += 2
     lowered = path.lower()
     for symbol in symbols:
         if symbol.lower() in lowered:
