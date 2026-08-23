@@ -12,6 +12,7 @@ from ant.retrieval.dense import (
     EmbeddingIndex,
     build_and_cache_in_background,
     build_embedding_index,
+    warm_dense_cache,
 )
 from ant.retrieval.relevance import extract_terms, score_evidence
 from ant.tools import LocalSearchTool
@@ -233,6 +234,40 @@ def test_build_and_cache_in_background_does_not_duplicate_an_inflight_build(
         time.sleep(0.05)
 
     assert len(calls) == 1
+
+
+def test_warm_dense_cache_builds_only_the_missing_territories_synchronously(
+    tmp_path: Path,
+) -> None:
+    # Regression test: right after evolve_workers specializes/births several
+    # new workers at once, each needing its own from-scratch embedding
+    # build, letting them all go through the lazy per-query background path
+    # meant one build's territory could still be uncached many minutes into
+    # an eval pass (confirmed: contention from several concurrent builds
+    # made none of them finish in time). warm_dense_cache exists as an
+    # explicit, synchronous "make sure everything's built" checkpoint an
+    # experiment can call once, deterministically, instead of hoping the
+    # background queue gets far enough during a time-boxed eval pass.
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "a.py").write_text("def f():\n    return 1\n", encoding="utf-8")
+    (tmp_path / "src" / "b.py").write_text("def g():\n    return 2\n", encoding="utf-8")
+    dense_dir = tmp_path / "dense"
+
+    worker_a = WorkerCard(
+        id="worker-a", territory_id="a", name="a", root="src", files=["src/a.py"]
+    )
+    worker_b = WorkerCard(
+        id="worker-b", territory_id="b", name="b", root="src", files=["src/b.py"]
+    )
+
+    # Pre-warm worker-a only, synchronously, so it's already cached.
+    index_a = build_embedding_index(tmp_path, worker_a.files, _FakeEmbedder())
+    index_a.save(dense_dir, dense_module.territory_key(worker_a.files))
+
+    built = warm_dense_cache(tmp_path, dense_dir, [worker_a, worker_b], _FakeEmbedder())
+
+    assert built == ["worker-b"]
+    assert EmbeddingIndex.load(dense_dir, dense_module.territory_key(worker_b.files)) is not None
 
 
 def test_dense_search_returns_empty_immediately_for_an_uncached_territory(

@@ -23,6 +23,7 @@ import os
 import threading
 from dataclasses import dataclass
 from pathlib import Path
+from queue import Queue
 
 import numpy as np
 
@@ -243,20 +244,59 @@ def build_embedding_index(
     return _embed_entries(entries, texts, embedder, verbose=verbose)
 
 
-# Tracks (index_dir, key) pairs currently being built in a background
-# thread, so a second dense_search() for the same not-yet-cached territory
-# (from a later round, or a different worker sharing the same file set)
-# doesn't spawn a duplicate build -- it just also gets [] for now and
-# benefits from the first build once it lands.
+# One shared queue + one persistent worker thread for every background
+# build in the process, not one thread per territory. Spawning a fresh
+# thread per territory let N newly-created workers (e.g. right after
+# evolve_workers specializes/births several at once) all embed
+# concurrently -- but onnxruntime inference is CPU-bound, so N threads
+# competing for the same cores made each individual build slower, not
+# faster, sometimes badly enough that none of them finished inside a short
+# eval pass (confirmed: a build measured at ~170s in isolation still
+# hadn't produced a cache after several minutes of contention with other
+# concurrent builds). A single queue processes one territory at a time, so
+# every build gets the full machine and completes in roughly its true
+# isolated time, and the *total* wall-clock time across many pending
+# territories is no worse (usually better) than contended parallelism.
+_build_queue: Queue[tuple[Path, list[str], Path, str, DenseEmbedder]] = Queue()
+_queue_worker_started = False
+_queue_worker_lock = threading.Lock()
 _inflight_builds: set[tuple[str, str]] = set()
 _inflight_lock = threading.Lock()
+
+
+def _ensure_queue_worker_started() -> None:
+    global _queue_worker_started
+    with _queue_worker_lock:
+        if _queue_worker_started:
+            return
+        _queue_worker_started = True
+
+        def _drain() -> None:
+            while True:
+                repo_root, files, index_dir, key, embedder = _build_queue.get()
+                identity = (str(index_dir), key)
+                try:
+                    index = build_embedding_index(repo_root, files, embedder, verbose=False)
+                    index.save(index_dir, key)
+                except Exception as exc:  # noqa: BLE001 - nothing else observes
+                    # this thread; swallowing silently would make a failed
+                    # build indistinguishable from "still queued behind
+                    # others", which is exactly the failure mode this print
+                    # exists to make visible.
+                    print(f"[dense] background build failed for {key}: {exc!r}", flush=True)
+                finally:
+                    with _inflight_lock:
+                        _inflight_builds.discard(identity)
+                    _build_queue.task_done()
+
+        threading.Thread(target=_drain, daemon=True).start()
 
 
 def build_and_cache_in_background(
     repo_root: Path, files: list[str], index_dir: Path, key: str, embedder: DenseEmbedder
 ) -> None:
-    """Kick off build_embedding_index() on a daemon thread and save the
-    result for next time, without blocking the caller.
+    """Queue build_embedding_index() for the single shared background
+    worker and return immediately, without blocking the caller.
 
     dense_search() calling this instead of building synchronously is the
     fix for a real failure mode: a worker's territory can contain enough
@@ -272,16 +312,39 @@ def build_and_cache_in_background(
         if identity in _inflight_builds:
             return
         _inflight_builds.add(identity)
+    _ensure_queue_worker_started()
+    _build_queue.put((repo_root, files, index_dir, key, embedder))
 
-    def _run() -> None:
-        try:
-            index = build_embedding_index(repo_root, files, embedder, verbose=False)
-            index.save(index_dir, key)
-        finally:
-            with _inflight_lock:
-                _inflight_builds.discard(identity)
 
-    threading.Thread(target=_run, daemon=True).start()
+def warm_dense_cache(
+    repo_root: Path,
+    index_dir: Path,
+    workers: list[WorkerCard],
+    embedder: DenseEmbedder,
+) -> list[str]:
+    """Synchronously build and save whatever chunk-level territory caches
+    are missing for `workers`, one at a time, in the calling thread/process
+    -- not queued to the background worker.
+
+    For live/interactive use (`ant ask`), lazy background building is the
+    right default: no single query should ever wait on it. For a
+    controlled experiment (e.g. comparing colony state before/after
+    `evolve_workers`), the opposite is true -- you want a *deterministic,
+    fully-built* colony before measuring, not "however far the background
+    queue happened to get before the eval pass ended". Call this right
+    after evolve_workers (or before re-running an eval pass) to get that
+    guarantee. Returns the ids of the workers that were actually (re)built.
+    """
+    built: list[str] = []
+    for worker in workers:
+        key = territory_key(worker.files)
+        if EmbeddingIndex.load(index_dir, key) is not None:
+            continue
+        print(f"[dense] warming {worker.id} ({len(worker.files)} files)...", flush=True)
+        index = build_embedding_index(repo_root, worker.files, embedder, verbose=True)
+        index.save(index_dir, key)
+        built.append(worker.id)
+    return built
 
 
 def build_worker_card_index(workers: list[WorkerCard], embedder: DenseEmbedder) -> EmbeddingIndex:
