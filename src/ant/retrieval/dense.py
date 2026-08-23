@@ -1,8 +1,26 @@
+"""Optional dense/embedding retrieval, scoped to one worker's territory at a
+time -- deliberately not a single global index over the whole repository.
+
+This is a tool a *recruited* worker uses inside its own jurisdiction, exactly
+like search()/navigate()/callers() (see LocalSearchTool.dense_search): it
+augments what a worker can find inside territory it was already routed to,
+it does not let a query skip recruitment/routing/coalition-formation and
+pull evidence from anywhere in the repo. The worker-card index
+(build_worker_card_index) is the one exception -- it is repo-wide, but it
+only ever contributes a routing signal (which worker's card is semantically
+close to this query), never evidence content itself. Keeping both pieces
+scoped this way is what keeps the multi-agent architecture (need-conditioned
+recruitment, temporary coalitions, absence proofs, Colony Memory routing) the
+thing actually answering questions -- dense retrieval is one more signal an
+agent can draw on, not a replacement for having agents at all.
+"""
+
 from __future__ import annotations
 
 import hashlib
 import json
 import os
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -120,6 +138,12 @@ class EmbeddingIndex:
         return [(float(scores[i]), self.entries[indices[i]]) for i in order]
 
     def save(self, index_dir: Path, key: str) -> None:
+        # Written to temp names and atomically replaced into place, entries
+        # before vectors: a background build (see build_and_cache_async)
+        # can be saving this at the same moment another thread/process
+        # calls load() for the same key. load() requires both final-named
+        # files to exist, so a reader can only ever observe "not built yet"
+        # or "fully built" -- never a half-written, corrupt-looking index.
         index_dir.mkdir(parents=True, exist_ok=True)
         manifest = [
             {
@@ -130,8 +154,15 @@ class EmbeddingIndex:
             }
             for entry in self.entries
         ]
-        (index_dir / f"{key}.entries.json").write_text(json.dumps(manifest), encoding="utf-8")
-        np.save(index_dir / f"{key}.vectors.npy", self.vectors)
+        entries_tmp = index_dir / f"{key}.entries.json.tmp"
+        # Must already end in .npy: np.save appends that suffix to any name
+        # that doesn't already have it, so a ".vectors.npy.tmp" name would
+        # silently become ".vectors.npy.tmp.npy" instead of the path below.
+        vectors_tmp = index_dir / f"{key}.vectors.tmp.npy"
+        entries_tmp.write_text(json.dumps(manifest), encoding="utf-8")
+        np.save(vectors_tmp, self.vectors)
+        entries_tmp.replace(index_dir / f"{key}.entries.json")
+        vectors_tmp.replace(index_dir / f"{key}.vectors.npy")
 
     @classmethod
     def load(cls, index_dir: Path, key: str) -> EmbeddingIndex | None:
@@ -145,45 +176,27 @@ class EmbeddingIndex:
         return cls(entries=entries, vectors=vectors)
 
 
-def build_embedding_index(
-    repo_root: Path, files: list[str], embedder: DenseEmbedder
+def _embed_entries(
+    entries: list[EmbeddingEntry], texts: list[str], embedder: DenseEmbedder, *, verbose: bool
 ) -> EmbeddingIndex:
-    # Reuses the exact same chunking as BM25 (`_retrieval_regions`) so dense
-    # and lexical hits are comparable units, not different-shaped candidates.
-    from ant.tools.local import _retrieval_regions
-
-    entries: list[EmbeddingEntry] = []
-    texts: list[str] = []
-    for relative in files:
-        path = repo_root / relative
-        try:
-            lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
-        except OSError:
-            continue
-        for start, block in _retrieval_regions(lines):
-            text = "\n".join(block).strip()
-            if not text:
-                continue
-            end = start + len(block) - 1
-            entries.append(
-                EmbeddingEntry(path=relative, line_start=start, line_end=end, quote=text[:2400])
-            )
-            texts.append(text)
-
     if not entries:
         return EmbeddingIndex(entries=[], vectors=np.zeros((0, 0), dtype=np.float32))
 
     # Embedded in visible batches, not one call over the whole corpus: for a
-    # few thousand chunks at this model's CPU throughput this step is the
-    # only part of `ant index --dense` that takes more than a few seconds,
-    # and a silent multi-minute call with no output is indistinguishable
-    # from a hang.
+    # large territory at this model's CPU throughput this step is the only
+    # part of dense indexing that takes more than a few seconds, and a
+    # silent multi-minute call with no output is indistinguishable from a
+    # hang.
     batch_size = 256
     batches: list[list[float]] = []
     for start in range(0, len(texts), batch_size):
         batch = embedder.embed(texts[start : start + batch_size])
         batches.extend(batch)
-        print(f"Embedded {min(start + batch_size, len(texts))}/{len(texts)} chunks.", flush=True)
+        if verbose:
+            print(
+                f"Embedded {min(start + batch_size, len(texts))}/{len(texts)} chunks.",
+                flush=True,
+            )
 
     vectors = np.asarray(batches, dtype=np.float32)
     norms = np.linalg.norm(vectors, axis=1, keepdims=True)
@@ -191,9 +204,89 @@ def build_embedding_index(
     return EmbeddingIndex(entries=entries, vectors=vectors / norms)
 
 
+def build_embedding_index(
+    repo_root: Path, files: list[str], embedder: DenseEmbedder, *, verbose: bool = True
+) -> EmbeddingIndex:
+    """One embedding per symbol (class/function), not per paragraph region.
+
+    A worker's own territory can still have thousands of lines even though
+    the worker's own file list is short -- chunking every file into
+    paragraph/definition-sized regions (the same granularity BM25 uses)
+    scaled with file *density*, not just file count, and a handful of large,
+    dense source files could still produce thousands of chunks. Symbol
+    count is a tighter, more natural bound: it grows with how much code
+    there actually *is* to point to, not with an arbitrary line-window size,
+    and BM25/navigate() already handle line-precise lexical matching within
+    a symbol once dense_search has pointed at the right one.
+    """
+    from ant.tools.symbol_index import build_symbol_index
+
+    index = build_symbol_index(repo_root, files)
+    entries: list[EmbeddingEntry] = []
+    texts: list[str] = []
+    for definition in index.definitions:
+        path = repo_root / definition.path
+        try:
+            lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+        except OSError:
+            continue
+        start = max(1, definition.line)
+        end = min(len(lines), max(definition.end_line, definition.line), start + 20)
+        text = "\n".join(lines[start - 1 : end]).strip()
+        if not text:
+            continue
+        entries.append(
+            EmbeddingEntry(path=definition.path, line_start=start, line_end=end, quote=text[:2400])
+        )
+        texts.append(f"{definition.qualname or definition.name}\n{text}")
+
+    return _embed_entries(entries, texts, embedder, verbose=verbose)
+
+
+# Tracks (index_dir, key) pairs currently being built in a background
+# thread, so a second dense_search() for the same not-yet-cached territory
+# (from a later round, or a different worker sharing the same file set)
+# doesn't spawn a duplicate build -- it just also gets [] for now and
+# benefits from the first build once it lands.
+_inflight_builds: set[tuple[str, str]] = set()
+_inflight_lock = threading.Lock()
+
+
+def build_and_cache_in_background(
+    repo_root: Path, files: list[str], index_dir: Path, key: str, embedder: DenseEmbedder
+) -> None:
+    """Kick off build_embedding_index() on a daemon thread and save the
+    result for next time, without blocking the caller.
+
+    dense_search() calling this instead of building synchronously is the
+    fix for a real failure mode: a worker's territory can contain enough
+    code that even the (much cheaper, post-symbol-level-granularity) first
+    build takes long enough that a query would otherwise sit waiting on it.
+    Returning [] for the round that triggers the build, rather than making
+    that round's question wait, means dense retrieval is never worse than
+    "not available yet for a territory nobody has queried before" -- it can
+    never turn into "this specific query now takes an extra N minutes."
+    """
+    identity = (str(index_dir), key)
+    with _inflight_lock:
+        if identity in _inflight_builds:
+            return
+        _inflight_builds.add(identity)
+
+    def _run() -> None:
+        try:
+            index = build_embedding_index(repo_root, files, embedder, verbose=False)
+            index.save(index_dir, key)
+        finally:
+            with _inflight_lock:
+                _inflight_builds.discard(identity)
+
+    threading.Thread(target=_run, daemon=True).start()
+
+
 def build_worker_card_index(workers: list[WorkerCard], embedder: DenseEmbedder) -> EmbeddingIndex:
     """One embedding per worker card (its name/responsibilities/searchable
-    terms), not per code chunk -- a repo with thousands of chunks still only
+    terms), not per code chunk -- a repo with thousands of symbols still only
     has as many workers as it has territories (dozens, not thousands), so
     this is cheap enough to build eagerly at `ant index` time and use as a
     semantic routing signal, unlike full chunk-level embedding.
@@ -209,10 +302,4 @@ def build_worker_card_index(workers: list[WorkerCard], embedder: DenseEmbedder) 
         entries.append(EmbeddingEntry(path=worker.id, line_start=0, line_end=0, quote=text[:2400]))
         texts.append(text)
 
-    if not entries:
-        return EmbeddingIndex(entries=[], vectors=np.zeros((0, 0), dtype=np.float32))
-
-    vectors = np.asarray(embedder.embed(texts), dtype=np.float32)
-    norms = np.linalg.norm(vectors, axis=1, keepdims=True)
-    norms[norms == 0] = 1.0
-    return EmbeddingIndex(entries=entries, vectors=vectors / norms)
+    return _embed_entries(entries, texts, embedder, verbose=False)

@@ -18,7 +18,7 @@ from ant.domain import Evidence
 from ant.retrieval.bm25 import BM25Index
 from ant.retrieval.dense import (
     EmbeddingIndex,
-    build_embedding_index,
+    build_and_cache_in_background,
     get_shared_embedder,
     territory_key,
 )
@@ -170,14 +170,16 @@ class LocalSearchTool:
         of term matching.
 
         Chunk embeddings are built lazily per worker territory, not
-        precomputed for the whole repo at `ant index` time: a repo can have
-        thousands of chunks across hundreds of files, and eagerly embedding
-        all of them (even at a good model's throughput) can take far longer
-        than actually running any query ever will. Each worker's own file
-        set is typically a handful of files, so the *first* dense_search for
-        a given territory pays a small one-time cost, cached to disk under
-        index_path/dense/ so every later call -- from any process, not just
-        this one -- reuses it instead of re-embedding.
+        precomputed for the whole repo at `ant index` time, and at
+        symbol-level granularity rather than one embedding per paragraph
+        region (see build_embedding_index) -- but a territory can still be
+        large enough that even that first build takes a while. Rather than
+        block this round's query on it, an uncached territory returns []
+        immediately and the build runs on a background thread, cached to
+        disk under index_path/dense/ for every later call (from any
+        process) to pick up once it lands. A query is never worse off than
+        "dense retrieval wasn't available yet for this territory" -- it can
+        never become "this query now waits N minutes."
 
         Returns [] whenever no embedder is available (fastembed not
         installed) rather than erroring, so every existing caller keeps
@@ -194,8 +196,7 @@ class LocalSearchTool:
             dense_dir = self.index_path / "dense"
             index = EmbeddingIndex.load(dense_dir, key)
             if index is None:
-                index = build_embedding_index(self.repo_root, files, embedder)
-                index.save(dense_dir, key)
+                build_and_cache_in_background(self.repo_root, files, dense_dir, key, embedder)
             self._embedding_index_cache[key] = index
         index = self._embedding_index_cache[key]
         if index is None:
