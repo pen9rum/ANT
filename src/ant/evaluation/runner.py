@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import time
 from pathlib import Path
 
 from pydantic import BaseModel, Field
@@ -22,6 +23,7 @@ class BatchResult(BaseModel):
     status: str = "completed"
     trace_id: int | None = None
     metadata: dict = Field(default_factory=dict)
+    elapsed_seconds: float = 0.0
 
 
 def run_batch(
@@ -99,6 +101,7 @@ def _run_example(
     max_rounds: int,
     judge: str,
 ) -> BatchResult:
+    started_at = time.time()
     example_index = (
         index_path if example.repo == "." else index_path / _repo_basename(example.repo)
     )
@@ -142,6 +145,7 @@ def _run_example(
         prediction=prediction,
         score=score,
         trace_id=trace_id,
+        elapsed_seconds=round(time.time() - started_at, 2),
         metadata={"repo": example.repo},
     )
 
