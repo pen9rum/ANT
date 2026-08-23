@@ -11,11 +11,8 @@ from ant.domain import (
     WorkerCard,
     WorkerObservation,
 )
-from ant.tools.local import (
-    STOP_WORDS,
-    LocalSearchTool,
-)
-from ant.tools.path_prior import has_low_value_part, has_source_part, is_low_value_path
+from ant.retrieval import STOP_WORDS, extract_terms, score_evidence
+from ant.tools.local import LocalSearchTool
 
 SYMBOL_RE = re.compile(r"\b(?:class|def)\s+([A-Za-z_][A-Za-z0-9_]*)")
 BASE_RE = re.compile(r"\bclass\s+[A-Za-z_][A-Za-z0-9_]*\(([^)]*)\)")
@@ -128,7 +125,7 @@ class AutonomousWorker:
         for symbol in candidate_symbols:
             if tool_calls >= config.max_tool_calls:
                 break
-            nav_results = self.tools.resolve_symbol(symbol, self.card.files, limit=2)
+            nav_results = self.tools.resolve_symbol(symbol, self.card.files, limit=2, need=need)
             if not nav_results:
                 nav_results = self.tools.navigate(symbol, self.card.files, limit=2)
             tool_calls += 1
@@ -346,24 +343,9 @@ def _dedupe(evidence: list[Evidence]) -> list[Evidence]:
 
 
 def _rank_evidence(evidence: list[Evidence], need: str) -> list[Evidence]:
-    terms = {term.lower() for term in need.replace("_", " ").split() if len(term) > 2}
+    terms = extract_terms(need)
 
     def score(item: Evidence) -> int:
-        quote = item.quote.lower()
-        path = item.path.replace("\\", "/")
-        reason = item.reason.lower()
-        value = 0
-        if "class " in quote or "def " in quote:
-            value += 8
-        if "definition" in reason or "implementation" in reason:
-            value += 6
-        if path.endswith(".py"):
-            value += 3
-        if has_source_part(path):
-            value += 2
-        if is_low_value_path(path) or has_low_value_part(path):
-            value -= 8
-        value += sum(1 for term in terms if term in quote)
-        return value
+        return score_evidence(quote=item.quote, path=item.path, reason=item.reason, terms=terms)
 
     return sorted(evidence, key=score, reverse=True)

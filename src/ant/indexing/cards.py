@@ -5,7 +5,7 @@ from collections import Counter
 from pathlib import Path
 
 from ant.domain import CodeSymbol, Territory, WorkerCard
-from ant.tools.local import STOP_WORDS
+from ant.retrieval import STOP_WORDS
 from ant.tools.symbol_index import build_symbol_index
 
 TOKEN_RE = re.compile(r"[A-Za-z][A-Za-z0-9_]{2,}")

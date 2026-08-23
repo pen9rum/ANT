@@ -201,6 +201,38 @@ def test_record_task_memory_records_coalition_and_high_quality_route(
     assert routes and routes[0].worker_ids == ["worker-auth", "worker-session"]
 
 
+def test_coalition_membership_is_order_independent_across_tasks(tmp_path: Path) -> None:
+    # Task 1 recruits worker-session first, then worker-auth joins. Task 2
+    # recruits the same real pair in the opposite order. Both are the same
+    # underlying coalition and must count as one recurring pattern, not two
+    # separate one-off patterns that individually never reach the
+    # recurrence threshold evolve_workers checks against.
+    memory = ColonyMemoryStore(tmp_path)
+    task_one = EvidenceState(
+        question="q1",
+        evidence=[Evidence(path="a.py", line_start=1, line_end=1, quote="x", reason="r")],
+        rounds=[
+            _round(selected=["worker-session"], coalition_formed=False, round_index=0),
+            _round(selected=["worker-auth"], coalition_formed=True, round_index=1),
+        ],
+    )
+    task_two = EvidenceState(
+        question="q2",
+        evidence=[Evidence(path="a.py", line_start=1, line_end=1, quote="x", reason="r")],
+        rounds=[
+            _round(selected=["worker-auth"], coalition_formed=False, round_index=0),
+            _round(selected=["worker-session"], coalition_formed=True, round_index=1),
+        ],
+    )
+
+    record_task_memory(memory, task_one.question, task_one)
+    record_task_memory(memory, task_two.question, task_two)
+
+    assert memory.recurring_coalitions(min_count=2) == [
+        (["worker-auth", "worker-session"], 2)
+    ]
+
+
 def test_record_task_memory_skips_route_when_unresolved_needs_remain(
     tmp_path: Path,
 ) -> None:

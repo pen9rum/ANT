@@ -264,6 +264,14 @@ def _coalition_membership(rounds: list[RecruitmentRound], round_index: int) -> l
     group recurred. Reconstruct the full membership the same way
     `coordinator.local._last_coalition_workers` does for answer synthesis:
     every worker selected in this round plus every prior round of the task.
+
+    Sorted, not insertion-ordered: `recurring_coalitions()` groups by the
+    exact worker_ids string, and which worker gets recruited first vs.
+    second for the same real underlying pair can differ across tasks
+    depending on routing specifics. Without a canonical order, "A then B"
+    and "B then A" would count as two different patterns that individually
+    never reach the recurrence threshold, even though they are the same
+    coalition -- exactly the recurring-pattern detection this exists for.
     """
     prior = [
         worker_id
@@ -271,7 +279,7 @@ def _coalition_membership(rounds: list[RecruitmentRound], round_index: int) -> l
         for worker_id in earlier.selected_worker_ids
     ]
     current = rounds[round_index].selected_worker_ids
-    return list(dict.fromkeys([*prior, *current]))
+    return sorted(dict.fromkeys([*prior, *current]))
 
 
 def _task_fully_resolved(state: EvidenceState) -> bool:

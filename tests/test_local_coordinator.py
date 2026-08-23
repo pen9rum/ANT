@@ -46,6 +46,17 @@ def test_routing_matcher_avoids_arbitrary_substrings() -> None:
     assert _matches_term("fusedgate", {"fusedgate"})
 
 
+def test_routing_matcher_matches_a_common_grammatical_stem() -> None:
+    # Regression test: a question asking "where is drawing implemented"
+    # previously missed a worker whose only matching vocabulary was the
+    # method name "draw" -- same concept, different inflection -- because
+    # matching required an exact string or an underscore-split component.
+    assert _matches_term("drawing", {"draw"})
+    assert _matches_term("backends", {"backend"})
+    # Must not match on shared prefixes shorter than 4 chars.
+    assert not _matches_term("ingest", {"in"})
+
+
 def test_local_coordinator_records_unresolved_needs(tmp_path: Path) -> None:
     (tmp_path / "docs").mkdir()
     (tmp_path / "docs" / "guide.md").write_text("Release notes only\n", encoding="utf-8")
@@ -746,6 +757,38 @@ def test_navigate_does_not_swallow_a_deep_method_inside_a_large_class(
     # within an already-added range" as a duplicate to skip.
     assert method_hits
     assert "def calculate_probabilities" in method_hits[0].quote
+
+
+def test_resolve_symbol_expands_a_large_class_into_its_own_members(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "src").mkdir()
+    filler_methods = "\n\n".join(
+        f"    def filler_{index}(self):\n        return {index}" for index in range(60)
+    )
+    (tmp_path / "src" / "circuit.py").write_text(
+        "class Circuit:\n"
+        f"{filler_methods}\n\n"
+        "    def draw(self):\n"
+        "        return 'diagram'\n",
+        encoding="utf-8",
+    )
+
+    evidence = LocalSearchTool(tmp_path).resolve_symbol(
+        "Circuit", ["src/circuit.py"], need="Where is circuit drawing implemented?"
+    )
+
+    # Regression test: resolving a class this large used to return only the
+    # class itself as one flat-truncated blob, so a method deep inside it
+    # (here `draw`, defined after 60 unrelated filler methods) never
+    # actually appeared in the visible quote text even though the class was
+    # correctly found. It must now surface as its own relevance-ranked
+    # evidence item -- not get lost either behind the truncation point or
+    # behind 60 more-numerous but irrelevant siblings.
+    assert any(
+        "def draw" in item.quote and item.quote.strip().startswith("def draw")
+        for item in evidence
+    )
 
 
 def test_local_search_finds_references(tmp_path: Path) -> None:

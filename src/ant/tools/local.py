@@ -5,35 +5,15 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from ant.domain import Evidence
-from ant.retrieval import BM25Index
+from ant.retrieval import TOKEN_RE, BM25Index, extract_terms, score_evidence
 from ant.tools.path_prior import has_low_value_part, has_source_part, is_low_value_path
 from ant.tools.symbol_index import SymbolDefinition, SymbolIndex, build_symbol_index
 
-TOKEN_RE = re.compile(r"[A-Za-z][A-Za-z0-9_]{2,}")
-CAMEL_RE = re.compile(r"[A-Z]?[a-z]+|[A-Z]+(?=[A-Z]|$)")
-STOP_WORDS = {
-    "and",
-    "are",
-    "codebase",
-    "does",
-    "for",
-    "handled",
-    "how",
-    "into",
-    "not",
-    "return",
-    "returns",
-    "this",
-    "the",
-    "through",
-    "what",
-    "when",
-    "where",
-    "which",
-    "who",
-    "why",
-    "with",
-}
+# `_query_terms` used to be its own local implementation; it is now a thin
+# alias so every one of this file's many call sites keeps working unchanged
+# while actually running the single canonical extractor everything else in
+# the ranking pipeline uses too (see ant.retrieval.relevance).
+_query_terms = extract_terms
 
 
 @dataclass(frozen=True)
@@ -95,14 +75,18 @@ class LocalSearchTool:
         candidates.sort(key=lambda item: item[0], reverse=True)
         return _merge_windows(candidates, limit=limit)
 
-    def resolve_symbol(self, symbol: str, files: list[str], limit: int = 6) -> list[Evidence]:
+    def resolve_symbol(
+        self, symbol: str, files: list[str], limit: int = 6, need: str = ""
+    ) -> list[Evidence]:
         index = self.symbol_index(files)
         definitions = index.by_name.get(symbol, [])
         if not definitions and "." in symbol:
             definitions = index.by_name.get(symbol.rsplit(".", 1)[-1], [])
+        matched = sorted(definitions, key=lambda item: (item.path, item.line))[:limit]
+        expanded = _expand_large_classes(self.repo_root, index, matched, need)
         return _definitions_to_evidence(
             self.repo_root,
-            sorted(definitions, key=lambda item: (item.path, item.line))[:limit],
+            expanded,
             reason=f"Resolved symbol definition for {symbol}.",
         )
 
@@ -311,20 +295,6 @@ class LocalSearchTool:
         return [symbol for _, _, symbol in scored[:limit]]
 
 
-def _query_terms(query: str) -> list[str]:
-    terms: list[str] = []
-    for token in TOKEN_RE.findall(query):
-        token = token.lower()
-        if len(token) > 2 and token not in STOP_WORDS:
-            terms.append(token)
-        terms.extend(
-            part.lower()
-            for part in CAMEL_RE.findall(token)
-            if len(part) > 2 and part.lower() not in STOP_WORDS
-        )
-    return sorted(set(terms))
-
-
 def _query_symbols(query: str) -> list[str]:
     return [
         token
@@ -392,6 +362,69 @@ def _merge_windows(
         if len(evidence) >= limit:
             break
     return evidence
+
+
+LARGE_CLASS_LINE_THRESHOLD = 60
+# A relevance filter, not just a safety cap. The first version of this
+# expansion returned every member (or the first N by line position), and
+# that traded one bug for another: with a large class often having dozens
+# of methods, the correctly-found-but-irrelevant ones flooded the worker's
+# small evidence_limit budget and pushed out a genuinely better match a
+# plain search() call had already found elsewhere. Ranking by relevance to
+# the actual need and keeping only the top few avoids both failure modes.
+MAX_EXPANDED_MEMBERS = 12
+
+
+def _expand_large_classes(
+    repo_root: Path,
+    index: SymbolIndex,
+    definitions: list[SymbolDefinition],
+    need: str,
+) -> list[SymbolDefinition]:
+    """Swap an oversized class definition for its own most relevant member
+    definitions too, not just the class itself.
+
+    `_definitions_to_evidence` truncates each definition's joined text to a
+    flat character cap. For a class spanning hundreds of lines (e.g. a
+    ~1400-line `Circuit`), that cap is reached long before a method deep
+    inside it -- so resolving "Circuit" to answer a question about one of
+    its methods (`draw`, say) returns a blob whose visible text never
+    actually contains that method, even though the class was correctly
+    found. The class's own members are already tracked individually in the
+    symbol index (`SymbolDefinition.parent`); returning the ones that best
+    match the current need means that method gets its own small, complete
+    evidence item instead of being buried past the truncation point of one
+    giant one -- or lost among dozens of unranked siblings.
+    """
+    terms = _query_terms(need) if need else []
+    expanded: list[SymbolDefinition] = []
+    for definition in definitions:
+        expanded.append(definition)
+        span = max(1, definition.end_line - definition.line + 1)
+        if definition.kind != "class" or span <= LARGE_CLASS_LINE_THRESHOLD:
+            continue
+        members = [member for member in index.definitions if member.parent == definition.qualname]
+        if not members:
+            continue
+        if terms:
+            text = (repo_root / definition.path).read_text(encoding="utf-8", errors="replace")
+            lines = text.splitlines()
+            scored = sorted(
+                members,
+                key=lambda member: _member_relevance(member, lines, terms),
+                reverse=True,
+            )
+            expanded.extend(scored[:MAX_EXPANDED_MEMBERS])
+        else:
+            expanded.extend(sorted(members, key=lambda item: item.line)[:MAX_EXPANDED_MEMBERS])
+    return expanded
+
+
+def _member_relevance(member: SymbolDefinition, lines: list[str], terms: list[str]) -> int:
+    start = max(1, member.line)
+    end = min(len(lines), max(member.end_line, member.line))
+    snippet = "\n".join(lines[start - 1 : min(end, start + 20)])
+    return score_evidence(quote=snippet, path=member.path, terms=terms, symbol_name=member.name)
 
 
 def _definitions_to_evidence(

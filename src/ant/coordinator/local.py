@@ -18,12 +18,11 @@ from ant.domain import (
 )
 from ant.memory import MemoryRoute
 from ant.providers import AnswerSynthesizer, MockLLMProvider, UsageReporter, WorkerReasoner
+from ant.retrieval import STOP_WORDS, TOKEN_RE, extract_terms, is_stem_match, score_evidence
 from ant.tools import LocalSearchTool
-from ant.tools.local import STOP_WORDS
-from ant.tools.path_prior import has_low_value_part, has_source_part, is_low_value_path
+from ant.tools.path_prior import has_low_value_part, has_source_part
 from ant.workers import AutonomousWorker, WorkerRunConfig
 
-TOKEN_RE = re.compile(r"[A-Za-z][A-Za-z0-9_]{2,}")
 BASE_CLASS_RE = re.compile(r"\bclass\s+[A-Za-z_][A-Za-z0-9_]*\(([^)]*)\)")
 
 # need_type values that a heuristic evidence match is allowed to close outright.
@@ -376,6 +375,8 @@ def _matches_term(query_term: str, terms: set[str]) -> bool:
             return True
         if query_term in _compound_parts(term):
             return True
+        if is_stem_match(query_term, term):
+            return True
     return False
 
 
@@ -582,26 +583,10 @@ def _source_path_bonus(worker: WorkerCard) -> int:
 
 
 def _rank_global_evidence(evidence: list[Evidence], question: str) -> list[Evidence]:
-    terms = {term.lower() for term in TOKEN_RE.findall(question) if len(term) > 2}
+    terms = extract_terms(question)
 
     def score(item: Evidence) -> int:
-        quote = item.quote.lower()
-        path = item.path.replace("\\", "/")
-        value = 0
-        if "class " in quote:
-            value += 10
-        if "def " in quote:
-            value += 8
-        if path.startswith("src/"):
-            value += 5
-        if path.endswith(".py"):
-            value += 3
-        if is_low_value_path(path):
-            value -= 10
-        if has_low_value_part(path):
-            value -= 10
-        value += sum(1 for term in terms if term in quote)
-        return value
+        return score_evidence(quote=item.quote, path=item.path, reason=item.reason, terms=terms)
 
     return sorted(evidence, key=score, reverse=True)
 
