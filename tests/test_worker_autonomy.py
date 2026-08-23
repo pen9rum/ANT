@@ -48,7 +48,11 @@ def test_autonomous_worker_records_tool_actions(tmp_path: Path) -> None:
     )
 
     assert observation.evidence
-    assert [action.tool for action in observation.actions][:2] == ["search", "subclasses"]
+    assert [action.tool for action in observation.actions][:3] == [
+        "search",
+        "dense_search",
+        "subclasses",
+    ]
     assert any("FALQON" in item.quote for item in observation.evidence)
     assert any(
         action.tool == "subclasses" and action.query == "QAOA"

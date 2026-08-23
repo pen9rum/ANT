@@ -2,8 +2,6 @@ from __future__ import annotations
 
 import re
 
-from ant.tools.path_prior import has_low_value_part, has_source_part, is_low_value_path
-
 TOKEN_RE = re.compile(r"[A-Za-z][A-Za-z0-9_]{2,}")
 CAMEL_RE = re.compile(r"[A-Z]?[a-z]+|[A-Z]+(?=[A-Z]|$)")
 STOP_WORDS = {
@@ -74,6 +72,7 @@ def score_evidence(
     reason: str = "",
     terms: list[str],
     symbol_name: str = "",
+    dense_score: float = 0.0,
 ) -> int:
     """The one canonical relevance score for a piece of candidate evidence
     against a set of query terms.
@@ -89,6 +88,17 @@ def score_evidence(
     same function so "is this evidence relevant" means the same thing
     everywhere in the pipeline.
     """
+    # Imported here, not at module top: ant.tools.local depends on this
+    # module's names (TOKEN_RE/extract_terms/score_evidence), and ant.tools's
+    # package __init__ runs as soon as any ant.tools submodule is touched --
+    # including this one, right here. A module-level import of path_prior
+    # would make that reverse edge observable mid-way through this module's
+    # own initialization whenever `ant.retrieval` happens to be the first of
+    # the two packages a process imports. Deferring to call time sidesteps
+    # the ordering question entirely: by the time anything actually calls
+    # score_evidence(), both packages have long finished importing.
+    from ant.tools.path_prior import has_low_value_part, has_source_part, is_low_value_path
+
     lowered_quote = quote.lower()
     normalized_path = path.replace("\\", "/")
     lowered_reason = reason.lower()
@@ -127,4 +137,12 @@ def score_evidence(
             value += 3
         elif term in lowered_quote:
             value += 1
+
+    # dense_score is a 0..1 cosine similarity from the optional embedding index
+    # (0.0 when no dense index exists, or a candidate was never a dense hit).
+    # This is the one place a paraphrase-only match -- one sharing no lexical
+    # terms at all with the query, so every bonus above is zero -- can still
+    # win a competitive score, instead of being invisible to a purely
+    # lexical reranker.
+    value += round(dense_score * 12)
     return value

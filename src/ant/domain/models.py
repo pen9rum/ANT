@@ -49,6 +49,7 @@ class Evidence(BaseModel):
     claim: str = ""
     worker_id: str = ""
     symbols: list[str] = Field(default_factory=list)
+    dense_score: float = 0.0
 
 
 class WorkerAction(BaseModel):
@@ -100,6 +101,7 @@ class WorkerRoutingScore(BaseModel):
     source_worker_bonus: int = 0
     source_path_bonus: int = 0
     memory_route_bonus: int = 0
+    dense_routing_bonus: int = 0
     test_path_penalty: int = 0
     seen_worker_penalty: int = 0
 

@@ -5,6 +5,7 @@ import sqlite3
 from pathlib import Path
 
 from ant.domain import CodeSymbol, EvidenceState, Territory, WorkerCard
+from ant.retrieval.dense import EmbeddingIndex
 
 
 class IndexStore:
@@ -68,6 +69,12 @@ class IndexStore:
         for worker in self.load_workers():
             manifest.extend(_symbol_manifest([worker]))
         return manifest
+
+    def save_embedding_index(self, key: str, index: EmbeddingIndex) -> None:
+        index.save(self.path / "dense", key)
+
+    def load_embedding_index(self, key: str) -> EmbeddingIndex | None:
+        return EmbeddingIndex.load(self.path / "dense", key)
 
     def save_trace(self, state: EvidenceState) -> int:
         self.path.mkdir(parents=True, exist_ok=True)

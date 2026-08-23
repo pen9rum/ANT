@@ -116,6 +116,7 @@ def _run_example(
         workers,
         synthesizer=provider,
         memory_routes=memory_routes,
+        index_path=example_index,
     )
     state = coordinator.ask(example.question, max_rounds=max_rounds)
     trace_id = store.save_trace(state)

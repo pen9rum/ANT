@@ -21,7 +21,7 @@ DOC_LABEL_RE = re.compile(r"^(Args|Example|Examples|Note|Notes|Return|Returns|Ra
 
 @dataclass(frozen=True)
 class WorkerRunConfig:
-    max_tool_calls: int = 10
+    max_tool_calls: int = 11
     evidence_limit: int = 8
 
 
@@ -48,6 +48,23 @@ class AutonomousWorker:
             )
         )
         evidence.extend(search_results)
+
+        # Runs every round alongside the lexical search above, not as a
+        # worker-chosen option: a candidate whose wording shares nothing
+        # lexically with `need` is invisible to search() no matter how the
+        # need happened to be phrased. No-ops (returns []) when no embedding
+        # index has been built for this repo.
+        dense_results = self.tools.dense_search(need, self.card.files, limit=4)
+        tool_calls += 1
+        actions.append(
+            WorkerAction(
+                tool="dense_search",
+                query=need,
+                result_count=len(dense_results),
+                rationale="Embedding-similarity search for paraphrase-only matches.",
+            )
+        )
+        evidence.extend(dense_results)
 
         candidate_symbols = self.tools.rank_symbols(
             _candidate_symbols(need, evidence),
@@ -331,13 +348,25 @@ def _is_non_navigation_token(token: str) -> bool:
 
 
 def _dedupe(evidence: list[Evidence]) -> list[Evidence]:
-    result = []
-    seen = set()
+    # A chunk can legitimately be surfaced by both the lexical search() and
+    # dense_search() in the same round -- e.g. a paraphrase that also
+    # happens to share a term with the query. Keeping only the first-seen
+    # copy would silently drop that item's dense_score whenever the lexical
+    # copy (added first) is what's kept, undercutting the fused reranker's
+    # signal for exactly the items where both channels agree. Merge the
+    # dense_score forward onto the kept copy instead of just discarding it.
+    result: list[Evidence] = []
+    index_by_key: dict[tuple[str, int, int], int] = {}
     for item in evidence:
         key = (item.path, item.line_start, item.line_end)
-        if key in seen:
+        if key in index_by_key:
+            existing = result[index_by_key[key]]
+            if item.dense_score > existing.dense_score:
+                result[index_by_key[key]] = existing.model_copy(
+                    update={"dense_score": item.dense_score}
+                )
             continue
-        seen.add(key)
+        index_by_key[key] = len(result)
         result.append(item)
     return result
 
@@ -346,6 +375,12 @@ def _rank_evidence(evidence: list[Evidence], need: str) -> list[Evidence]:
     terms = extract_terms(need)
 
     def score(item: Evidence) -> int:
-        return score_evidence(quote=item.quote, path=item.path, reason=item.reason, terms=terms)
+        return score_evidence(
+            quote=item.quote,
+            path=item.path,
+            reason=item.reason,
+            terms=terms,
+            dense_score=item.dense_score,
+        )
 
     return sorted(evidence, key=score, reverse=True)

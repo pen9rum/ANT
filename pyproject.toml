@@ -9,6 +9,7 @@ description = "Adaptive Navigation Teams for codebase question answering"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+  "numpy>=1.26",
   "openai>=1.99.0",
   "pydantic>=2.8",
   "typer>=0.12",
@@ -17,6 +18,9 @@ dependencies = [
 [project.optional-dependencies]
 bench = [
   "datasets>=3.0",
+]
+dense = [
+  "fastembed>=0.7",
 ]
 dev = [
   "pytest>=8.2",

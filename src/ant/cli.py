@@ -22,23 +22,40 @@ from ant.indexing import discover_territories
 from ant.memory import IndexStore
 from ant.memory.colony import ColonyMemoryStore, record_task_memory
 from ant.providers import OpenAIProvider
+from ant.retrieval.dense import WORKER_CARDS_KEY, DenseEmbedder, build_worker_card_index
 
 app = typer.Typer(no_args_is_help=True)
 INDEX_OPTION = typer.Option(Path(".ant"), "--index")
 MAX_ROUNDS_OPTION = typer.Option(2, "--max-rounds", min=1)
 SAVE_TRACE_OPTION = typer.Option(True, "--save-trace/--no-save-trace")
 LLM_CARDS_OPTION = typer.Option(False, "--llm-cards/--heuristic-cards")
+DENSE_OPTION = typer.Option(False, "--dense/--no-dense")
 SYNTHESIZE_OPTION = typer.Option("none", "--synthesize")
 
 
 @app.command()
-def index(repo: Path, out: Path = Path(".ant"), llm_cards: bool = LLM_CARDS_OPTION) -> None:
+def index(
+    repo: Path,
+    out: Path = Path(".ant"),
+    llm_cards: bool = LLM_CARDS_OPTION,
+    dense: bool = DENSE_OPTION,
+) -> None:
     """Build worker cards for a repository."""
     environment = RepoEnvironment(repo)
     territories = discover_territories(environment)
     generator = OpenAIProvider() if llm_cards else None
     workers = generate_worker_cards(environment.root, territories, generator=generator)
-    IndexStore(out).save(territories, workers)
+    store = IndexStore(out)
+    store.save(territories, workers)
+    if dense:
+        # Only the worker-card level index is built eagerly here: one
+        # embedding per worker (dozens), not one per code chunk (thousands).
+        # Per-worker chunk embeddings for dense_search are built lazily, on
+        # first actual use, and cached under out/dense/ -- see
+        # LocalSearchTool.dense_search.
+        card_index = build_worker_card_index(workers, DenseEmbedder())
+        store.save_embedding_index(WORKER_CARDS_KEY, card_index)
+        typer.echo(f"Built a dense worker-card index over {len(workers)} workers.")
     typer.echo(f"Indexed {len(territories)} territories and {len(workers)} workers into {out}.")
 
 
@@ -62,6 +79,7 @@ def ask(
         workers,
         synthesizer=provider,
         memory_routes=memory_routes,
+        index_path=index_path,
     ).ask(
         question,
         max_rounds=max_rounds,

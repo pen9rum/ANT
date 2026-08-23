@@ -5,7 +5,24 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from ant.domain import Evidence
-from ant.retrieval import TOKEN_RE, BM25Index, extract_terms, score_evidence
+
+# Imported from the submodules directly, not the `ant.retrieval` package
+# aggregator: this module is itself reachable from inside that package's
+# __init__ (ant.retrieval.relevance -> ant.tools.path_prior -> ant.tools's
+# own __init__ -> this module), so if `ant.retrieval` happens to be the
+# first of the two packages a process imports, its __init__ is still
+# mid-execution at that point and hasn't bound these names onto the package
+# object yet -- but the submodules themselves have, since Python binds a
+# module's own top-level names as it executes, not only once the importing
+# package's __init__ finishes.
+from ant.retrieval.bm25 import BM25Index
+from ant.retrieval.dense import (
+    EmbeddingIndex,
+    build_embedding_index,
+    get_shared_embedder,
+    territory_key,
+)
+from ant.retrieval.relevance import TOKEN_RE, extract_terms, score_evidence
 from ant.tools.path_prior import has_low_value_part, has_source_part, is_low_value_path
 from ant.tools.symbol_index import SymbolDefinition, SymbolIndex, build_symbol_index
 
@@ -16,10 +33,22 @@ from ant.tools.symbol_index import SymbolDefinition, SymbolIndex, build_symbol_i
 _query_terms = extract_terms
 
 
+
 @dataclass(frozen=True)
 class LocalSearchTool:
     repo_root: Path
+    index_path: Path | None = None
     _symbol_indexes: dict[tuple[str, ...], SymbolIndex] = field(
+        default_factory=dict,
+        init=False,
+        compare=False,
+        repr=False,
+    )
+    # Keyed by territory_key(files) -- one entry per distinct worker file
+    # scope this instance has actually been asked to dense_search, not one
+    # entry for the whole repo. In-process cache only; the disk-backed cache
+    # under index_path/dense/ is what survives across process runs.
+    _embedding_index_cache: dict[str, EmbeddingIndex | None] = field(
         default_factory=dict,
         init=False,
         compare=False,
@@ -134,6 +163,57 @@ class LocalSearchTool:
         if key not in self._symbol_indexes:
             self._symbol_indexes[key] = build_symbol_index(self.repo_root, list(key))
         return self._symbol_indexes[key]
+
+    def dense_search(self, query: str, files: list[str], limit: int = 4) -> list[Evidence]:
+        """Paraphrase-robust retrieval: finds candidates whose wording has no
+        lexical overlap with `query` at all, by embedding similarity instead
+        of term matching.
+
+        Chunk embeddings are built lazily per worker territory, not
+        precomputed for the whole repo at `ant index` time: a repo can have
+        thousands of chunks across hundreds of files, and eagerly embedding
+        all of them (even at a good model's throughput) can take far longer
+        than actually running any query ever will. Each worker's own file
+        set is typically a handful of files, so the *first* dense_search for
+        a given territory pays a small one-time cost, cached to disk under
+        index_path/dense/ so every later call -- from any process, not just
+        this one -- reuses it instead of re-embedding.
+
+        Returns [] whenever no embedder is available (fastembed not
+        installed) rather than erroring, so every existing caller keeps
+        working unchanged when dense retrieval isn't in use.
+        """
+        if not self.index_path:
+            return []
+        embedder = get_shared_embedder()
+        if embedder is None:
+            return []
+
+        key = territory_key(files)
+        if key not in self._embedding_index_cache:
+            dense_dir = self.index_path / "dense"
+            index = EmbeddingIndex.load(dense_dir, key)
+            if index is None:
+                index = build_embedding_index(self.repo_root, files, embedder)
+                index.save(dense_dir, key)
+            self._embedding_index_cache[key] = index
+        index = self._embedding_index_cache[key]
+        if index is None:
+            return []
+
+        [query_vector] = embedder.embed([query])
+        hits = index.search(query_vector, limit=limit)
+        return [
+            Evidence(
+                path=entry.path,
+                line_start=entry.line_start,
+                line_end=entry.line_end,
+                quote=entry.quote,
+                reason=f"Dense semantic match (score={score:.2f}) for: {query[:80]}",
+                dense_score=score,
+            )
+            for score, entry in hits
+        ]
 
     def read_region(self, path: str, line: int, context_lines: int = 12) -> Evidence:
         lines = (self.repo_root / path).read_text(encoding="utf-8", errors="replace").splitlines()

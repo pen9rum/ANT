@@ -19,6 +19,7 @@ from ant.domain import (
 from ant.memory import MemoryRoute
 from ant.providers import AnswerSynthesizer, MockLLMProvider, UsageReporter, WorkerReasoner
 from ant.retrieval import STOP_WORDS, TOKEN_RE, extract_terms, is_stem_match, score_evidence
+from ant.retrieval.dense import WORKER_CARDS_KEY, EmbeddingIndex, get_shared_embedder
 from ant.tools import LocalSearchTool
 from ant.tools.path_prior import has_low_value_part, has_source_part
 from ant.workers import AutonomousWorker, WorkerRunConfig
@@ -40,6 +41,7 @@ class LocalCoordinator:
         reasoner: WorkerReasoner | None = None,
         synthesizer: AnswerSynthesizer | None = None,
         memory_routes: list[MemoryRoute] | None = None,
+        index_path: Path | None = None,
     ) -> None:
         self.repo_root = repo_root
         self.workers = workers
@@ -48,6 +50,9 @@ class LocalCoordinator:
         )
         self.synthesizer = synthesizer
         self.memory_routes = memory_routes or []
+        self.index_path = index_path
+        self._worker_card_index: EmbeddingIndex | None = None
+        self._worker_card_index_loaded = False
 
     def ask(self, question: str, max_rounds: int = 2) -> EvidenceState:
         evidence: list[Evidence] = []
@@ -56,8 +61,8 @@ class LocalCoordinator:
         seen_worker_ids: set[str] = set()
         query = question
         active_need: UnresolvedNeed | None = None
-        search = LocalSearchTool(self.repo_root)
-        worker_config = WorkerRunConfig(max_tool_calls=10, evidence_limit=8)
+        search = LocalSearchTool(self.repo_root, index_path=self.index_path)
+        worker_config = WorkerRunConfig(max_tool_calls=11, evidence_limit=8)
 
         for round_index in range(max_rounds):
             ranked = self._rank_worker_scores(query, seen_worker_ids, active_need)
@@ -251,6 +256,30 @@ class LocalCoordinator:
     ) -> list[WorkerCard]:
         return [worker for _, worker in self._rank_worker_scores(question, seen_worker_ids, need)]
 
+    def _dense_routing_scores(self, query_text: str) -> dict[str, float]:
+        """worker_id -> cosine similarity against the (cheap, eagerly-built
+        at `ant index --dense` time) worker-card index. Returns {} whenever
+        no card index exists or no embedder is available -- routing then
+        falls back to the lexical signals alone, exactly as before dense
+        retrieval existed.
+        """
+        if not self.index_path:
+            return {}
+        if not self._worker_card_index_loaded:
+            self._worker_card_index = EmbeddingIndex.load(
+                self.index_path / "dense", WORKER_CARDS_KEY
+            )
+            self._worker_card_index_loaded = True
+        index = self._worker_card_index
+        if index is None or not index.entries:
+            return {}
+        embedder = get_shared_embedder()
+        if embedder is None:
+            return {}
+        [query_vector] = embedder.embed([query_text])
+        hits = index.search(query_vector, limit=len(index.entries))
+        return {entry.path: score for score, entry in hits}
+
     def _rank_worker_scores(
         self,
         question: str,
@@ -263,6 +292,7 @@ class LocalCoordinator:
         relevant_symbols = _relevant_symbols(query_text, need)
         symbol_weights = _relevant_symbol_weights(relevant_symbols, self.workers)
         implementation_intent = _asks_for_source_implementation_text(query_text)
+        dense_scores = self._dense_routing_scores(query_text)
         scored: list[tuple[WorkerRoutingScore, WorkerCard]] = []
         for worker in self.workers:
             terms = _worker_terms(worker)
@@ -304,6 +334,14 @@ class LocalCoordinator:
                 score += source_path_bonus
             memory_route_bonus = _memory_route_bonus(worker, query_terms, self.memory_routes)
             score += memory_route_bonus
+            # Coarse semantic signal alongside the lexical ones above: a
+            # worker card whose responsibilities/terms are semantically
+            # close to the query, even with no shared vocabulary at all,
+            # still gets a real (if modest) push -- catches the case where
+            # every lexical signal here is zero purely because the query's
+            # wording happens not to overlap this worker's card.
+            dense_routing_bonus = round(dense_scores.get(worker.id, 0.0) * 10)
+            score += dense_routing_bonus
             scored.append(
                 (
                     WorkerRoutingScore(
@@ -317,6 +355,7 @@ class LocalCoordinator:
                         source_worker_bonus=source_worker_bonus,
                         source_path_bonus=source_path_bonus,
                         memory_route_bonus=memory_route_bonus,
+                        dense_routing_bonus=dense_routing_bonus,
                         test_path_penalty=test_path_penalty,
                         seen_worker_penalty=seen_worker_penalty,
                     ),
@@ -362,7 +401,15 @@ class LocalCoordinator:
 
     @staticmethod
     def _query_from_needs(question: str, needs: list[UnresolvedNeed]) -> str:
-        parts = []
+        # Keep the original question as a stable lexical anchor in every round's
+        # query, not just as a fallback for when the need text is empty. Round 2+
+        # queries are built from an LLM-generated UnresolvedNeed, and that call has
+        # no temperature/seed pinning -- its wording varies between otherwise
+        # identical runs. Dropping the original question's terms each round made
+        # routing and retrieval fully dependent on that one call's phrasing; keeping
+        # them present means a lucky/unlucky word choice can only add or subtract
+        # recall, not erase the anchor entirely.
+        parts = [question]
         for need in needs:
             parts.append(_need_query_text(need))
         query = " ".join(part for part in parts if part).strip()
@@ -586,7 +633,13 @@ def _rank_global_evidence(evidence: list[Evidence], question: str) -> list[Evide
     terms = extract_terms(question)
 
     def score(item: Evidence) -> int:
-        return score_evidence(quote=item.quote, path=item.path, reason=item.reason, terms=terms)
+        return score_evidence(
+            quote=item.quote,
+            path=item.path,
+            reason=item.reason,
+            terms=terms,
+            dense_score=item.dense_score,
+        )
 
     return sorted(evidence, key=score, reverse=True)
 
@@ -944,13 +997,24 @@ def _merge_need_pair(old: UnresolvedNeed, new: UnresolvedNeed) -> UnresolvedNeed
 
 
 def _dedupe_evidence(evidence: list[Evidence]) -> list[Evidence]:
-    seen: set[tuple[str, int, int, str]] = set()
-    deduped = []
+    # See the matching note on autonomous._dedupe: keep the first-seen copy
+    # of a (path, lines, quote) duplicate, but merge a later duplicate's
+    # dense_score forward rather than silently dropping it, so a chunk two
+    # different workers/rounds both surfaced -- one lexically, one via
+    # dense_search -- doesn't lose the dense signal to whichever copy
+    # happened to arrive first.
+    index_by_key: dict[tuple[str, int, int, str], int] = {}
+    deduped: list[Evidence] = []
     for item in evidence:
         key = (item.path, item.line_start, item.line_end, item.quote)
-        if key in seen:
+        if key in index_by_key:
+            existing = deduped[index_by_key[key]]
+            if item.dense_score > existing.dense_score:
+                deduped[index_by_key[key]] = existing.model_copy(
+                    update={"dense_score": item.dense_score}
+                )
             continue
-        seen.add(key)
+        index_by_key[key] = len(deduped)
         deduped.append(item)
     return deduped
 

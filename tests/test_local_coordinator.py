@@ -39,6 +39,26 @@ def test_local_coordinator_returns_grounded_evidence(tmp_path: Path) -> None:
     assert "authenticate" in state.rounds[0].routing_scores[0].query_hits
 
 
+def test_query_from_needs_keeps_the_original_question_as_a_stable_anchor() -> None:
+    # Regression test: round 2+ queries used to fully replace the original
+    # question with LLM-generated need text. That LLM call has no
+    # temperature/seed pinning, so its exact wording varies between
+    # otherwise-identical runs -- and a lucky/unlucky word choice could
+    # erase recall for a term the original question used but the need
+    # happened not to repeat. The anchor must survive even when a need
+    # fully replaces the topic-specific portion of the query.
+    need = UnresolvedNeed(
+        description="Need the seed handling.",
+        missing="Seed handling implementation.",
+        source_worker_id="worker-a",
+    )
+    query = LocalCoordinator._query_from_needs(
+        "How are reproducible measurements sampled across backends?", [need]
+    )
+    assert query.startswith("How are reproducible measurements sampled across backends?")
+    assert "Seed handling implementation." in query
+
+
 def test_routing_matcher_avoids_arbitrary_substrings() -> None:
     assert not _matches_term("into", {"quantum_info"})
     assert not _matches_term("fusedgate", {"gate"})
@@ -286,12 +306,17 @@ def test_follow_up_routing_uses_missing_information_over_original_question(
     )
 
     assert state.rounds[0].selected_worker_ids == ["worker-docs"]
+    # The original question stays present as a stable lexical anchor (it is
+    # never fully dropped, even once a specific need takes over routing),
+    # but the need-derived text is what actually decides the worker pick
+    # below: worker-optimizers wins on "FusedGate"/"fuse" overlap despite
+    # the anchor's "tutorial"/"examples" wording nominally favoring
+    # worker-examples/worker-docs just as strongly on raw term count.
     assert state.rounds[1].query == (
+        "How does the tutorial explain automatic gate fusion examples? "
         "Implementation of FusedGate merging. Need the implementation of FusedGate merging. "
         "FusedGate fuse gate optimization"
     )
-    assert "tutorial" not in state.rounds[1].query
-    assert "examples" not in state.rounds[1].query
     assert state.rounds[1].selected_worker_ids == ["worker-optimizers"]
     assert "worker-examples" not in state.rounds[1].selected_worker_ids
 
