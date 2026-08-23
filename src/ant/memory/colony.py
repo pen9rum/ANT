@@ -20,6 +20,14 @@ class MemoryRoute(BaseModel):
     need_terms: list[str] = Field(default_factory=list)
     worker_ids: list[str] = Field(default_factory=list)
     weight: float = 1.0
+    # True: this recruitment also produced a good final answer, so it's
+    # trustworthy as a *routing* precedent (matching_routes/_memory_route_bonus
+    # use only these). False: the recruitment still happened -- this worker
+    # really was asked about this need -- but the answer wasn't good enough
+    # to trust for future routing. Specialization only needs "was this
+    # worker recruited for this sub-topic", not "did the answer score well",
+    # so evolve_workers reads all_routes() unfiltered by this flag.
+    is_high_quality: bool = True
 
 
 class ColonyMemoryStore:
@@ -58,12 +66,23 @@ class ColonyMemoryStore:
         with sqlite3.connect(self.db_path) as connection:
             _create_schema(connection)
             connection.execute(
-                "insert into routes(need_terms, worker_ids, weight) values (?, ?, ?)",
-                (json.dumps(route.need_terms), json.dumps(route.worker_ids), route.weight),
+                "insert into routes(need_terms, worker_ids, weight, is_high_quality) "
+                "values (?, ?, ?, ?)",
+                (
+                    json.dumps(route.need_terms),
+                    json.dumps(route.worker_ids),
+                    route.weight,
+                    int(route.is_high_quality),
+                ),
             )
 
     def all_routes(self, include_stale: bool = False) -> list[MemoryRoute]:
-        query = "select need_terms, worker_ids, weight from routes"
+        # Deliberately unfiltered by is_high_quality: this is the accessor
+        # evolve_workers()/_specialize_overloaded_workers uses, and
+        # specialization only needs "was this worker recruited for this
+        # sub-topic", not "did the final answer score well" -- see
+        # MemoryRoute.is_high_quality.
+        query = "select need_terms, worker_ids, weight, is_high_quality from routes"
         if not include_stale:
             query += " where stale = 0"
         with sqlite3.connect(self.db_path) as connection:
@@ -74,11 +93,16 @@ class ColonyMemoryStore:
                 need_terms=[str(term) for term in json.loads(need_terms_json)],
                 worker_ids=[str(worker_id) for worker_id in json.loads(worker_ids_json)],
                 weight=float(weight),
+                is_high_quality=bool(is_high_quality),
             )
-            for need_terms_json, worker_ids_json, weight in rows
+            for need_terms_json, worker_ids_json, weight, is_high_quality in rows
         ]
 
     def matching_routes(self, terms: list[str], limit: int = 5) -> list[MemoryRoute]:
+        # Filtered to is_high_quality: this is the accessor the query-time
+        # routing bonus (_memory_route_bonus) uses, and a route from a task
+        # that didn't actually produce a good answer would actively steer
+        # future routing astray if trusted as a precedent.
         if not terms:
             return []
         query_terms = {term.lower() for term in terms}
@@ -88,7 +112,7 @@ class ColonyMemoryStore:
             rows = connection.execute(
                 """
                 select need_terms, worker_ids, weight from routes
-                where stale = 0
+                where stale = 0 and is_high_quality = 1
                 order by weight desc, id desc
                 """
             ).fetchall()
@@ -218,14 +242,23 @@ def record_task_memory(
     "repeated collaboration becomes reorganization evidence" mechanism the
     whole design is built around silently never fires.
 
-    Coalition occurrences are recorded unconditionally: `evolve_workers`'
-    recurring-coalition mining is a statistical signal that benefits from
-    every occurrence, not only from ones judged "good". Route memory (which
-    worker(s) answered a need well) is gated by `is_high_quality`, since a
-    bad route actively steers future routing astray. Callers with a judge
-    score should pass `is_high_quality`/`route_weight` explicitly; callers
-    without one (e.g. interactive `ask`) fall back to a judge-free signal:
-    the task ended with grounded evidence and no unresolved needs left.
+    Coalition occurrences and routes are now both recorded unconditionally
+    (`is_high_quality` tags the route rather than gating whether it gets
+    saved at all): a low-scoring task still proves "this worker was
+    recruited for this need", which is exactly the signal
+    `evolve_workers`/`_specialize_overloaded_workers` mines to detect a
+    territory covering genuinely different sub-areas. Gating route recording
+    on answer quality used to mean a colony that was consistently *struggling*
+    on a territory -- precisely the case specialization exists to fix --
+    accumulated no evidence to specialize from at all. The quality gate still
+    matters for the query-time routing bonus (`matching_routes`, used by
+    `_memory_route_bonus`): a bad route actively steers future routing
+    astray if trusted as a precedent, so that accessor filters to
+    `is_high_quality` routes only, while `all_routes()` (evolve_workers'
+    input) does not. Callers with a judge score should pass
+    `is_high_quality`/`route_weight` explicitly; callers without one (e.g.
+    interactive `ask`) fall back to a judge-free signal: the task ended with
+    grounded evidence and no unresolved needs left.
     """
     for round_state in state.rounds:
         if round_state.coalition_formed:
@@ -238,17 +271,16 @@ def record_task_memory(
                 )
             )
 
-    high_quality = is_high_quality if is_high_quality is not None else _task_fully_resolved(state)
-    if not high_quality:
-        return
     worker_ids = _selected_route_workers(state.rounds)
     if not worker_ids:
         return
+    high_quality = is_high_quality if is_high_quality is not None else _task_fully_resolved(state)
     colony_memory.save_route(
         MemoryRoute(
             need_terms=_route_terms(question),
             worker_ids=worker_ids,
             weight=route_weight if route_weight is not None else 2.0,
+            is_high_quality=high_quality,
         )
     )
 
@@ -331,6 +363,10 @@ def _create_schema(connection: sqlite3.Connection) -> None:
     )
     _ensure_column(connection, "coalitions", "stale", "integer not null default 0")
     _ensure_column(connection, "routes", "stale", "integer not null default 0")
+    # Default 1 (True): every route saved before this column existed was, by
+    # construction, one that already passed the old quality gate at save
+    # time -- see record_task_memory / matching_routes vs. all_routes below.
+    _ensure_column(connection, "routes", "is_high_quality", "integer not null default 1")
     _ensure_column(connection, "stale_memory", "worker_id", "text")
 
 

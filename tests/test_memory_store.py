@@ -257,3 +257,40 @@ def test_record_task_memory_skips_route_when_unresolved_needs_remain(
     record_task_memory(memory, state.question, state)
 
     assert memory.matching_routes(["auth", "sessions"]) == []
+
+
+def test_low_quality_route_is_recorded_for_specialization_but_hidden_from_routing(
+    tmp_path: Path,
+) -> None:
+    # Regression test: routes used to be dropped entirely when the task
+    # wasn't high quality, which meant a colony that was consistently
+    # struggling on a territory -- precisely the case specialization exists
+    # to fix -- accumulated no evidence for evolve_workers to specialize
+    # from at all. The task's low quality must still keep it out of the
+    # query-time routing bonus (matching_routes), but it must now be visible
+    # to all_routes() (what _specialize_overloaded_workers reads).
+    memory = ColonyMemoryStore(tmp_path)
+    state = EvidenceState(
+        question="How does auth use sessions?",
+        evidence=[
+            Evidence(
+                path="src/auth.py",
+                line_start=1,
+                line_end=2,
+                quote="def authenticate(): ...",
+                reason="definition",
+            )
+        ],
+        unresolved_needs=[
+            UnresolvedNeed(description="Still missing the session refresh path.")
+        ],
+        rounds=[_round(selected=["worker-auth"], coalition_formed=False)],
+    )
+
+    record_task_memory(memory, state.question, state, is_high_quality=False)
+
+    assert memory.matching_routes(["auth", "sessions"]) == []
+    all_routes = memory.all_routes()
+    assert len(all_routes) == 1
+    assert all_routes[0].worker_ids == ["worker-auth"]
+    assert all_routes[0].is_high_quality is False
