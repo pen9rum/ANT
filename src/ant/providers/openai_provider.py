@@ -11,6 +11,7 @@ from openai import OpenAI
 
 from ant.config import load_dotenv
 from ant.domain import (
+    AbsenceProof,
     CodeSymbol,
     Evidence,
     TokenUsage,
@@ -20,6 +21,13 @@ from ant.domain import (
 )
 from ant.providers.pricing import estimate_cost_usd
 from ant.tools.symbol_index import build_symbol_index
+
+# 512/768 was cutting detailed technical answers off mid-sentence (e.g. a
+# call-path walk-through truncated inside a code block). 8192 gives ample
+# room for a full multi-part answer without meaningfully raising baseline
+# cost -- this is a ceiling, not a floor, so short answers still cost the
+# same.
+SYNTHESIS_MAX_OUTPUT_TOKENS = 8192
 
 
 @dataclass(frozen=True)
@@ -113,16 +121,24 @@ class OpenAIProvider:
 
     def responses_json(self, prompt: str, max_output_tokens: int = 512) -> ResponseResult:
         result = self.responses_text(prompt, max_output_tokens=max_output_tokens)
-        try:
-            _loads_json_object(result.text)
+        if _is_json_object(result.text):
             return result
-        except json.JSONDecodeError:
-            repair_prompt = (
-                "Convert the following response into one valid JSON object. "
-                "Return only JSON, no markdown.\n"
-                f"Response:\n{result.text}"
-            )
-            return self.responses_text(repair_prompt, max_output_tokens=max_output_tokens)
+        repair_prompt = (
+            "Convert the following response into one valid JSON object. "
+            "Return only JSON, no markdown.\n"
+            f"Response:\n{result.text}"
+        )
+        repaired = self.responses_text(repair_prompt, max_output_tokens=max_output_tokens)
+        if _is_json_object(repaired.text):
+            return repaired
+        # The repair pass can itself come back malformed (most often the
+        # model's output was cut off by max_output_tokens). Every caller of
+        # this method does an unguarded json.loads on the result, so
+        # returning unparseable text here would crash the caller -- and for
+        # a batch eval, that kills every remaining example, not just this
+        # one. An empty object is a safe degradation: callers already treat
+        # "no fields present" as "nothing found this round".
+        return ResponseResult(text="{}", usage=repaired.usage, raw=repaired.raw)
 
     def _responses_create_raw(self, prompt: str, max_output_tokens: int) -> ResponseResult:
         payload = json.dumps(self._responses_kwargs(prompt, max_output_tokens)).encode("utf-8")
@@ -231,17 +247,24 @@ class OpenAIProvider:
             unresolved_needs=unresolved_needs,
         )
 
-    def synthesize(self, *, question: str, evidence: list[Evidence]) -> str:
-        evidence_text = "\n".join(
-            f"- {item.path}:{item.line_start} {item.quote}" for item in evidence[:12]
-        )
+    def synthesize(
+        self,
+        *,
+        question: str,
+        evidence: list[Evidence],
+        absence_proofs: list[AbsenceProof] | None = None,
+    ) -> str:
+        evidence_text = "\n".join(_format_evidence_line(item) for item in evidence[:12])
+        completeness_text = _completeness_notes(absence_proofs)
         prompt = (
             "Answer the codebase question using only the evidence below. "
             "If evidence is insufficient, say what is missing.\n"
+            f"{_completeness_instruction(completeness_text)}"
             f"Question: {question}\n"
             f"Evidence:\n{evidence_text}\n"
+            f"{_completeness_section(completeness_text)}"
         )
-        return self.responses_text(prompt, max_output_tokens=512).text
+        return self.responses_text(prompt, max_output_tokens=SYNTHESIS_MAX_OUTPUT_TOKENS).text
 
     def synthesize_coalition(
         self,
@@ -249,20 +272,63 @@ class OpenAIProvider:
         question: str,
         worker_ids: list[str],
         evidence: list[Evidence],
+        absence_proofs: list[AbsenceProof] | None = None,
     ) -> str:
         evidence_text = "\n".join(
             f"- {item.path}:{item.line_start}-{item.line_end}\n{item.quote}"
+            + (f"\n  ({item.reason})" if item.reason else "")
             for item in evidence[:12]
         )
+        completeness_text = _completeness_notes(absence_proofs)
         prompt = (
             "A temporary worker coalition is jointly answering a repository question.\n"
             f"Workers: {', '.join(worker_ids)}\n"
             "Cross-check evidence across territories, name conflicts or missing links, "
             "and answer only what is supported.\n"
+            f"{_completeness_instruction(completeness_text)}"
             f"Question: {question}\n"
             f"Evidence:\n{evidence_text}\n"
+            f"{_completeness_section(completeness_text)}"
         )
-        return self.responses_text(prompt, max_output_tokens=768).text
+        return self.responses_text(prompt, max_output_tokens=SYNTHESIS_MAX_OUTPUT_TOKENS).text
+
+
+def _format_evidence_line(item: Evidence) -> str:
+    line = f"- {item.path}:{item.line_start} {item.quote}"
+    return f"{line} ({item.reason})" if item.reason else line
+
+
+def _completeness_notes(absence_proofs: list[AbsenceProof] | None) -> str:
+    if not absence_proofs:
+        return ""
+    lines = []
+    for proof in absence_proofs:
+        if not proof.exhaustive:
+            continue
+        symbols = ", ".join(proof.relevant_symbols) or "the requested symbol"
+        tools = ", ".join(proof.tools) or "available tools"
+        lines.append(
+            f"- Exhaustive search for {symbols}: searched {len(proof.searched_paths)} "
+            f"indexed files across {len(proof.searched_territories)} territories using "
+            f"{tools}; result: {proof.conclusion}."
+        )
+    return "\n".join(lines)
+
+
+def _completeness_instruction(completeness_text: str) -> str:
+    if not completeness_text:
+        return ""
+    return (
+        "The completeness notes below describe exhaustive searches already "
+        "performed across the whole indexed repository, not just the evidence "
+        "shown. You may state something is absent or that a list is complete "
+        "only when a note explicitly confirms it; otherwise say what more "
+        "evidence would be needed rather than guessing.\n"
+    )
+
+
+def _completeness_section(completeness_text: str) -> str:
+    return f"Completeness notes:\n{completeness_text}\n" if completeness_text else ""
 
 
 def _extract_output_text(data: dict) -> str:
@@ -291,6 +357,14 @@ def _with_latency_and_cost(result: ResponseResult, model: str, start: float) -> 
         }
     )
     return ResponseResult(text=result.text, usage=usage, raw=result.raw)
+
+
+def _is_json_object(text: str) -> bool:
+    try:
+        _loads_json_object(text)
+    except json.JSONDecodeError:
+        return False
+    return True
 
 
 def _loads_json_object(text: str) -> dict:

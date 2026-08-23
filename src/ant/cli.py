@@ -20,7 +20,7 @@ from ant.generation import generate_worker_cards
 from ant.git_refresh import refresh_changed_workers
 from ant.indexing import discover_territories
 from ant.memory import IndexStore
-from ant.memory.colony import ColonyMemoryStore
+from ant.memory.colony import ColonyMemoryStore, record_task_memory
 from ant.providers import OpenAIProvider
 
 app = typer.Typer(no_args_is_help=True)
@@ -68,6 +68,7 @@ def ask(
     )
     if save_trace:
         store.save_trace(state)
+    record_task_memory(colony_memory, question, state)
     typer.echo(json.dumps(state.model_dump(), indent=2))
 
 
@@ -179,21 +180,26 @@ def evolve(
     min_coalition_count: int = 2,
     retire_empty: bool = True,
     merge_overlap: float = 0.9,
+    min_specialization_routes: int = 4,
+    min_specialization_group_routes: int = 2,
 ) -> None:
-    """Apply worker population evolution from recurring coalition memory."""
+    """Apply worker population evolution from recurring coalition/route memory."""
     result = evolve_workers(
         index_path,
         min_coalition_count=min_coalition_count,
         retire_empty=retire_empty,
         merge_overlap=merge_overlap,
+        min_specialization_routes=min_specialization_routes,
+        min_specialization_group_routes=min_specialization_group_routes,
     )
     typer.echo(result.model_dump_json(indent=2))
 
 
 @app.command()
-def revalidate(repo: Path = Path("."), index_path: Path = INDEX_OPTION) -> None:
-    """Revalidate stale memory records after repository changes."""
-    result = ColonyMemoryStore(index_path).revalidate_stale(repo.resolve())
+def revalidate(index_path: Path = INDEX_OPTION) -> None:
+    """Revalidate stale memory records against the colony's current workers."""
+    current_worker_ids = {worker.id for worker in IndexStore(index_path).load_workers()}
+    result = ColonyMemoryStore(index_path).revalidate_stale(current_worker_ids)
     typer.echo(json.dumps(result, indent=2))
 
 

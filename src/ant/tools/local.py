@@ -90,7 +90,7 @@ class LocalSearchTool:
                 score = _line_score(stripped, terms)
                 if score <= 0:
                     continue
-                end = _block_end(lines, index)
+                end = _capped_block_end(lines, index)
                 candidates.append((score + 4, relative, index, lines[index - 1 : end], stripped))
         candidates.sort(key=lambda item: item[0], reverse=True)
         return _merge_windows(candidates, limit=limit)
@@ -208,7 +208,7 @@ class LocalSearchTool:
                 stripped = line.strip()
                 if not _is_definition_line(stripped):
                     continue
-                end = _block_end(lines, index)
+                end = _capped_block_end(lines, index)
                 block = "\n".join(lines[index - 1 : end])
                 if f"{symbol}(" not in block or _definition_name(stripped) == symbol:
                     continue
@@ -462,17 +462,7 @@ def _retrieval_regions(lines: list[str]) -> list[tuple[int, list[str]]]:
             index += 1
             continue
         if _is_definition_line(lines[index - 1].strip()):
-            end = _block_end(lines, index)
-            if lines[index - 1].lstrip().startswith("class "):
-                nested_definition = next(
-                    (
-                        cursor
-                        for cursor in range(index + 1, end + 1)
-                        if _is_definition_line(lines[cursor - 1].strip())
-                    ),
-                    end + 1,
-                )
-                end = min(end, nested_definition - 1, index + 11)
+            end = _capped_block_end(lines, index)
         else:
             end = min(len(lines), index + 7)
             for cursor in range(index, end):
@@ -553,3 +543,29 @@ def _block_end(lines: list[str], start_line: int) -> int:
             break
         end = index + 1
     return end
+
+
+def _capped_block_end(lines: list[str], start_line: int, class_header_lines: int = 11) -> int:
+    """`_block_end` walks a definition block until the next dedent, which for
+    a class means walking to the end of its ENTIRE body -- every method --
+    so for a large class that can span hundreds of lines. A caller that
+    then truncates the joined text to a flat character limit
+    (`_merge_windows`/`_definitions_to_evidence`) silently loses whatever
+    methods live past that many characters in, even though the returned
+    line_start/line_end metadata claims full coverage of the class. Cap a
+    class's own region at its first nested definition (or a small fallback
+    window) instead, so each method remains reachable as its own, separate,
+    un-truncated match.
+    """
+    end = _block_end(lines, start_line)
+    if not lines[start_line - 1].lstrip().startswith("class "):
+        return end
+    nested_definition = next(
+        (
+            cursor
+            for cursor in range(start_line + 1, end + 1)
+            if _is_definition_line(lines[cursor - 1].strip())
+        ),
+        end + 1,
+    )
+    return min(end, nested_definition - 1, start_line + class_header_lines)

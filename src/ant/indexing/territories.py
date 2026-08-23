@@ -7,6 +7,15 @@ from ant.domain import Territory, as_posix
 from ant.environment import RepoEnvironment
 
 GENERIC_CONTAINERS = {"src", "lib", "libs", "packages", "pkg"}
+# Unlike src/lib (one package that keeps going for a couple more levels),
+# these hold many independent, unrelated units side by side -- one level
+# down is already the meaningful boundary. Left ungrouped, e.g. all of
+# examples/ collapses into a single worker whose card blends dozens of
+# unrelated READMEs together, drowning out any one example's distinctive
+# vocabulary (this is exactly what made a Bloch-sphere-visualization example
+# unreachable by routing: its own README never got a chance to stand out
+# against 188 sibling examples' README text).
+FLAT_CONTAINERS = {"examples", "example", "demos", "demo", "samples", "sample"}
 
 
 def discover_territories(repo: RepoEnvironment) -> list[Territory]:
@@ -43,6 +52,8 @@ def _natural_root(relative: Path) -> str:
     parts = relative.parts
     if len(parts) <= 1:
         return ""
+    if parts[0] in FLAT_CONTAINERS:
+        return "/".join(parts[:2]) if len(parts) > 2 else "/".join(parts[:-1])
     if parts[0] not in GENERIC_CONTAINERS:
         return parts[0]
     if len(parts) <= 3:

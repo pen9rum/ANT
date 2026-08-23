@@ -42,7 +42,7 @@ class SymbolIndex:
         self.definitions.append(definition)
         self.by_name[definition.name].append(definition)
         self.by_name[definition.qualname].append(definition)
-        self.definitions_by_module[_module_name(definition.path)].append(definition)
+        self.definitions_by_module[module_name(definition.path)].append(definition)
         for base in definition.bases:
             self.subclasses[base].append(definition)
 
@@ -57,7 +57,7 @@ class SymbolIndex:
         for binding in self.imports:
             if binding.path != from_path or binding.name != name:
                 continue
-            module = _absolute_module(binding.module, from_path)
+            module = resolve_import_module(binding.module, from_path)
             candidates = self.definitions_by_module.get(module, [])
             if binding.imported:
                 candidates = [item for item in candidates if item.name == binding.imported]
@@ -181,7 +181,7 @@ def _call_name(node: ast.expr) -> str:
     return ""
 
 
-def _module_name(path: str) -> str:
+def module_name(path: str) -> str:
     normalized = path.replace("\\", "/")
     if normalized.endswith("/__init__.py"):
         normalized = normalized[: -len("/__init__.py")]
@@ -193,11 +193,11 @@ def _module_name(path: str) -> str:
     return ".".join(parts)
 
 
-def _absolute_module(module: str, from_path: str) -> str:
+def resolve_import_module(module: str, from_path: str) -> str:
     if not module.startswith("."):
         return module
     level = len(module) - len(module.lstrip("."))
     suffix = module[level:]
-    package = _module_name(from_path).split(".")[:-1]
+    package = module_name(from_path).split(".")[:-1]
     keep = max(0, len(package) - level + 1)
     return ".".join([*package[:keep], *([suffix] if suffix else [])])

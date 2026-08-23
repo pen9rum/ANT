@@ -1,11 +1,16 @@
 from __future__ import annotations
 
+import re
+from collections import defaultdict
 from pathlib import Path
 
 from pydantic import BaseModel, Field
 
 from ant.domain import Territory, WorkerCard
 from ant.memory import ColonyMemoryStore, IndexStore
+from ant.memory.colony import MemoryRoute
+
+TOKEN_RE = re.compile(r"[A-Za-z][A-Za-z0-9_]{2,}")
 
 
 class EvolutionEvent(BaseModel):
@@ -25,13 +30,27 @@ def evolve_workers(
     min_coalition_count: int = 2,
     retire_empty: bool = True,
     merge_overlap: float = 0.9,
+    min_specialization_routes: int = 4,
+    min_specialization_group_routes: int = 2,
 ) -> EvolutionResult:
     store = IndexStore(index_path)
     memory = ColonyMemoryStore(index_path)
     workers = store.load_workers()
-    worker_by_id = {worker.id: worker for worker in workers}
     events: list[EvolutionEvent] = []
+    removed_worker_ids: set[str] = set()
 
+    workers, specialize_events = _specialize_overloaded_workers(
+        workers,
+        memory.all_routes(),
+        min_routes=min_specialization_routes,
+        min_group_routes=min_specialization_group_routes,
+    )
+    events.extend(specialize_events)
+    removed_worker_ids.update(
+        worker_id for event in specialize_events for worker_id in event.source_worker_ids
+    )
+
+    worker_by_id = {worker.id: worker for worker in workers}
     for worker_ids, count in memory.recurring_coalitions(min_count=min_coalition_count):
         bridge_suffix = "-".join(worker_id.removeprefix("worker-") for worker_id in worker_ids)
         bridge_id = f"worker-bridge-{bridge_suffix}"
@@ -80,10 +99,14 @@ def evolve_workers(
                     reason="Worker has no owned files after refresh.",
                 )
             )
+            removed_worker_ids.add(worker.id)
         workers = kept
 
     workers, merge_events = _merge_overlapping_workers(workers, threshold=merge_overlap)
     events.extend(merge_events)
+    removed_worker_ids.update(
+        worker_id for event in merge_events for worker_id in event.source_worker_ids
+    )
 
     territories = [
         Territory(
@@ -96,6 +119,11 @@ def evolve_workers(
     ]
     if events:
         store.save(territories, workers)
+    if removed_worker_ids:
+        ColonyMemoryStore(index_path).mark_stale(
+            sorted(removed_worker_ids),
+            reason="Worker retired/specialized/merged away by colony evolution.",
+        )
     return EvolutionResult(events=events, worker_count=len(workers))
 
 
@@ -145,3 +173,118 @@ def _merge_overlapping_workers(
             )
         )
     return merged, events
+
+
+def _specialize_overloaded_workers(
+    workers: list[WorkerCard],
+    routes: list[MemoryRoute],
+    min_routes: int,
+    min_group_routes: int,
+) -> tuple[list[WorkerCard], list[EvolutionEvent]]:
+    """Split a coarse worker into finer workers along its existing directory
+    substructure once recurring routes show it is being asked about at least
+    two genuinely different sub-areas often enough. This is the "Specialization
+    / Birth" mechanism from the design: worker count is not fixed up front, it
+    grows where task experience shows a single worker is covering topics that
+    do not actually belong together.
+    """
+    routes_by_worker: dict[str, list[MemoryRoute]] = defaultdict(list)
+    for route in routes:
+        for worker_id in route.worker_ids:
+            routes_by_worker[worker_id].append(route)
+
+    events: list[EvolutionEvent] = []
+    result: list[WorkerCard] = []
+    for worker in workers:
+        groups = _subdirectory_groups(worker)
+        worker_routes = routes_by_worker.get(worker.id, [])
+        if len(groups) < 2 or len(worker_routes) < min_routes:
+            result.append(worker)
+            continue
+
+        group_counts: dict[str, int] = defaultdict(int)
+        for route in worker_routes:
+            group = _assign_route_to_group(route, groups)
+            if group:
+                group_counts[group] += 1
+        qualifying_groups = {
+            group for group, count in group_counts.items() if count >= min_group_routes
+        }
+        if len(qualifying_groups) < 2:
+            result.append(worker)
+            continue
+
+        children = [
+            _child_worker(worker, group, files, group_counts.get(group, 0))
+            for group, files in sorted(groups.items())
+        ]
+        result.extend(children)
+        for child in children:
+            events.append(
+                EvolutionEvent(
+                    kind="specialize",
+                    worker_id=child.id,
+                    reason=(
+                        f"Split from {worker.id}: recurring needs concentrated on "
+                        f"{len(qualifying_groups)} distinct substructures under it."
+                    ),
+                    source_worker_ids=[worker.id],
+                )
+            )
+    return result, events
+
+
+def _subdirectory_groups(worker: WorkerCard) -> dict[str, list[str]]:
+    root_parts = Path(worker.root).parts if worker.root else ()
+    groups: dict[str, list[str]] = defaultdict(list)
+    for file in worker.files:
+        remainder = Path(file).parts[len(root_parts) :]
+        key = worker.root if len(remainder) <= 1 else "/".join([*root_parts, remainder[0]])
+        groups[key].append(file)
+    return dict(groups)
+
+
+def _assign_route_to_group(route: MemoryRoute, groups: dict[str, list[str]]) -> str | None:
+    need_terms = {term.lower() for term in route.need_terms}
+    if not need_terms:
+        return None
+    best_group: str | None = None
+    best_score = 0
+    for group, files in groups.items():
+        score = len(need_terms & _path_terms(files))
+        if score > best_score:
+            best_group, best_score = group, score
+    return best_group
+
+
+def _child_worker(worker: WorkerCard, group: str, files: list[str], route_count: int) -> WorkerCard:
+    child_symbols = [symbol for symbol in worker.symbols if symbol.path in files]
+    path_terms = _path_terms(files)
+    inherited_terms = {term for term in worker.searchable_terms if term.lower() in path_terms}
+    symbol_terms = {symbol.name for symbol in child_symbols} | {
+        symbol.qualname for symbol in child_symbols if symbol.qualname
+    }
+    terms = sorted(inherited_terms | symbol_terms) or sorted(path_terms)
+    territory_id = _slug(group)
+    return WorkerCard(
+        id=f"worker-{territory_id}",
+        territory_id=territory_id,
+        name=f"{group or 'root'} worker",
+        root=group,
+        responsibilities=[
+            f"Specialized from {worker.id} after {route_count} recurring needs "
+            "concentrated on this substructure.",
+        ],
+        searchable_terms=terms[:32],
+        files=sorted(files),
+        symbols=child_symbols,
+    )
+
+
+def _path_terms(files: list[str]) -> set[str]:
+    return {token.lower() for file in files for token in TOKEN_RE.findall(file)}
+
+
+def _slug(value: str) -> str:
+    normalized = "".join(character if character.isalnum() else "-" for character in value.lower())
+    return normalized.strip("-") or "root"

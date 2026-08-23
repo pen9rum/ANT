@@ -10,7 +10,7 @@ from ant.evaluation.datasets import EvalExample
 from ant.evaluation.judge import judge_answer
 from ant.evaluation.metrics import EvalScore
 from ant.memory import IndexStore
-from ant.memory.colony import CoalitionRecord, ColonyMemoryStore, MemoryRoute
+from ant.memory.colony import ColonyMemoryStore, record_task_memory
 from ant.providers import OpenAIProvider
 
 
@@ -58,66 +58,91 @@ def run_batch(
                 handle.write(json.dumps(result.model_dump(), ensure_ascii=True) + "\n")
                 continue
 
-            example_index = (
-                index_path if example.repo == "." else index_path / _repo_basename(example.repo)
-            )
-            if (
-                not (example_index / "workers.json").exists()
-                and not (example_index / "ant.sqlite3").exists()
-            ):
-                _build_index(example_repo, example_index)
-            store = IndexStore(example_index)
-            colony_memory = ColonyMemoryStore(example_index)
-            workers = store.load_workers()
-            memory_routes = colony_memory.matching_routes(example.question.split())
-            coordinator = LocalCoordinator(
-                example_repo,
-                workers,
-                synthesizer=provider,
-                memory_routes=memory_routes,
-            )
-            state = coordinator.ask(example.question, max_rounds=max_rounds)
-            trace_id = store.save_trace(state)
-            for round_state in state.rounds:
-                if round_state.coalition_formed:
-                    colony_memory.record_coalition(
-                        CoalitionRecord(
-                            worker_ids=round_state.selected_worker_ids,
-                            question=example.question,
-                            evidence_count=len(state.evidence),
-                            unresolved_need_count=len(state.unresolved_needs),
-                        )
-                    )
-            prediction = state.answer or _fallback_prediction(state.evidence)
-            score = judge_answer(
-                question=example.question,
-                prediction=prediction,
-                expected=example.answer,
-                evidence_count=len(state.evidence),
-                unresolved_need_count=len(state.unresolved_needs),
-                judge=judge,
-            )
-            if _is_high_quality_route(score):
-                worker_ids = _selected_route_workers(state.rounds)
-                if worker_ids:
-                    colony_memory.save_route(
-                        MemoryRoute(
-                            need_terms=_route_terms(example.question),
-                            worker_ids=worker_ids,
-                            weight=_route_weight(score),
-                        )
-                    )
-            result = BatchResult(
-                example_id=example.id,
-                question=example.question,
-                prediction=prediction,
-                score=score,
-                trace_id=trace_id,
-                metadata={"repo": example.repo},
-            )
+            try:
+                result = _run_example(
+                    example=example,
+                    example_repo=example_repo,
+                    index_path=index_path,
+                    provider=provider,
+                    max_rounds=max_rounds,
+                    judge=judge,
+                )
+            except Exception as exc:  # noqa: BLE001 - one bad example must not sink the batch
+                # A single malformed model response (or any other failure)
+                # here used to propagate all the way out of run_batch and
+                # abort every remaining example in the batch. Isolate it per
+                # example instead: record what happened and keep going.
+                result = BatchResult(
+                    example_id=example.id,
+                    question=example.question,
+                    prediction="",
+                    score=EvalScore(
+                        exact_match=False,
+                        contains_answer=False,
+                        evidence_count=0,
+                        unresolved_need_count=0,
+                    ),
+                    status=f"error: {type(exc).__name__}: {exc}",
+                    metadata={"repo": example.repo},
+                )
             results.append(result)
             handle.write(json.dumps(result.model_dump(), ensure_ascii=True) + "\n")
     return results
+
+
+def _run_example(
+    *,
+    example: EvalExample,
+    example_repo: Path,
+    index_path: Path,
+    provider: OpenAIProvider | None,
+    max_rounds: int,
+    judge: str,
+) -> BatchResult:
+    example_index = (
+        index_path if example.repo == "." else index_path / _repo_basename(example.repo)
+    )
+    if (
+        not (example_index / "workers.json").exists()
+        and not (example_index / "ant.sqlite3").exists()
+    ):
+        _build_index(example_repo, example_index)
+    store = IndexStore(example_index)
+    colony_memory = ColonyMemoryStore(example_index)
+    workers = store.load_workers()
+    memory_routes = colony_memory.matching_routes(example.question.split())
+    coordinator = LocalCoordinator(
+        example_repo,
+        workers,
+        synthesizer=provider,
+        memory_routes=memory_routes,
+    )
+    state = coordinator.ask(example.question, max_rounds=max_rounds)
+    trace_id = store.save_trace(state)
+    prediction = state.answer or _fallback_prediction(state.evidence)
+    score = judge_answer(
+        question=example.question,
+        prediction=prediction,
+        expected=example.answer,
+        evidence_count=len(state.evidence),
+        unresolved_need_count=len(state.unresolved_needs),
+        judge=judge,
+    )
+    record_task_memory(
+        colony_memory,
+        example.question,
+        state,
+        is_high_quality=_is_high_quality_route(score),
+        route_weight=_route_weight(score),
+    )
+    return BatchResult(
+        example_id=example.id,
+        question=example.question,
+        prediction=prediction,
+        score=score,
+        trace_id=trace_id,
+        metadata={"repo": example.repo},
+    )
 
 
 def _fallback_prediction(evidence) -> str:
@@ -130,25 +155,6 @@ def _is_high_quality_route(score: EvalScore) -> bool:
     if score.correctness is None or score.completeness is None:
         return False
     return score.correctness >= 8 and score.completeness >= 8
-
-
-def _selected_route_workers(rounds) -> list[str]:
-    worker_ids = [
-        worker_id
-        for round_state in rounds
-        for worker_id in round_state.selected_worker_ids
-    ]
-    return list(dict.fromkeys(worker_ids))
-
-
-def _route_terms(question: str) -> list[str]:
-    return sorted(
-        {
-            token.lower()
-            for token in question.replace("_", " ").split()
-            if len(token) > 2 and token.isascii()
-        }
-    )[:16]
 
 
 def _route_weight(score: EvalScore) -> float:

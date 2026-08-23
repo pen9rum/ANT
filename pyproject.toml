@@ -41,6 +41,12 @@ exclude = ["repos", "output", ".ant"]
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
 
+[tool.ruff.lint.per-file-ignores]
+# JUDGE_PROMPT is a user-locked, verbatim prompt string (see the comment
+# above it in judge.py) -- it must not be reformatted to satisfy line
+# length, so this file is exempted from E501 rather than touching the text.
+"src/ant/evaluation/judge.py" = ["E501"]
+
 [tool.pyright]
 include = ["src", "tests"]
 exclude = ["repos", "output", ".ant"]

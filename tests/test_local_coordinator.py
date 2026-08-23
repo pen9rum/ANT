@@ -1,8 +1,14 @@
 from pathlib import Path
 
 from ant.coordinator import LocalCoordinator
-from ant.coordinator.local import _matches_term
-from ant.domain import UnresolvedNeed, WorkerCard, WorkerObservation
+from ant.coordinator.local import (
+    _close_resolved_needs,
+    _matches_term,
+    _merge_needs,
+    _relevant_symbol_weights,
+    _reopen_referenced_evidence,
+)
+from ant.domain import Evidence, UnresolvedNeed, WorkerCard, WorkerObservation
 from ant.memory import MemoryRoute
 from ant.tools import LocalSearchTool
 
@@ -487,6 +493,68 @@ def test_memory_route_soft_bonus_can_select_known_worker(tmp_path: Path) -> None
     assert state.rounds[0].routing_scores[0].memory_route_bonus > 0
 
 
+def test_memory_route_bonus_ignores_a_single_generic_word_shared_with_an_unrelated_route(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "models").mkdir()
+    (tmp_path / "visualization").mkdir()
+    (tmp_path / "models" / "algorithms.py").write_text(
+        "class QAOA:\n    pass\n", encoding="utf-8"
+    )
+    (tmp_path / "visualization" / "bloch.py").write_text(
+        "def paint_bloch_sphere():\n    return 'quantum state plot'\n", encoding="utf-8"
+    )
+    workers = [
+        WorkerCard(
+            id="worker-models",
+            territory_id="models",
+            name="models",
+            root="models",
+            searchable_terms=["QAOA"],
+            files=["models/algorithms.py"],
+        ),
+        WorkerCard(
+            id="worker-visualization",
+            territory_id="visualization",
+            name="visualization",
+            root="visualization",
+            searchable_terms=["bloch", "sphere"],
+            files=["visualization/bloch.py"],
+        ),
+    ]
+    # Recorded from answering an unrelated earlier question about QAOA
+    # subclasses -- its vocabulary shares only the single generic word
+    # "quantum" with the new, unrelated Bloch-sphere question below.
+    unrelated_route = MemoryRoute(
+        need_terms=[
+            "algorithm",
+            "class",
+            "extended",
+            "inheriting",
+            "methods",
+            "overridden",
+            "qaoa",
+            "quantum",
+            "specialized",
+            "subclasses",
+            "variational",
+        ],
+        worker_ids=["worker-models"],
+        weight=5.0,
+    )
+
+    state = LocalCoordinator(
+        tmp_path, workers, memory_routes=[unrelated_route]
+    ).ask("How does the quantum state get rendered on the Bloch sphere?", max_rounds=1)
+
+    # Without the stale memory bonus, worker-models has no signal at all for
+    # this question and should not even be a candidate -- previously the
+    # capped +12 bonus from the unrelated route alone would have put it
+    # ahead of the genuinely relevant worker.
+    assert "worker-models" not in state.rounds[0].candidate_worker_ids
+    assert state.rounds[0].selected_worker_ids == ["worker-visualization"]
+
+
 def test_inheritance_question_reports_coverage_gap_without_subclass_evidence(
     tmp_path: Path,
 ) -> None:
@@ -511,6 +579,35 @@ def test_inheritance_question_reports_coverage_gap_without_subclass_evidence(
     assert state.unresolved_needs
     assert state.unresolved_needs[0].need_type == "subclass_lookup"
     assert "QAOA" in state.unresolved_needs[0].relevant_symbols
+
+
+def test_implement_stem_without_suffix_triggers_implementation_coverage_gap(
+    tmp_path: Path,
+) -> None:
+    # Regression test: "How does X implement Y" (bare stem, no -ation/-ed
+    # suffix) previously matched none of _asks_for_source_implementation_text's
+    # indicators, so the question fell back to a "negative_presence" need
+    # even when it was clearly asking for an implementation -- meaning
+    # nothing ever flagged that the actual algorithm/code was missing.
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "models.py").write_text(
+        "class Present:\n    pass\n",
+        encoding="utf-8",
+    )
+    worker = WorkerCard(
+        id="worker-src",
+        territory_id="src",
+        name="src",
+        root="src",
+        searchable_terms=["Present"],
+        files=["src/models.py"],
+    )
+
+    state = LocalCoordinator(tmp_path, [worker]).ask(
+        "How does the library implement automatic gate fusion?", max_rounds=1
+    )
+
+    assert state.unresolved_needs[0].need_type == "implementation_location"
 
 
 def test_no_evidence_returns_structured_negative_presence_need(tmp_path: Path) -> None:
@@ -618,6 +715,39 @@ def test_local_search_can_navigate_to_definition_block(tmp_path: Path) -> None:
     assert "return selected" in evidence[0].quote
 
 
+def test_navigate_does_not_swallow_a_deep_method_inside_a_large_class(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "src").mkdir()
+    filler_methods = "\n\n".join(
+        f"    def filler_{index}(self):\n        return {index}" for index in range(60)
+    )
+    (tmp_path / "src" / "backend.py").write_text(
+        "class NumpyBackend:\n"
+        f"{filler_methods}\n\n"
+        "    def calculate_probabilities(self, state, qubits, nqubits):\n"
+        "        return state\n",
+        encoding="utf-8",
+    )
+
+    tool = LocalSearchTool(tmp_path)
+    class_hits = tool.navigate("NumpyBackend", ["src/backend.py"])
+    method_hits = tool.navigate("calculate_probabilities", ["src/backend.py"])
+
+    # Navigating to the class must not return its entire body (which would
+    # get flat-truncated before reaching a method deep inside it, even
+    # though line_start/line_end would still claim full coverage); it must
+    # stay capped to a short header region.
+    assert class_hits
+    assert (class_hits[0].line_end - class_hits[0].line_start) < 20
+    # The specific method must still be reachable on its own -- previously
+    # it would be silently dropped because it fell entirely inside the
+    # class's own (uncapped) range and _merge_windows treats "contained
+    # within an already-added range" as a duplicate to skip.
+    assert method_hits
+    assert "def calculate_probabilities" in method_hits[0].quote
+
+
 def test_local_search_finds_references(tmp_path: Path) -> None:
     (tmp_path / "src").mkdir()
     (tmp_path / "src" / "model.py").write_text(
@@ -656,3 +786,426 @@ def test_local_search_finds_callers_callees_and_assignments(tmp_path: Path) -> N
     assert any(
         "value = helper()" in item.quote for item in tool.assignments("value", ["src/model.py"])
     )
+
+
+def _subclass_need(relevant_symbols: list[str] | None = None) -> UnresolvedNeed:
+    return UnresolvedNeed(
+        description="Need subclass definitions that inherit from the requested base symbol.",
+        kind="coverage_gap",
+        need_type="subclass_lookup",
+        missing="Subclass definitions and their base-class relationship.",
+        scope="unknown",
+        relevant_symbols=relevant_symbols or ["QAOA"],
+        suggested_terms=["QAOA", "subclass", "inherit"],
+    )
+
+
+def test_close_resolved_needs_closes_subclass_lookup_once_scoped_evidence_exists() -> None:
+    need = _subclass_need(["QAOA"])
+    evidence = [
+        Evidence(
+            path="src/models/variational.py",
+            line_start=549,
+            line_end=575,
+            quote="class FALQON(QAOA):\n    pass",
+            reason="Subclass lookup for base symbol QAOA.",
+        )
+    ]
+
+    remaining = _close_resolved_needs([need], evidence, "What subclasses inherit from QAOA?")
+
+    assert remaining == []
+
+
+def test_close_resolved_needs_does_not_close_on_an_unrelated_base_class() -> None:
+    need = _subclass_need(["QAOA"])
+    evidence = [
+        Evidence(
+            path="src/models/other.py",
+            line_start=1,
+            line_end=2,
+            quote="class Widget(BaseComponent):\n    pass",
+            reason="Unrelated subclass in a different territory.",
+        )
+    ]
+
+    remaining = _close_resolved_needs([need], evidence, "What subclasses inherit from QAOA?")
+
+    assert remaining == [need]
+
+
+def test_close_resolved_needs_closes_implementation_location_on_scoped_definition() -> None:
+    need = UnresolvedNeed(
+        description="Need source implementation definitions, not only references or tests.",
+        kind="coverage_gap",
+        need_type="implementation_location",
+        missing="Source code definitions that implement the requested behavior.",
+        scope="unknown",
+        relevant_symbols=["render_gate_labels"],
+        suggested_terms=["render_gate_labels", "implementation"],
+    )
+    unrelated_evidence = [
+        Evidence(
+            path="src/other.py",
+            line_start=1,
+            line_end=2,
+            quote="def unrelated_helper():\n    return None",
+            reason="Different symbol.",
+        )
+    ]
+    matching_evidence = [
+        *unrelated_evidence,
+        Evidence(
+            path="src/models/renderer.py",
+            line_start=10,
+            line_end=11,
+            quote="def render_gate_labels():\n    return {'H': 'H'}",
+            reason="Definition for render_gate_labels.",
+        ),
+    ]
+
+    assert _close_resolved_needs(
+        [need], unrelated_evidence, "Where is render_gate_labels implemented?"
+    ) == [need]
+    assert (
+        _close_resolved_needs(
+            [need], matching_evidence, "Where is render_gate_labels implemented?"
+        )
+        == []
+    )
+
+
+def test_close_resolved_needs_never_auto_closes_absence_type_needs() -> None:
+    need = UnresolvedNeed(
+        description="Need grounded evidence for MissingVisualizer.",
+        kind="coverage_gap",
+        need_type="negative_presence",
+        missing="Grounded evidence for MissingVisualizer.",
+        scope="unknown",
+        relevant_symbols=["MissingVisualizer"],
+    )
+    plenty_of_unrelated_evidence = [
+        Evidence(
+            path="src/models/variational.py",
+            line_start=549,
+            line_end=575,
+            quote="class FALQON(QAOA):\n    def render_gate_labels(self):\n        return {}",
+            reason="Unrelated evidence should never resolve an absence claim.",
+        )
+    ]
+
+    remaining = _close_resolved_needs(
+        [need], plenty_of_unrelated_evidence, "Is MissingVisualizer implemented?"
+    )
+
+    assert remaining == [need]
+
+
+def test_merge_needs_deduplicates_same_gap_across_rounds() -> None:
+    first_round = [_subclass_need(["QAOA"])]
+    second_round = [_subclass_need(["QAOA", "FALQON"])]
+
+    merged = _merge_needs(first_round, second_round)
+
+    assert len(merged) == 1
+    assert sorted(merged[0].relevant_symbols) == ["FALQON", "QAOA"]
+
+
+class StaleSubclassNeedReasoner:
+    """Simulates an LLM reasoner that keeps flagging the same completeness
+    doubt about QAOA's subclasses every round and never notices on its own
+    that a later round's evidence has already grounded it. The coordinator's
+    own closure check -- not the reasoner -- is what must drop the need."""
+
+    def observe(self, *, question, worker_id, territory_id, evidence):
+        return WorkerObservation(
+            worker_id=worker_id,
+            territory_id=territory_id,
+            unresolved_needs=[
+                UnresolvedNeed(
+                    description="Need to confirm all subclasses of QAOA are covered.",
+                    kind="coverage_gap",
+                    need_type="subclass_lookup",
+                    missing="Subclass definitions and their base-class relationship.",
+                    scope="unknown",
+                    relevant_symbols=["QAOA"],
+                    suggested_terms=["QAOA", "subclass", "inherit"],
+                    suggested_territories=["variational subclasses"],
+                    source_worker_id=worker_id,
+                )
+            ],
+        )
+
+
+def test_subclass_lookup_need_closes_once_a_later_round_grounds_it(tmp_path: Path) -> None:
+    (tmp_path / "src" / "base").mkdir(parents=True)
+    (tmp_path / "src" / "variants").mkdir(parents=True)
+    (tmp_path / "src" / "base" / "qaoa.py").write_text(
+        "class QAOA:\n    pass\n", encoding="utf-8"
+    )
+    (tmp_path / "src" / "variants" / "falqon.py").write_text(
+        "class FALQON(QAOA):\n    pass\n", encoding="utf-8"
+    )
+    workers = [
+        WorkerCard(
+            id="worker-base",
+            territory_id="src-base",
+            name="base algorithms",
+            root="src/base",
+            searchable_terms=["QAOA"],
+            files=["src/base/qaoa.py"],
+        ),
+        WorkerCard(
+            id="worker-variants",
+            territory_id="src-variants",
+            name="variational subclasses",
+            root="src/variants",
+            searchable_terms=["FALQON"],
+            files=["src/variants/falqon.py"],
+        ),
+    ]
+
+    state = LocalCoordinator(
+        tmp_path, workers, reasoner=StaleSubclassNeedReasoner()
+    ).ask("What subclasses inherit from QAOA?", max_rounds=2)
+
+    assert state.rounds[0].selected_worker_ids == ["worker-base"]
+    assert state.rounds[1].selected_worker_ids == ["worker-variants"]
+    assert any(
+        "FALQON" in item.quote and "QAOA" in item.quote for item in state.evidence
+    )
+    assert not any(need.need_type == "subclass_lookup" for need in state.unresolved_needs)
+
+
+def test_reopen_referenced_evidence_pulls_a_larger_region(tmp_path: Path) -> None:
+    (tmp_path / "src").mkdir()
+    lines = [f"# filler {index}" for index in range(1, 41)]
+    lines[19] = "def target():"
+    lines[20] = "    return 1"
+    (tmp_path / "src" / "mod.py").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    search = LocalSearchTool(tmp_path)
+    narrow = Evidence(
+        path="src/mod.py",
+        line_start=18,
+        line_end=22,
+        quote="def target():\n    return 1",
+        reason="Initial narrow hit.",
+        worker_id="worker-a",
+    )
+    need = UnresolvedNeed(description="Need more context around target().", evidence_ids=["0"])
+
+    reopened = _reopen_referenced_evidence([need], [narrow], search, context_lines=15)
+
+    assert len(reopened) == 1
+    assert reopened[0].path == "src/mod.py"
+    assert reopened[0].worker_id == "worker-a"
+    assert (reopened[0].line_end - reopened[0].line_start) > (narrow.line_end - narrow.line_start)
+    assert "Reopened for coalition cross-check" in reopened[0].reason
+
+
+def test_reopen_referenced_evidence_ignores_invalid_or_out_of_range_ids(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "mod.py").write_text("x = 1\n", encoding="utf-8")
+    search = LocalSearchTool(tmp_path)
+    need = UnresolvedNeed(description="...", evidence_ids=["not-a-number", "99"])
+
+    assert _reopen_referenced_evidence([need], [], search) == []
+
+
+class CoalitionJointReasoner:
+    """Only worker-api raises the cross-territory need that triggers a
+    coalition; a distinct "coalition" territory_id call represents the joint
+    reasoning pass, referencing evidence index 0 to exercise the reopen path.
+    """
+
+    def observe(self, *, question, worker_id, territory_id, evidence):
+        if territory_id == "coalition":
+            return WorkerObservation(
+                worker_id=worker_id,
+                territory_id=territory_id,
+                unresolved_needs=[
+                    UnresolvedNeed(
+                        description="Need to confirm what submit_record forwards.",
+                        kind="missing_detail",
+                        scope="cross_territory",
+                        evidence_ids=["0"],
+                    )
+                ],
+            )
+        needs = []
+        if worker_id == "worker-api":
+            needs.append(
+                UnresolvedNeed(
+                    description="Need the persistence implementation.",
+                    kind="missing_implementation",
+                    suggested_terms=["persist_record"],
+                    suggested_territories=["storage"],
+                    scope="cross_territory",
+                    source_worker_id="worker-api",
+                )
+            )
+        return WorkerObservation(
+            worker_id=worker_id, territory_id=territory_id, unresolved_needs=needs
+        )
+
+
+def test_coalition_runs_joint_cross_check_and_reopens_referenced_evidence(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "api").mkdir()
+    (tmp_path / "storage").mkdir()
+    (tmp_path / "api" / "service.py").write_text(
+        "def submit_record():\n    return persist_record()\n", encoding="utf-8"
+    )
+    (tmp_path / "storage" / "repo.py").write_text(
+        "def persist_record():\n    return 'stored'\n", encoding="utf-8"
+    )
+    workers = [
+        WorkerCard(
+            id="worker-api",
+            territory_id="api",
+            name="api",
+            root="api",
+            searchable_terms=["submit"],
+            files=["api/service.py"],
+        ),
+        WorkerCard(
+            id="worker-storage",
+            territory_id="storage",
+            name="storage",
+            root="storage",
+            searchable_terms=["persist_record"],
+            files=["storage/repo.py"],
+        ),
+    ]
+
+    state = LocalCoordinator(tmp_path, workers, reasoner=CoalitionJointReasoner()).ask(
+        "How does submit work?", max_rounds=2
+    )
+
+    assert state.rounds[1].coalition_formed
+    coalition_observations = [
+        observation
+        for observation in state.rounds[1].observations
+        if observation.territory_id == "coalition"
+    ]
+    assert len(coalition_observations) == 1
+    assert coalition_observations[0].stop_reason == "coalition_cross_check"
+    assert any("Reopened for coalition cross-check" in item.reason for item in state.evidence)
+
+
+def test_relevant_symbol_weights_downweight_terms_common_across_the_colony() -> None:
+    qibo_workers = [
+        WorkerCard(
+            id=f"worker-qibo-{index}",
+            territory_id=f"qibo-{index}",
+            name=f"qibo module {index}",
+            root=f"src/qibo/mod{index}",
+            files=[f"src/qibo/mod{index}/file.py"],
+        )
+        for index in range(6)
+    ]
+    examples_worker = WorkerCard(
+        id="worker-examples-bloch",
+        territory_id="examples-bloch",
+        name="bloch example",
+        root="examples/bloch",
+        searchable_terms=["Bloch"],
+        files=["examples/bloch/plot.py"],
+    )
+    workers = [*qibo_workers, examples_worker]
+
+    weights = _relevant_symbol_weights({"Qibo", "Bloch"}, workers)
+
+    # "Qibo" matches 6 of 7 workers purely via the repo-name-in-every-path
+    # fallback and must be heavily discounted; "Bloch" matches exactly one
+    # worker for a real reason and must keep close to full weight.
+    assert weights["Qibo"] < weights["Bloch"]
+    assert weights["Bloch"] == 6
+
+
+def test_repo_name_matching_every_src_path_does_not_bury_the_real_match(
+    tmp_path: Path,
+) -> None:
+    for index in range(6):
+        (tmp_path / "src" / "qibo" / f"mod{index}").mkdir(parents=True)
+        (tmp_path / "src" / "qibo" / f"mod{index}" / "file.py").write_text(
+            "def unrelated():\n    return 1\n", encoding="utf-8"
+        )
+    (tmp_path / "examples" / "bloch").mkdir(parents=True)
+    (tmp_path / "examples" / "bloch" / "plot.py").write_text(
+        "def paint_bloch_sphere():\n    return 'bloch'\n", encoding="utf-8"
+    )
+    qibo_workers = [
+        WorkerCard(
+            id=f"worker-qibo-{index}",
+            territory_id=f"qibo-{index}",
+            name=f"qibo module {index}",
+            root=f"src/qibo/mod{index}",
+            searchable_terms=["qibo"],
+            files=[f"src/qibo/mod{index}/file.py"],
+        )
+        for index in range(6)
+    ]
+    examples_worker = WorkerCard(
+        id="worker-examples-bloch",
+        territory_id="examples-bloch",
+        name="bloch example",
+        root="examples/bloch",
+        searchable_terms=["Bloch", "paint_bloch_sphere"],
+        files=["examples/bloch/plot.py"],
+    )
+
+    state = LocalCoordinator(tmp_path, [*qibo_workers, examples_worker]).ask(
+        "How does Qibo's visualization render the Bloch sphere?", max_rounds=1
+    )
+
+    assert state.rounds[0].selected_worker_ids == ["worker-examples-bloch"]
+
+
+def test_inheritance_scan_finds_subclass_in_a_territory_never_recruited(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "base").mkdir()
+    (tmp_path / "other").mkdir()
+    (tmp_path / "base" / "qaoa.py").write_text("class QAOA:\n    pass\n", encoding="utf-8")
+    (tmp_path / "other" / "falqon.py").write_text(
+        "class FALQON(QAOA):\n    pass\n", encoding="utf-8"
+    )
+    workers = [
+        WorkerCard(
+            id="worker-base",
+            territory_id="base",
+            name="base",
+            root="base",
+            searchable_terms=["QAOA"],
+            files=["base/qaoa.py"],
+        ),
+        WorkerCard(
+            id="worker-other",
+            territory_id="other",
+            name="other",
+            root="other",
+            searchable_terms=["something_unrelated"],
+            files=["other/falqon.py"],
+        ),
+    ]
+
+    state = LocalCoordinator(tmp_path, workers).ask(
+        "What subclasses inherit from QAOA?", max_rounds=1
+    )
+
+    # Routing only ever recruited worker-base: worker-other's own terms don't
+    # match the question at all, so this evidence could only have come from
+    # the repo-wide completeness scan, not from need-conditioned recruitment.
+    assert [round_.selected_worker_ids for round_ in state.rounds] == [["worker-base"]]
+    assert any(
+        "FALQON" in item.quote and "QAOA" in item.quote for item in state.evidence
+    )
+    assert not any(need.need_type == "subclass_lookup" for need in state.unresolved_needs)
+    exhaustive_proofs = [proof for proof in state.absence_proofs if proof.exhaustive]
+    assert exhaustive_proofs
+    assert exhaustive_proofs[0].conclusion == "found_1_subclass"
+    assert "QAOA" in exhaustive_proofs[0].relevant_symbols

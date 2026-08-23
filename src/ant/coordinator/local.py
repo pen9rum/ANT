@@ -13,6 +13,7 @@ from ant.domain import (
     UnresolvedNeed,
     WorkerAction,
     WorkerCard,
+    WorkerObservation,
     WorkerRoutingScore,
 )
 from ant.memory import MemoryRoute
@@ -23,6 +24,13 @@ from ant.tools.path_prior import has_low_value_part, has_source_part, is_low_val
 from ant.workers import AutonomousWorker, WorkerRunConfig
 
 TOKEN_RE = re.compile(r"[A-Za-z][A-Za-z0-9_]{2,}")
+BASE_CLASS_RE = re.compile(r"\bclass\s+[A-Za-z_][A-Za-z0-9_]*\(([^)]*)\)")
+
+# need_type values that a heuristic evidence match is allowed to close outright.
+# Absence-shaped needs (negative_presence, unknown) are deliberately excluded:
+# not finding a symbol is never proof it does not exist, so closing those on a
+# heuristic match would let synthesis assert a false absence.
+_CLOSABLE_BY_EVIDENCE = {"subclass_lookup", "implementation_location", "source_test_coalition"}
 
 
 class LocalCoordinator:
@@ -44,7 +52,7 @@ class LocalCoordinator:
 
     def ask(self, question: str, max_rounds: int = 2) -> EvidenceState:
         evidence: list[Evidence] = []
-        unresolved_needs: list[UnresolvedNeed] = []
+        accumulated_needs: list[UnresolvedNeed] = []
         rounds: list[RecruitmentRound] = []
         seen_worker_ids: set[str] = set()
         query = question
@@ -77,11 +85,16 @@ class LocalCoordinator:
                 ]
                 observation.evidence = worker_evidence
                 evidence.extend(worker_evidence)
+                # Give the reasoner the full shared evidence state, not just this
+                # worker's own findings, so it does not re-raise a need another
+                # worker already grounded (e.g. worker B finding the subclass
+                # worker A's need was about).
+                reasoner_context = _dedupe_evidence([*worker_evidence, *evidence])
                 reasoner_observation = self.reasoner.observe(
                     question=question,
                     worker_id=worker.id,
                     territory_id=worker.territory_id,
-                    evidence=worker_evidence,
+                    evidence=reasoner_context,
                 )
                 observation.unresolved_needs.extend(reasoner_observation.unresolved_needs)
                 observations.append(observation)
@@ -96,6 +109,17 @@ class LocalCoordinator:
             )
             if coalition_formed:
                 _add_coalition_cross_checks(observations, evidence)
+                joint_observation = _run_coalition_cross_check(
+                    reasoner=self.reasoner,
+                    question=question,
+                    selected=selected,
+                    evidence=evidence,
+                    search=search,
+                )
+                if joint_observation is not None:
+                    observations.append(joint_observation)
+                    evidence.extend(joint_observation.evidence)
+                    round_needs.extend(joint_observation.unresolved_needs)
 
             rounds.append(
                 RecruitmentRound(
@@ -125,14 +149,37 @@ class LocalCoordinator:
                 )
             )
 
-            unresolved_needs = _normalize_coverage_needs(question, round_needs, self.workers)
-            pending = [need for need in round_needs if need.suggested_terms or need.description]
+            round_normalized = _normalize_coverage_needs(question, round_needs, self.workers)
+            accumulated_needs = _merge_needs(accumulated_needs, round_normalized)
+            # Re-check every open need against the evidence accumulated so far
+            # (across all rounds, not just this one) so a need raised early is
+            # dropped as soon as later evidence actually resolves it.
+            accumulated_needs = _close_resolved_needs(accumulated_needs, evidence, question)
+
+            pending = [
+                need for need in accumulated_needs if need.suggested_terms or need.description
+            ]
             if not pending:
                 break
             active_need = pending[0]
             query = self._query_from_needs(question, [active_need])
 
-        unresolved_needs.extend(_coverage_needs(question, evidence, unresolved_needs, self.workers))
+        # Inheritance is a global structural fact, not a territory-scoped one:
+        # recruitment routing only ever proves "this worker's own files have
+        # no more subclasses", never "the repository has no more subclasses
+        # elsewhere". Run one definitive scan across every indexed file so
+        # completeness claims are actually true instead of hedged.
+        inheritance_evidence, inheritance_proof = _verify_inheritance_completeness(
+            question, self.workers, search
+        )
+        if inheritance_evidence:
+            evidence = _dedupe_evidence([*evidence, *inheritance_evidence])
+
+        unresolved_needs = accumulated_needs
+        unresolved_needs = unresolved_needs + _coverage_needs(
+            question, evidence, unresolved_needs, self.workers
+        )
+        unresolved_needs = _close_resolved_needs(unresolved_needs, evidence, question)
 
         if not evidence and not unresolved_needs:
             unresolved_needs.append(
@@ -156,6 +203,10 @@ class LocalCoordinator:
                 )
             )
 
+        absence_proofs = _absence_proofs(question, rounds, unresolved_needs, self.workers)
+        if inheritance_proof is not None:
+            absence_proofs.append(inheritance_proof)
+
         answer = ""
         evidence = _rank_global_evidence(evidence, question)[:12]
         if self.synthesizer and evidence:
@@ -165,9 +216,12 @@ class LocalCoordinator:
                     question=question,
                     worker_ids=coalition_workers,
                     evidence=evidence[:12],
+                    absence_proofs=absence_proofs,
                 )
             else:
-                answer = self.synthesizer.synthesize(question=question, evidence=evidence[:12])
+                answer = self.synthesizer.synthesize(
+                    question=question, evidence=evidence[:12], absence_proofs=absence_proofs
+                )
         usage = (
             self.synthesizer.drain_usage() if isinstance(self.synthesizer, UsageReporter) else None
         )
@@ -178,7 +232,7 @@ class LocalCoordinator:
             evidence=evidence,
             unresolved_needs=unresolved_needs,
             rounds=rounds,
-            absence_proofs=_absence_proofs(question, rounds, unresolved_needs, self.workers),
+            absence_proofs=absence_proofs,
             usage=usage if isinstance(usage, TokenUsage) else TokenUsage(),
         )
 
@@ -208,6 +262,7 @@ class LocalCoordinator:
         query_terms = _term_set(query_text)
         suggested_terms = _term_set(" ".join(need.suggested_terms)) if need else set()
         relevant_symbols = _relevant_symbols(query_text, need)
+        symbol_weights = _relevant_symbol_weights(relevant_symbols, self.workers)
         implementation_intent = _asks_for_source_implementation_text(query_text)
         scored: list[tuple[WorkerRoutingScore, WorkerCard]] = []
         for worker in self.workers:
@@ -221,7 +276,8 @@ class LocalCoordinator:
             relevant_symbol_hits = sorted(
                 symbol for symbol in relevant_symbols if _matches_symbol(symbol, worker)
             )
-            score = len(query_hits) + len(suggested_term_hits) + (len(relevant_symbol_hits) * 6)
+            relevant_symbol_score = sum(symbol_weights[symbol] for symbol in relevant_symbol_hits)
+            score = len(query_hits) + len(suggested_term_hits) + relevant_symbol_score
             source_worker_bonus = 0
             if need and worker.id == need.source_worker_id:
                 local_overlap = len(suggested_term_hits) or len(query_hits)
@@ -378,6 +434,35 @@ def _matches_symbol(symbol: str, worker: WorkerCard) -> bool:
     return any(lowered in file.replace("\\", "/").lower() for file in worker.files)
 
 
+RELEVANT_SYMBOL_BASE_WEIGHT = 6
+
+
+def _relevant_symbol_weights(symbols: set[str], workers: list[WorkerCard]) -> dict[str, int]:
+    """Weight a relevant-symbol match inversely to how many workers it
+    matches, instead of a flat bonus per hit.
+
+    A symbol unique (or nearly so) to one worker -- a domain-specific
+    concept mentioned in exactly one README, say -- is a strong routing
+    signal and keeps close to full weight. A symbol that matches most of
+    the colony -- most often the repository's own package name, present in
+    literally every file path under a standard src/<pkg>/ layout via
+    `_matches_symbol`'s path-substring fallback -- carries almost no
+    discriminating power: it would otherwise inflate every such worker's
+    score by the same flat amount, systematically favoring whichever
+    workers also happen to pick up an unrelated bonus (like the source-path
+    bonus a src/ worker gets that an examples/ worker never does) purely
+    because their path contains the repo's own name, not because they are
+    actually relevant to the question. A fixed match-count cutoff would
+    need a different threshold per repository's directory layout; scaling
+    the weight continuously does not.
+    """
+    weights: dict[str, int] = {}
+    for symbol in symbols:
+        match_count = sum(1 for worker in workers if _matches_symbol(symbol, worker))
+        weights[symbol] = max(1, round(RELEVANT_SYMBOL_BASE_WEIGHT / max(1, match_count)))
+    return weights
+
+
 def _worker_terms(worker: WorkerCard) -> set[str]:
     terms = _term_set(" ".join([*worker.searchable_terms, worker.root, worker.name]))
     terms |= _term_set(
@@ -399,17 +484,33 @@ def _worker_terms(worker: WorkerCard) -> set[str]:
     return terms
 
 
+MIN_MEMORY_ROUTE_OVERLAP_RATIO = 1 / 3
+
+
 def _memory_route_bonus(
     worker: WorkerCard,
     query_terms: set[str],
     routes: list[MemoryRoute],
 ) -> int:
+    """A route recorded for one question can get replayed for a completely
+    different one that happens to share a single generic word (e.g. both
+    mention "quantum" in a quantum-computing repo). Requiring the overlap to
+    cover a real fraction of the route's own vocabulary -- not just be
+    non-empty -- is what tells "this new question is basically the same
+    need as before" apart from "these two unrelated questions both used one
+    common word". A route recorded from a narrow, single-term need (ratio
+    1.0 on an exact rematch) still gets full credit; a route whose need
+    covered a dozen words and shares only one with this query does not.
+    """
     bonus = 0
     for route in routes:
         route_terms = {term.lower() for term in route.need_terms}
-        if worker.id not in route.worker_ids or not (query_terms & route_terms):
+        if worker.id not in route.worker_ids or not route_terms:
             continue
-        bonus = max(bonus, min(12, round(route.weight * 4) + len(query_terms & route_terms)))
+        overlap = query_terms & route_terms
+        if not overlap or len(overlap) / len(route_terms) < MIN_MEMORY_ROUTE_OVERLAP_RATIO:
+            continue
+        bonus = max(bonus, min(12, round(route.weight * 4) + len(overlap)))
     return bonus
 
 
@@ -443,8 +544,11 @@ def _asks_for_source_implementation(need: UnresolvedNeed) -> bool:
 def _asks_for_source_implementation_text(text: str) -> bool:
     text = text.lower()
     indicators = [
-        "implementation",
-        "implemented",
+        # "implement" as a stem catches implement/implements/implementing/
+        # implementation/implemented -- "How does X implement Y" (no -ation
+        # or -ed suffix) previously matched none of the older, longer-form
+        # indicators and so never triggered the coverage-gap safety net.
+        "implement",
         "code path",
         "source code",
         "code location",
@@ -511,11 +615,10 @@ def _coverage_needs(
     needs = []
     existing_types = {need.need_type for need in existing_needs}
     question_symbols = sorted(_relevant_symbols(question))
-    evidence_text = "\n".join(item.quote for item in evidence)
     if (
         "subclass_lookup" not in existing_types
         and _asks_for_inheritance_text(question)
-        and not _has_subclass_evidence(evidence_text)
+        and not _has_subclass_evidence_for(set(question_symbols), evidence)
     ):
         needs.append(
             UnresolvedNeed(
@@ -689,8 +792,72 @@ def _asks_for_inheritance_text(text: str) -> bool:
     )
 
 
+def _verify_inheritance_completeness(
+    question: str,
+    workers: list[WorkerCard],
+    search: LocalSearchTool,
+) -> tuple[list[Evidence], AbsenceProof | None]:
+    """Run one definitive, repository-wide subclass lookup for an inheritance
+    question, instead of relying on whichever worker recruitment happened to
+    reach. `subclasses()` is an AST-index lookup, not a heuristic search, so
+    scanning the union of every worker's files (not just the routed worker's
+    territory) makes "these are all the subclasses" an actually-true claim,
+    and the resulting AbsenceProof gives the synthesizer real grounds to
+    state that instead of hedging about territories it never visited.
+    """
+    if not _asks_for_inheritance_text(question):
+        return [], None
+    symbols = sorted(_relevant_symbols(question))
+    if not symbols:
+        return [], None
+    all_files = sorted({file for worker in workers for file in worker.files})
+    if not all_files:
+        return [], None
+
+    found: list[Evidence] = []
+    for symbol in symbols:
+        found.extend(search.subclasses(symbol, all_files, limit=50))
+    found = _dedupe_evidence(found)
+
+    proof = AbsenceProof(
+        query=question,
+        relevant_symbols=symbols,
+        searched_worker_ids=sorted(worker.id for worker in workers),
+        searched_territories=sorted({worker.territory_id for worker in workers}),
+        searched_paths=all_files,
+        tools=["subclasses"],
+        exhaustive=True,
+        conclusion=(
+            f"found_{len(found)}_subclass{'es' if len(found) != 1 else ''}"
+            if found
+            else "not_found"
+        ),
+    )
+    return found, proof
+
+
 def _has_subclass_evidence(text: str) -> bool:
     return bool(re.search(r"\bclass\s+[A-Za-z_][A-Za-z0-9_]*\([^)]*[A-Za-z_]", text))
+
+
+def _has_subclass_evidence_for(candidates: set[str], evidence: list[Evidence]) -> bool:
+    """True if evidence contains a class definition whose base matches a candidate.
+
+    Scoped matching (base name equals one of `candidates`) is preferred over the
+    generic "some class has some base" check so that evidence for an unrelated
+    base class cannot be mistaken for coverage of the base the need is about.
+    Falls back to the generic check only when no specific base symbol is known.
+    """
+    if not candidates:
+        return any(_has_subclass_evidence(item.quote) for item in evidence)
+    lowered = {candidate.lower() for candidate in candidates}
+    for item in evidence:
+        for bases in BASE_CLASS_RE.findall(item.quote):
+            for base in bases.split(","):
+                base_name = base.strip().split(".")[-1]
+                if base_name.lower() in lowered:
+                    return True
+    return False
 
 
 def _has_source_definition_evidence(evidence: list[Evidence]) -> bool:
@@ -700,6 +867,107 @@ def _has_source_definition_evidence(evidence: list[Evidence]) -> bool:
         and ("class " in item.quote or "def " in item.quote)
         for item in evidence
     )
+
+
+def _has_source_definition_evidence_for(candidates: set[str], evidence: list[Evidence]) -> bool:
+    """Scoped variant of `_has_source_definition_evidence`: the definition must
+    actually define one of `candidates`, not merely sit near source-looking code."""
+    if not candidates:
+        return _has_source_definition_evidence(evidence)
+    for item in evidence:
+        if not has_source_part(item.path) or has_low_value_part(item.path):
+            continue
+        quote = item.quote
+        if "class " not in quote and "def " not in quote:
+            continue
+        if any(_symbol_defined_in_quote(candidate, quote) for candidate in candidates):
+            return True
+    return False
+
+
+def _symbol_defined_in_quote(symbol: str, quote: str) -> bool:
+    return bool(re.search(rf"\b(?:class|def)\s+{re.escape(symbol)}\b", quote))
+
+
+def _need_symbol_candidates(need: UnresolvedNeed, question: str) -> set[str]:
+    return _relevant_symbols(f"{_need_query_text(need)} {question}", need)
+
+
+def _is_need_satisfied(need: UnresolvedNeed, evidence: list[Evidence], question: str) -> bool:
+    if need.need_type not in _CLOSABLE_BY_EVIDENCE:
+        return False
+    candidates = _need_symbol_candidates(need, question)
+    if need.need_type == "subclass_lookup":
+        return _has_subclass_evidence_for(candidates, evidence)
+    if need.need_type == "implementation_location":
+        return _has_source_definition_evidence_for(candidates, evidence)
+    if need.need_type == "source_test_coalition":
+        return _has_source_definition_evidence(evidence) and any(
+            _is_test_evidence(item) for item in evidence
+        )
+    return False
+
+
+def _close_resolved_needs(
+    needs: list[UnresolvedNeed],
+    evidence: list[Evidence],
+    question: str,
+) -> list[UnresolvedNeed]:
+    """Drop needs whose target evidence is now present in the cumulative evidence
+    state. Re-run after every round so a need raised while evidence was sparse
+    does not linger once a later round (possibly from a different worker)
+    actually grounds it."""
+    return [need for need in needs if not _is_need_satisfied(need, evidence, question)]
+
+
+def _need_identity(need: UnresolvedNeed) -> tuple[str, str]:
+    text = (need.missing or need.description or "").strip().lower()
+    return (need.need_type, text)
+
+
+def _merge_needs(
+    existing: list[UnresolvedNeed],
+    new_needs: list[UnresolvedNeed],
+) -> list[UnresolvedNeed]:
+    """Accumulate needs across rounds instead of overwriting. A need that keeps
+    getting re-raised for the same reason is merged (union of symbols/terms)
+    rather than duplicated, so a stale reasoner that never self-closes a need
+    does not flood the final list with repeats of the same gap."""
+    merged = list(existing)
+    index_by_key = {_need_identity(need): index for index, need in enumerate(merged)}
+    for need in new_needs:
+        key = _need_identity(need)
+        if key in index_by_key:
+            merged[index_by_key[key]] = _merge_need_pair(merged[index_by_key[key]], need)
+        else:
+            index_by_key[key] = len(merged)
+            merged.append(need)
+    return merged
+
+
+def _merge_need_pair(old: UnresolvedNeed, new: UnresolvedNeed) -> UnresolvedNeed:
+    return new.model_copy(
+        update={
+            "relevant_symbols": sorted(set(old.relevant_symbols) | set(new.relevant_symbols)),
+            "suggested_terms": sorted(set(old.suggested_terms) | set(new.suggested_terms)),
+            "suggested_territories": sorted(
+                set(old.suggested_territories) | set(new.suggested_territories)
+            ),
+            "evidence_ids": sorted(set(old.evidence_ids) | set(new.evidence_ids)),
+        }
+    )
+
+
+def _dedupe_evidence(evidence: list[Evidence]) -> list[Evidence]:
+    seen: set[tuple[str, int, int, str]] = set()
+    deduped = []
+    for item in evidence:
+        key = (item.path, item.line_start, item.line_end, item.quote)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(item)
+    return deduped
 
 
 def _last_coalition_workers(rounds: list[RecruitmentRound]) -> list[str]:
@@ -739,3 +1007,77 @@ def _add_coalition_cross_checks(observations, prior_evidence: list[Evidence]) ->
                 rationale="One-pass coalition cross-check against peer evidence claims.",
             )
         )
+
+
+def _run_coalition_cross_check(
+    *,
+    reasoner: WorkerReasoner,
+    question: str,
+    selected: list[WorkerCard],
+    evidence: list[Evidence],
+    search: LocalSearchTool,
+) -> WorkerObservation | None:
+    """Coalitions exist to reason jointly across territories, not just to log
+    that a cross-check happened. Run one real reasoning pass over the pooled
+    coalition evidence so the reasoner can catch a conflict or an
+    under-specified claim between peers' evidence that no single worker would
+    see on its own; if it flags a gap tied to a specific piece of evidence,
+    reopen that evidence's full source region (Evidence Compression Is
+    Reversible) instead of only trusting the compressed quote already held.
+    """
+    joint_evidence = _dedupe_evidence(evidence)
+    coalition_worker_id = "coalition:" + "-".join(sorted(worker.id for worker in selected))
+    joint_observation = reasoner.observe(
+        question=question,
+        worker_id=coalition_worker_id,
+        territory_id="coalition",
+        evidence=joint_evidence,
+    )
+    if not joint_observation.unresolved_needs:
+        return None
+    reopened = _reopen_referenced_evidence(
+        joint_observation.unresolved_needs, joint_evidence, search
+    )
+    return WorkerObservation(
+        worker_id=coalition_worker_id,
+        territory_id="coalition",
+        evidence=reopened,
+        unresolved_needs=joint_observation.unresolved_needs,
+        stop_reason="coalition_cross_check",
+    )
+
+
+def _reopen_referenced_evidence(
+    needs: list[UnresolvedNeed],
+    evidence_pool: list[Evidence],
+    search: LocalSearchTool,
+    context_lines: int = 30,
+) -> list[Evidence]:
+    reopened: list[Evidence] = []
+    seen: set[tuple[str, int]] = set()
+    for need in needs:
+        for raw_index in need.evidence_ids:
+            try:
+                index = int(raw_index)
+            except ValueError:
+                continue
+            if not (0 <= index < len(evidence_pool)):
+                continue
+            source = evidence_pool[index]
+            key = (source.path, source.line_start)
+            if key in seen:
+                continue
+            seen.add(key)
+            try:
+                region = search.read_region(source.path, source.line_start, context_lines)
+            except OSError:
+                continue
+            reopened.append(
+                region.model_copy(
+                    update={
+                        "worker_id": source.worker_id,
+                        "reason": f"Reopened for coalition cross-check: {source.reason}".strip(),
+                    }
+                )
+            )
+    return reopened

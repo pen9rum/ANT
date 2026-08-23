@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Protocol, runtime_checkable
 
-from ant.domain import Evidence, WorkerCard, WorkerObservation
+from ant.domain import AbsenceProof, Evidence, WorkerCard, WorkerObservation
 
 
 class WorkerReasoner(Protocol):
@@ -27,7 +27,13 @@ class CardGenerator(Protocol):
 
 
 class AnswerSynthesizer(Protocol):
-    def synthesize(self, *, question: str, evidence: list[Evidence]) -> str: ...
+    def synthesize(
+        self,
+        *,
+        question: str,
+        evidence: list[Evidence],
+        absence_proofs: list[AbsenceProof] | None = None,
+    ) -> str: ...
 
     def synthesize_coalition(
         self,
@@ -35,6 +41,7 @@ class AnswerSynthesizer(Protocol):
         question: str,
         worker_ids: list[str],
         evidence: list[Evidence],
+        absence_proofs: list[AbsenceProof] | None = None,
     ) -> str: ...
 
 

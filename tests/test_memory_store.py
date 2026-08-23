@@ -3,8 +3,17 @@ from pathlib import Path
 from typer.testing import CliRunner
 
 from ant.cli import app
-from ant.domain import CodeSymbol, EvidenceState, Territory, WorkerCard
+from ant.domain import (
+    CodeSymbol,
+    Evidence,
+    EvidenceState,
+    RecruitmentRound,
+    Territory,
+    UnresolvedNeed,
+    WorkerCard,
+)
 from ant.memory import ColonyMemoryStore, IndexStore, MemoryRoute
+from ant.memory.colony import CoalitionRecord, record_task_memory
 
 
 def test_index_store_persists_workers_and_traces(tmp_path: Path) -> None:
@@ -64,3 +73,155 @@ def test_colony_memory_returns_matching_routes(tmp_path: Path) -> None:
 
     assert len(routes) == 1
     assert routes[0].worker_ids == ["worker-backends"]
+
+
+def test_mark_stale_hides_route_until_revalidated(tmp_path: Path) -> None:
+    memory = ColonyMemoryStore(tmp_path)
+    memory.save_route(
+        MemoryRoute(need_terms=["auth"], worker_ids=["worker-auth"], weight=2.0)
+    )
+
+    marked = memory.mark_stale(["worker-auth"])
+
+    assert marked == 1
+    assert memory.matching_routes(["auth"]) == []
+
+    outcome = memory.revalidate_stale({"worker-auth"})
+
+    assert outcome == {"refreshed": 1, "repaired": 0, "discarded": 0}
+    assert memory.matching_routes(["auth"])[0].worker_ids == ["worker-auth"]
+
+
+def test_revalidate_repairs_multi_worker_route_when_one_worker_survives(
+    tmp_path: Path,
+) -> None:
+    memory = ColonyMemoryStore(tmp_path)
+    memory.save_route(
+        MemoryRoute(
+            need_terms=["auth"],
+            worker_ids=["worker-auth", "worker-session"],
+            weight=2.0,
+        )
+    )
+    memory.mark_stale(["worker-session"])
+
+    outcome = memory.revalidate_stale({"worker-auth"})
+
+    assert outcome == {"refreshed": 0, "repaired": 1, "discarded": 0}
+    assert memory.matching_routes(["auth"])[0].worker_ids == ["worker-auth"]
+
+
+def test_revalidate_discards_route_when_no_workers_survive(tmp_path: Path) -> None:
+    memory = ColonyMemoryStore(tmp_path)
+    memory.save_route(
+        MemoryRoute(need_terms=["auth"], worker_ids=["worker-auth"], weight=2.0)
+    )
+    memory.mark_stale(["worker-auth"])
+
+    outcome = memory.revalidate_stale(set())
+
+    assert outcome == {"refreshed": 0, "repaired": 0, "discarded": 1}
+    assert memory.matching_routes(["auth"]) == []
+
+
+def test_recurring_coalitions_excludes_stale_entries_until_revalidated(
+    tmp_path: Path,
+) -> None:
+    memory = ColonyMemoryStore(tmp_path)
+    for _ in range(2):
+        memory.record_coalition(
+            CoalitionRecord(
+                worker_ids=["worker-auth", "worker-session"],
+                question="How does auth use sessions?",
+                evidence_count=4,
+                unresolved_need_count=0,
+            )
+        )
+
+    assert memory.recurring_coalitions(min_count=2) == [
+        (["worker-auth", "worker-session"], 2)
+    ]
+
+    memory.mark_stale(["worker-session"])
+
+    assert memory.recurring_coalitions(min_count=2) == []
+
+    memory.revalidate_stale({"worker-auth", "worker-session"})
+
+    assert memory.recurring_coalitions(min_count=2) == [
+        (["worker-auth", "worker-session"], 2)
+    ]
+
+
+def _round(
+    *, selected: list[str], coalition_formed: bool, round_index: int = 0
+) -> RecruitmentRound:
+    return RecruitmentRound(
+        round_index=round_index,
+        query="q",
+        selected_worker_ids=selected,
+        rationale="test round",
+        coalition_formed=coalition_formed,
+    )
+
+
+def test_record_task_memory_records_coalition_and_high_quality_route(
+    tmp_path: Path,
+) -> None:
+    memory = ColonyMemoryStore(tmp_path)
+    state = EvidenceState(
+        question="How does auth use sessions?",
+        evidence=[
+            Evidence(
+                path="src/auth.py",
+                line_start=1,
+                line_end=2,
+                quote="def authenticate(): ...",
+                reason="definition",
+            )
+        ],
+        rounds=[
+            _round(selected=["worker-auth"], coalition_formed=False, round_index=0),
+            _round(selected=["worker-session"], coalition_formed=True, round_index=1),
+        ],
+    )
+
+    record_task_memory(memory, state.question, state)
+
+    # The coalition record reflects the FULL membership -- the worker
+    # selected this round plus every worker selected in earlier rounds of
+    # the same task -- not just this round's own single new recruit, since
+    # evolve_workers' recurring-coalition birth requires >=2 members and
+    # would never fire on a single-worker "coalition". The route separately
+    # reflects the full accumulated path across every round of the task.
+    assert memory.recurring_coalitions(min_count=1) == [
+        (["worker-auth", "worker-session"], 1)
+    ]
+    routes = memory.matching_routes(["auth", "sessions"])
+    assert routes and routes[0].worker_ids == ["worker-auth", "worker-session"]
+
+
+def test_record_task_memory_skips_route_when_unresolved_needs_remain(
+    tmp_path: Path,
+) -> None:
+    memory = ColonyMemoryStore(tmp_path)
+    state = EvidenceState(
+        question="How does auth use sessions?",
+        evidence=[
+            Evidence(
+                path="src/auth.py",
+                line_start=1,
+                line_end=2,
+                quote="def authenticate(): ...",
+                reason="definition",
+            )
+        ],
+        unresolved_needs=[
+            UnresolvedNeed(description="Still missing the session refresh path.")
+        ],
+        rounds=[_round(selected=["worker-auth"], coalition_formed=False)],
+    )
+
+    record_task_memory(memory, state.question, state)
+
+    assert memory.matching_routes(["auth", "sessions"]) == []
