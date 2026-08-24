@@ -236,18 +236,18 @@ def test_build_and_cache_in_background_does_not_duplicate_an_inflight_build(
     assert len(calls) == 1
 
 
-def test_warm_dense_cache_builds_only_the_missing_territories_synchronously(
+def test_warm_dense_cache_only_embeds_files_missing_from_the_shared_index(
     tmp_path: Path,
 ) -> None:
     # Regression test: right after evolve_workers specializes/births several
-    # new workers at once, each needing its own from-scratch embedding
-    # build, letting them all go through the lazy per-query background path
-    # meant one build's territory could still be uncached many minutes into
-    # an eval pass (confirmed: contention from several concurrent builds
-    # made none of them finish in time). warm_dense_cache exists as an
-    # explicit, synchronous "make sure everything's built" checkpoint an
-    # experiment can call once, deterministically, instead of hoping the
-    # background queue gets far enough during a time-boxed eval pass.
+    # new workers at once, each needing embeddings, letting them all go
+    # through the lazy per-query background path meant one build could
+    # still be uncached many minutes into an eval pass (confirmed:
+    # contention from several concurrent builds made none of them finish in
+    # time). warm_dense_cache exists as an explicit, synchronous "make sure
+    # everything's built" checkpoint an experiment can call once,
+    # deterministically, instead of hoping the background queue gets far
+    # enough during a time-boxed eval pass.
     (tmp_path / "src").mkdir()
     (tmp_path / "src" / "a.py").write_text("def f():\n    return 1\n", encoding="utf-8")
     (tmp_path / "src" / "b.py").write_text("def g():\n    return 2\n", encoding="utf-8")
@@ -260,20 +260,63 @@ def test_warm_dense_cache_builds_only_the_missing_territories_synchronously(
         id="worker-b", territory_id="b", name="b", root="src", files=["src/b.py"]
     )
 
-    # Pre-warm worker-a only, synchronously, so it's already cached.
+    # Pre-warm the shared index with worker-a's file only.
     index_a = build_embedding_index(tmp_path, worker_a.files, _FakeEmbedder())
-    index_a.save(dense_dir, dense_module.territory_key(worker_a.files))
+    index_a.save(dense_dir, dense_module.REPO_INDEX_KEY)
 
     built = warm_dense_cache(tmp_path, dense_dir, [worker_a, worker_b], _FakeEmbedder())
 
     assert built == ["worker-b"]
-    assert EmbeddingIndex.load(dense_dir, dense_module.territory_key(worker_b.files)) is not None
+    updated = EmbeddingIndex.load(dense_dir, dense_module.REPO_INDEX_KEY)
+    assert updated is not None
+    assert {entry.path for entry in updated.entries} == {"src/a.py", "src/b.py"}
 
 
-def test_dense_search_returns_empty_immediately_for_an_uncached_territory(
+def test_warm_dense_cache_embeds_a_file_shared_by_two_workers_only_once(
+    tmp_path: Path,
+) -> None:
+    # The motivating scenario for the shared, repo-wide index: a
+    # birth/coalition worker's territory is the union of two existing
+    # workers' files, so most of its files were already embedded once under
+    # a sibling worker. Keying the cache per worker used to re-embed those
+    # shared files from scratch under the new worker's own cache key.
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "a.py").write_text("def f():\n    return 1\n", encoding="utf-8")
+    (tmp_path / "src" / "b.py").write_text("def g():\n    return 2\n", encoding="utf-8")
+    dense_dir = tmp_path / "dense"
+
+    worker_a = WorkerCard(id="worker-a", territory_id="a", name="a", root="src", files=["src/a.py"])
+    worker_bridge = WorkerCard(
+        id="worker-bridge",
+        territory_id="bridge",
+        name="bridge",
+        root="src",
+        files=["src/a.py", "src/b.py"],
+    )
+
+    calls: list[list[str]] = []
+
+    class _CountingEmbedder(_FakeEmbedder):
+        def embed(self, texts: list[str]) -> list[list[float]]:
+            calls.append(list(texts))
+            return super().embed(texts)
+
+    embedder = _CountingEmbedder()
+    warm_dense_cache(tmp_path, dense_dir, [worker_a], embedder)
+    embedded_after_first_warm = sum(len(batch) for batch in calls)
+
+    warm_dense_cache(tmp_path, dense_dir, [worker_bridge], embedder)
+    embedded_after_second_warm = sum(len(batch) for batch in calls) - embedded_after_first_warm
+
+    # Only src/b.py's one symbol should have been embedded the second time
+    # around -- src/a.py's symbol was already in the shared index.
+    assert embedded_after_second_warm == 1
+
+
+def test_dense_search_returns_empty_immediately_for_uncached_files(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # The whole point of the background-build design: a territory nobody has
+    # The whole point of the background-build design: files nobody has
     # queried before must never make *this* query wait on the build.
     (tmp_path / "src").mkdir()
     (tmp_path / "src" / "a.py").write_text("def f():\n    return 1\n", encoding="utf-8")
@@ -289,5 +332,37 @@ def test_dense_search_returns_empty_immediately_for_an_uncached_territory(
         if (index_path / "dense").exists():
             break
         time.sleep(0.05)
-    key = dense_module.territory_key(["src/a.py"])
-    assert EmbeddingIndex.load(index_path / "dense", key) is not None
+    updated = EmbeddingIndex.load(index_path / "dense", dense_module.REPO_INDEX_KEY)
+    assert updated is not None
+    assert {entry.path for entry in updated.entries} == {"src/a.py"}
+
+
+def test_dense_search_never_returns_evidence_outside_the_calling_workers_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The shared index spans the whole repo, but a worker must only ever
+    # receive evidence from its own territory -- otherwise dense retrieval
+    # would quietly let a query bypass recruitment/routing entirely, which
+    # is exactly the "just embed everything" shortcut the architecture is
+    # designed not to be (see ant.retrieval.dense's module docstring).
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "a.py").write_text(
+        "def set_seed(seed):\n    return seed\n", encoding="utf-8"
+    )
+    (tmp_path / "src" / "b.py").write_text(
+        "def set_seed_elsewhere(seed):\n    return seed\n", encoding="utf-8"
+    )
+    index_path = tmp_path / ".ant"
+    index_path.mkdir()
+    dense_dir = index_path / "dense"
+
+    embedder = _FakeEmbedder()
+    shared = build_embedding_index(tmp_path, ["src/a.py", "src/b.py"], embedder)
+    shared.save(dense_dir, dense_module.REPO_INDEX_KEY)
+
+    monkeypatch.setattr(local_module, "get_shared_embedder", lambda: embedder)
+    tool = LocalSearchTool(tmp_path, index_path=index_path)
+
+    hits = tool.dense_search("set_seed", ["src/a.py"])
+
+    assert [hit.path for hit in hits] == ["src/a.py"]

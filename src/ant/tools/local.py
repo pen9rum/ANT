@@ -17,10 +17,10 @@ from ant.domain import Evidence
 # package's __init__ finishes.
 from ant.retrieval.bm25 import BM25Index
 from ant.retrieval.dense import (
+    REPO_INDEX_KEY,
     EmbeddingIndex,
     build_and_cache_in_background,
     get_shared_embedder,
-    territory_key,
 )
 from ant.retrieval.relevance import TOKEN_RE, extract_terms, score_evidence
 from ant.tools.path_prior import has_low_value_part, has_source_part, is_low_value_path
@@ -44,10 +44,10 @@ class LocalSearchTool:
         compare=False,
         repr=False,
     )
-    # Keyed by territory_key(files) -- one entry per distinct worker file
-    # scope this instance has actually been asked to dense_search, not one
-    # entry for the whole repo. In-process cache only; the disk-backed cache
-    # under index_path/dense/ is what survives across process runs.
+    # Keyed by REPO_INDEX_KEY only -- one shared, repo-wide embedding index,
+    # not one per worker file scope (see ant.retrieval.dense's module
+    # docstring). In-process cache only; the disk-backed cache under
+    # index_path/dense/ is what survives across process runs.
     _embedding_index_cache: dict[str, EmbeddingIndex | None] = field(
         default_factory=dict,
         init=False,
@@ -169,17 +169,23 @@ class LocalSearchTool:
         lexical overlap with `query` at all, by embedding similarity instead
         of term matching.
 
-        Chunk embeddings are built lazily per worker territory, not
-        precomputed for the whole repo at `ant index` time, and at
-        symbol-level granularity rather than one embedding per paragraph
-        region (see build_embedding_index) -- but a territory can still be
-        large enough that even that first build takes a while. Rather than
-        block this round's query on it, an uncached territory returns []
-        immediately and the build runs on a background thread, cached to
-        disk under index_path/dense/ for every later call (from any
-        process) to pick up once it lands. A query is never worse off than
-        "dense retrieval wasn't available yet for this territory" -- it can
-        never become "this query now waits N minutes."
+        Chunk embeddings are built lazily, shared across every worker's
+        territory (one repo-wide index, see ant.retrieval.dense's module
+        docstring), at symbol-level granularity rather than one embedding
+        per paragraph region (see build_embedding_index) -- but embedding a
+        worker's files for the first time can still take a while. Rather
+        than block this round's query on it, an uncached file returns []
+        immediately (or whatever's already cached, filtered to `files`) and
+        the build runs on a background thread, cached to disk under
+        index_path/dense/ for every later call (from any process) to pick
+        up once it lands. A query is never worse off than "dense retrieval
+        wasn't available yet for these files" -- it can never become "this
+        query now waits N minutes."
+
+        Results are restricted to `files` via EmbeddingIndex.search's
+        `paths` filter even though the underlying index spans the whole
+        repo: a worker must never receive evidence from outside its own
+        territory just because the shared index happens to contain it.
 
         Returns [] whenever no embedder is available (fastembed not
         installed) rather than erroring, so every existing caller keeps
@@ -191,19 +197,22 @@ class LocalSearchTool:
         if embedder is None:
             return []
 
-        key = territory_key(files)
-        if key not in self._embedding_index_cache:
-            dense_dir = self.index_path / "dense"
-            index = EmbeddingIndex.load(dense_dir, key)
-            if index is None:
-                build_and_cache_in_background(self.repo_root, files, dense_dir, key, embedder)
-            self._embedding_index_cache[key] = index
-        index = self._embedding_index_cache[key]
+        dense_dir = self.index_path / "dense"
+        if REPO_INDEX_KEY not in self._embedding_index_cache:
+            loaded = EmbeddingIndex.load(dense_dir, REPO_INDEX_KEY)
+            self._embedding_index_cache[REPO_INDEX_KEY] = loaded
+        index = self._embedding_index_cache[REPO_INDEX_KEY]
+
+        covered = {entry.path for entry in index.entries} if index else set()
+        if any(f not in covered for f in files):
+            build_and_cache_in_background(
+                self.repo_root, files, dense_dir, REPO_INDEX_KEY, embedder
+            )
         if index is None:
             return []
 
         [query_vector] = embedder.embed([query])
-        hits = index.search(query_vector, limit=limit)
+        hits = index.search(query_vector, limit=limit, paths=set(files))
         return [
             Evidence(
                 path=entry.path,
