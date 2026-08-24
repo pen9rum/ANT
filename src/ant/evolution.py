@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field
 from ant.domain import Territory, WorkerCard
 from ant.memory import ColonyMemoryStore, IndexStore
 from ant.memory.colony import MemoryRoute
+from ant.scoring_config import DEFAULT_SCORING_CONFIG
 
 TOKEN_RE = re.compile(r"[A-Za-z][A-Za-z0-9_]{2,}")
 
@@ -27,11 +28,13 @@ class EvolutionResult(BaseModel):
 
 def evolve_workers(
     index_path: Path,
-    min_coalition_count: int = 2,
+    min_coalition_count: int = DEFAULT_SCORING_CONFIG.evolution.min_coalition_count,
     retire_empty: bool = True,
-    merge_overlap: float = 0.9,
-    min_specialization_routes: int = 4,
-    min_specialization_group_routes: int = 2,
+    merge_overlap: float = DEFAULT_SCORING_CONFIG.evolution.merge_overlap_threshold,
+    min_specialization_routes: int = DEFAULT_SCORING_CONFIG.evolution.min_specialization_routes,
+    min_specialization_group_routes: int = (
+        DEFAULT_SCORING_CONFIG.evolution.min_specialization_group_routes
+    ),
 ) -> EvolutionResult:
     store = IndexStore(index_path)
     memory = ColonyMemoryStore(index_path)

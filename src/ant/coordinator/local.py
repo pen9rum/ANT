@@ -20,6 +20,7 @@ from ant.memory import MemoryRoute
 from ant.providers import AnswerSynthesizer, MockLLMProvider, UsageReporter, WorkerReasoner
 from ant.retrieval import STOP_WORDS, TOKEN_RE, extract_terms, is_stem_match, score_evidence
 from ant.retrieval.dense import WORKER_CARDS_KEY, EmbeddingIndex, get_shared_embedder
+from ant.scoring_config import DEFAULT_SCORING_CONFIG
 from ant.tools import LocalSearchTool
 from ant.tools.path_prior import has_low_value_part, has_source_part
 from ant.workers import AutonomousWorker, WorkerRunConfig
@@ -307,11 +308,16 @@ class LocalCoordinator:
             )
             relevant_symbol_score = sum(symbol_weights[symbol] for symbol in relevant_symbol_hits)
             score = len(query_hits) + len(suggested_term_hits) + relevant_symbol_score
+            routing_config = DEFAULT_SCORING_CONFIG.routing
             source_worker_bonus = 0
             if need and worker.id == need.source_worker_id:
                 local_overlap = len(suggested_term_hits) or len(query_hits)
-                source_worker_bonus = 8 if need.scope == "local" else 1
-                source_worker_bonus += min(local_overlap, 4)
+                source_worker_bonus = (
+                    routing_config.source_worker_local_bonus
+                    if need.scope == "local"
+                    else routing_config.source_worker_global_bonus
+                )
+                source_worker_bonus += min(local_overlap, routing_config.source_worker_overlap_cap)
                 score += source_worker_bonus
             territory_hint_score = 0
             test_path_penalty = 0
@@ -324,9 +330,13 @@ class LocalCoordinator:
             seen_worker_penalty = 0
             if worker.id in seen_worker_ids:
                 if need and worker.id == need.source_worker_id:
-                    seen_worker_penalty = 2 if need.scope == "local" else 8
+                    seen_worker_penalty = (
+                        routing_config.seen_worker_local_penalty
+                        if need.scope == "local"
+                        else routing_config.seen_worker_global_penalty
+                    )
                 elif need is None:
-                    seen_worker_penalty = 4
+                    seen_worker_penalty = routing_config.seen_worker_no_need_penalty
                 score -= seen_worker_penalty
             source_path_bonus = 0
             if score > 0 or implementation_intent:
@@ -340,7 +350,9 @@ class LocalCoordinator:
             # still gets a real (if modest) push -- catches the case where
             # every lexical signal here is zero purely because the query's
             # wording happens not to overlap this worker's card.
-            dense_routing_bonus = round(dense_scores.get(worker.id, 0.0) * 10)
+            dense_routing_bonus = round(
+                dense_scores.get(worker.id, 0.0) * routing_config.dense_routing_weight
+            )
             score += dense_routing_bonus
             scored.append(
                 (
@@ -383,7 +395,11 @@ class LocalCoordinator:
         first, second = candidates[:2]
         first_score = self._worker_score(first, question)
         second_score = self._worker_score(second, question)
-        genuinely_close = first_score > 0 and second_score >= first_score * 0.9
+        genuinely_close = (
+            first_score > 0
+            and second_score
+            >= first_score * DEFAULT_SCORING_CONFIG.routing.initial_worker_closeness_ratio
+        )
         complementary = first.territory_id != second.territory_id
         return candidates[:2] if genuinely_close and complementary else candidates[:1]
 
@@ -482,9 +498,6 @@ def _matches_symbol(symbol: str, worker: WorkerCard) -> bool:
     return any(lowered in file.replace("\\", "/").lower() for file in worker.files)
 
 
-RELEVANT_SYMBOL_BASE_WEIGHT = 6
-
-
 def _relevant_symbol_weights(symbols: set[str], workers: list[WorkerCard]) -> dict[str, int]:
     """Weight a relevant-symbol match inversely to how many workers it
     matches, instead of a flat bonus per hit.
@@ -504,10 +517,11 @@ def _relevant_symbol_weights(symbols: set[str], workers: list[WorkerCard]) -> di
     need a different threshold per repository's directory layout; scaling
     the weight continuously does not.
     """
+    base_weight = DEFAULT_SCORING_CONFIG.routing.relevant_symbol_base_weight
     weights: dict[str, int] = {}
     for symbol in symbols:
         match_count = sum(1 for worker in workers if _matches_symbol(symbol, worker))
-        weights[symbol] = max(1, round(RELEVANT_SYMBOL_BASE_WEIGHT / max(1, match_count)))
+        weights[symbol] = max(1, round(base_weight / max(1, match_count)))
     return weights
 
 
@@ -532,9 +546,6 @@ def _worker_terms(worker: WorkerCard) -> set[str]:
     return terms
 
 
-MIN_MEMORY_ROUTE_OVERLAP_RATIO = 1 / 3
-
-
 def _memory_route_bonus(
     worker: WorkerCard,
     query_terms: set[str],
@@ -550,15 +561,17 @@ def _memory_route_bonus(
     1.0 on an exact rematch) still gets full credit; a route whose need
     covered a dozen words and shares only one with this query does not.
     """
+    config = DEFAULT_SCORING_CONFIG.routing
     bonus = 0
     for route in routes:
         route_terms = {term.lower() for term in route.need_terms}
         if worker.id not in route.worker_ids or not route_terms:
             continue
         overlap = query_terms & route_terms
-        if not overlap or len(overlap) / len(route_terms) < MIN_MEMORY_ROUTE_OVERLAP_RATIO:
+        if not overlap or len(overlap) / len(route_terms) < config.min_memory_route_overlap_ratio:
             continue
-        bonus = max(bonus, min(12, round(route.weight * 4) + len(overlap)))
+        candidate = round(route.weight * config.memory_route_weight_multiplier) + len(overlap)
+        bonus = max(bonus, min(config.memory_route_bonus_cap, candidate))
     return bonus
 
 
@@ -567,6 +580,7 @@ def _territory_hint_score(worker: WorkerCard, hints: list[str]) -> int:
         return 0
     worker_terms = _worker_terms(worker)
     territory_terms = _term_set(" ".join([worker.territory_id, worker.root, worker.name]))
+    config = DEFAULT_SCORING_CONFIG.routing
     score = 0
     for hint in hints:
         hint_terms = _term_set(hint)
@@ -579,9 +593,11 @@ def _territory_hint_score(worker: WorkerCard, hints: list[str]) -> int:
             or _matches_term(hint_term, worker_terms)
         )
         if overlap == len(hint_terms):
-            score += 14
+            score += config.territory_hint_full_match_bonus
         elif overlap:
-            score += 6 + (overlap * 2)
+            score += config.territory_hint_partial_base_bonus + (
+                overlap * config.territory_hint_partial_per_overlap_bonus
+            )
     return score
 
 
@@ -610,6 +626,7 @@ def _asks_for_source_implementation_text(text: str) -> bool:
 
 
 def _test_path_penalty(worker: WorkerCard) -> int:
+    config = DEFAULT_SCORING_CONFIG.routing
     files = worker.files or [worker.root]
     test_like = sum(
         1
@@ -618,15 +635,20 @@ def _test_path_penalty(worker: WorkerCard) -> int:
     )
     if not files:
         return 0
-    return 20 if test_like / len(files) >= 0.5 else 0
+    if test_like / len(files) >= config.test_path_ratio_threshold:
+        return config.test_path_penalty
+    return 0
 
 
 def _source_path_bonus(worker: WorkerCard) -> int:
+    config = DEFAULT_SCORING_CONFIG.routing
     files = worker.files or [worker.root]
     source_like = sum(1 for file in files if has_source_part(file))
     if not files:
         return 0
-    return 2 if source_like / len(files) >= 0.5 else 0
+    if source_like / len(files) >= config.source_path_ratio_threshold:
+        return config.source_path_bonus
+    return 0
 
 
 def _rank_global_evidence(evidence: list[Evidence], question: str) -> list[Evidence]:

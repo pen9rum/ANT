@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import re
 
+from ant.scoring_config import DEFAULT_SCORING_CONFIG, EvidenceScoringConfig
+
 TOKEN_RE = re.compile(r"[A-Za-z][A-Za-z0-9_]{2,}")
 CAMEL_RE = re.compile(r"[A-Z]?[a-z]+|[A-Z]+(?=[A-Z]|$)")
 STOP_WORDS = {
@@ -73,6 +75,7 @@ def score_evidence(
     terms: list[str],
     symbol_name: str = "",
     dense_score: float = 0.0,
+    config: EvidenceScoringConfig = DEFAULT_SCORING_CONFIG.evidence,
 ) -> int:
     """The one canonical relevance score for a piece of candidate evidence
     against a set of query terms.
@@ -106,24 +109,24 @@ def score_evidence(
 
     value = 0
     if "class " in lowered_quote:
-        value += 10
+        value += config.class_definition_bonus
     if "def " in lowered_quote:
-        value += 8
+        value += config.function_definition_bonus
     if "definition" in lowered_reason or "implementation" in lowered_reason:
-        value += 6
+        value += config.definition_reason_bonus
     if has_source_part(normalized_path):
-        value += 5
+        value += config.source_path_bonus
     if normalized_path.endswith(".py"):
-        value += 3
+        value += config.python_file_bonus
     if is_low_value_path(normalized_path):
-        value -= 10
+        value -= config.low_value_path_penalty
     if has_low_value_part(normalized_path):
-        value -= 10
+        value -= config.low_value_part_penalty
 
     if symbol_name:
         lowered_name = symbol_name.lower()
         if any(is_stem_match(term, lowered_name) for term in terms):
-            value += 6
+            value += config.symbol_stem_match_bonus
 
     # Stemming is deliberately NOT used for this generic quote-term overlap
     # tally, only for the precise symbol_name match above. A query term is
@@ -134,9 +137,9 @@ def score_evidence(
     # every candidate's score regardless of actual relevance).
     for term in terms:
         if term in quote_terms:
-            value += 3
+            value += config.quote_term_overlap_bonus
         elif term in lowered_quote:
-            value += 1
+            value += config.quote_substring_bonus
 
     # dense_score is a 0..1 cosine similarity from the optional embedding index
     # (0.0 when no dense index exists, or a candidate was never a dense hit).
@@ -144,5 +147,5 @@ def score_evidence(
     # terms at all with the query, so every bonus above is zero -- can still
     # win a competitive score, instead of being invisible to a purely
     # lexical reranker.
-    value += round(dense_score * 12)
+    value += round(dense_score * config.dense_score_weight)
     return value

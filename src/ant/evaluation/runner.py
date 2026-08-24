@@ -13,6 +13,7 @@ from ant.evaluation.metrics import EvalScore
 from ant.memory import IndexStore
 from ant.memory.colony import ColonyMemoryStore, record_task_memory
 from ant.providers import OpenAIProvider
+from ant.scoring_config import DEFAULT_SCORING_CONFIG
 
 
 class BatchResult(BaseModel):
@@ -155,17 +156,24 @@ def _fallback_prediction(evidence) -> str:
 
 
 def _is_high_quality_route(score: EvalScore) -> bool:
+    config = DEFAULT_SCORING_CONFIG.route_quality
     if score.exact_match or score.contains_answer:
         return True
     if score.correctness is None or score.completeness is None:
         return False
-    return score.correctness >= 8 and score.completeness >= 8
+    return (
+        score.correctness >= config.high_quality_correctness_min
+        and score.completeness >= config.high_quality_completeness_min
+    )
 
 
 def _route_weight(score: EvalScore) -> float:
+    config = DEFAULT_SCORING_CONFIG.route_quality
     if score.correctness is not None and score.completeness is not None:
-        return round((score.correctness + score.completeness) / 4, 2)
-    return 2.0
+        return round(
+            (score.correctness + score.completeness) / config.route_weight_divisor, 2
+        )
+    return config.default_route_weight
 
 
 def _resolve_repo(repo_root: Path, repo: str) -> Path | None:
