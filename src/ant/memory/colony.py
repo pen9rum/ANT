@@ -6,7 +6,8 @@ from pathlib import Path
 
 from pydantic import BaseModel, Field
 
-from ant.domain import EvidenceState, RecruitmentRound
+from ant.domain import EvidenceState, RecruitmentRound, UnresolvedNeed
+from ant.retrieval.relevance import extract_terms
 
 
 class CoalitionRecord(BaseModel):
@@ -28,6 +29,16 @@ class MemoryRoute(BaseModel):
     # worker recruited for this sub-topic", not "did the answer score well",
     # so evolve_workers reads all_routes() unfiltered by this flag.
     is_high_quality: bool = True
+    # need_type/scope: carried over from the UnresolvedNeed that produced
+    # this route, when there was one (see record_task_memory's per-need
+    # routes below) -- "" for the task-level aggregate route, which isn't
+    # tied to any single need. Without these, evolve_workers could see THAT
+    # a worker struggled but never WHAT KIND of gap it struggled with (a
+    # missing implementation vs. an absence question vs. a cross-territory
+    # dependency), collapsing every distinct failure mode into the same
+    # generic "low quality" signal.
+    need_type: str = ""
+    scope: str = ""
 
 
 class ColonyMemoryStore:
@@ -66,13 +77,15 @@ class ColonyMemoryStore:
         with sqlite3.connect(self.db_path) as connection:
             _create_schema(connection)
             connection.execute(
-                "insert into routes(need_terms, worker_ids, weight, is_high_quality) "
-                "values (?, ?, ?, ?)",
+                "insert into routes(need_terms, worker_ids, weight, is_high_quality, "
+                "need_type, scope) values (?, ?, ?, ?, ?, ?)",
                 (
                     json.dumps(route.need_terms),
                     json.dumps(route.worker_ids),
                     route.weight,
                     int(route.is_high_quality),
+                    route.need_type,
+                    route.scope,
                 ),
             )
 
@@ -82,7 +95,9 @@ class ColonyMemoryStore:
         # specialization only needs "was this worker recruited for this
         # sub-topic", not "did the final answer score well" -- see
         # MemoryRoute.is_high_quality.
-        query = "select need_terms, worker_ids, weight, is_high_quality from routes"
+        query = (
+            "select need_terms, worker_ids, weight, is_high_quality, need_type, scope from routes"
+        )
         if not include_stale:
             query += " where stale = 0"
         with sqlite3.connect(self.db_path) as connection:
@@ -94,8 +109,10 @@ class ColonyMemoryStore:
                 worker_ids=[str(worker_id) for worker_id in json.loads(worker_ids_json)],
                 weight=float(weight),
                 is_high_quality=bool(is_high_quality),
+                need_type=need_type or "",
+                scope=scope or "",
             )
-            for need_terms_json, worker_ids_json, weight, is_high_quality in rows
+            for need_terms_json, worker_ids_json, weight, is_high_quality, need_type, scope in rows
         ]
 
     def matching_routes(self, terms: list[str], limit: int = 5) -> list[MemoryRoute]:
@@ -111,12 +128,12 @@ class ColonyMemoryStore:
             _create_schema(connection)
             rows = connection.execute(
                 """
-                select need_terms, worker_ids, weight from routes
+                select need_terms, worker_ids, weight, need_type, scope from routes
                 where stale = 0 and is_high_quality = 1
                 order by weight desc, id desc
                 """
             ).fetchall()
-        for need_terms_json, worker_ids_json, weight in rows:
+        for need_terms_json, worker_ids_json, weight, need_type, scope in rows:
             need_terms = [str(term) for term in json.loads(need_terms_json)]
             overlap = query_terms & {term.lower() for term in need_terms}
             if not overlap:
@@ -129,6 +146,8 @@ class ColonyMemoryStore:
                         need_terms=need_terms,
                         worker_ids=[str(worker_id) for worker_id in json.loads(worker_ids_json)],
                         weight=float(weight),
+                        need_type=need_type or "",
+                        scope=scope or "",
                     ),
                 )
             )
@@ -284,6 +303,31 @@ def record_task_memory(
         )
     )
 
+    # One additional route per need that was STILL open when the task ended
+    # (not every need that was ever raised -- one resolved by a later round
+    # or a coalition isn't a real gap, it's the mechanism working). Unlike
+    # the aggregate route above, this carries the need's own need_type and
+    # scope, tagged to the specific worker that raised it and always
+    # is_high_quality=False by construction (a need that's still open at
+    # task end is, by definition, a case that worker didn't resolve) -- so
+    # it never leaks into matching_routes()'s query-time routing bonus, only
+    # into evolve_workers' all_routes(), where it's the signal this whole
+    # mechanism exists to supply: not just THAT a worker struggled, but
+    # WHAT KIND of gap it struggled with.
+    for need in state.unresolved_needs:
+        if not need.source_worker_id:
+            continue
+        colony_memory.save_route(
+            MemoryRoute(
+                need_terms=_need_route_terms(need),
+                worker_ids=[need.source_worker_id],
+                weight=1.0,
+                is_high_quality=False,
+                need_type=need.need_type,
+                scope=need.scope,
+            )
+        )
+
 
 def _coalition_membership(rounds: list[RecruitmentRound], round_index: int) -> list[str]:
     """A coalition-forming round only ever selects the ONE new worker being
@@ -323,6 +367,20 @@ def _selected_route_workers(rounds) -> list[str]:
         worker_id for round_state in rounds for worker_id in round_state.selected_worker_ids
     ]
     return list(dict.fromkeys(worker_ids))
+
+
+def _need_route_terms(need: UnresolvedNeed) -> list[str]:
+    # suggested_terms first (the reasoner's own pick of what's relevant),
+    # topped up with terms extracted from `missing`/`description` so a need
+    # whose reasoner call didn't populate suggested_terms still yields
+    # something to group by -- extract_terms (stopword-filtered, camelCase
+    # aware) rather than the coarser _route_terms tokenizer below, since
+    # this text is about a specific technical gap, not a free-form question.
+    terms = list(dict.fromkeys(term.lower() for term in need.suggested_terms if term))
+    if len(terms) < 6:
+        extra = extract_terms(need.missing or need.description)
+        terms.extend(term for term in extra if term not in terms)
+    return terms[:16]
 
 
 def _route_terms(question: str) -> list[str]:
@@ -367,6 +425,11 @@ def _create_schema(connection: sqlite3.Connection) -> None:
     # construction, one that already passed the old quality gate at save
     # time -- see record_task_memory / matching_routes vs. all_routes below.
     _ensure_column(connection, "routes", "is_high_quality", "integer not null default 1")
+    # "" default: routes saved before these columns existed (and the
+    # task-level aggregate route record_task_memory still saves today) carry
+    # no single need_type/scope -- only the new per-need routes below do.
+    _ensure_column(connection, "routes", "need_type", "text not null default ''")
+    _ensure_column(connection, "routes", "scope", "text not null default ''")
     _ensure_column(connection, "stale_memory", "worker_id", "text")
 
 

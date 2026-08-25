@@ -55,7 +55,14 @@ class LocalCoordinator:
         self._worker_card_index: EmbeddingIndex | None = None
         self._worker_card_index_loaded = False
 
-    def ask(self, question: str, max_rounds: int = 2) -> EvidenceState:
+    def ask(self, question: str, max_rounds: int = 6) -> EvidenceState:
+        # Hard safety ceiling only, not the intended stopping point: whether
+        # to actually use another round is now the reasoner's
+        # should_continue_recruiting() call each iteration (see below),
+        # made fresh from the current need/evidence rather than a fixed
+        # round-count cutoff. Raised from the old 2 (which used to *be* the
+        # real stopping rule) since it now only guards against a
+        # pathological "always says continue" loop.
         evidence: list[Evidence] = []
         accumulated_needs: list[UnresolvedNeed] = []
         rounds: list[RecruitmentRound] = []
@@ -63,24 +70,44 @@ class LocalCoordinator:
         query = question
         active_need: UnresolvedNeed | None = None
         search = LocalSearchTool(self.repo_root, index_path=self.index_path)
-        worker_config = WorkerRunConfig(max_tool_calls=11, evidence_limit=8)
+        worker_config = WorkerRunConfig(max_tool_calls=11)
 
         for round_index in range(max_rounds):
             ranked = self._rank_worker_scores(query, seen_worker_ids, active_need)
             candidates = [worker for _, worker in ranked]
             routing_scores = [score for score, _ in ranked[:10]]
-            selected = (
-                self._initial_workers(candidates, question)
-                if active_need is None
-                else candidates[:1]
-            )
+            if active_need is None:
+                selected = self._initial_workers(candidates, question)
+            elif active_need.scope == "cross_territory":
+                # A cross_territory need means the source worker's own
+                # territory could not resolve this on its own -- the seen-
+                # worker penalty nudges scoring away from re-picking it but
+                # does not forbid it, and a still-relevant-looking card can
+                # out-score that penalty. Confirmed directly on two real
+                # seaborn traces: round 1 re-selected the exact same source
+                # worker for a need it had just flagged cross_territory,
+                # asked it the same question again, got nothing new, and
+                # coalition_formed never fired (it requires the round's pick
+                # to differ from source_worker_id) -- silently skipping the
+                # joint cross-check this need type exists to trigger. Force
+                # genuine diversification instead of hoping the score
+                # avoids this on its own; only re-recruit the source worker
+                # if it is truly the only candidate left.
+                other_candidates = [
+                    worker for worker in candidates if worker.id != active_need.source_worker_id
+                ]
+                selected = other_candidates[:1] or candidates[:1]
+            else:
+                selected = candidates[:1]
             if not selected:
                 break
 
             observations = []
             round_needs: list[UnresolvedNeed] = []
             for worker in selected:
-                observation = AutonomousWorker(self.repo_root, worker, search).run(
+                observation = AutonomousWorker(
+                    self.repo_root, worker, search, reasoner=self.reasoner
+                ).run(
                     query,
                     config=worker_config,
                 )
@@ -167,6 +194,18 @@ class LocalCoordinator:
             if not pending:
                 break
             active_need = pending[0]
+            # max_rounds is a safety ceiling, not the intended stopping
+            # point (see ask()'s default): whether another round is worth
+            # it -- vs. the colony genuinely having nothing better left to
+            # try for this need -- is the reasoner's call, made fresh each
+            # round rather than fixed at a round-count cutoff.
+            if not self.reasoner.should_continue_recruiting(
+                question=question,
+                need=active_need,
+                evidence=evidence,
+                rounds_completed=round_index + 1,
+            ):
+                break
             query = self._query_from_needs(question, [active_need])
 
         # Inheritance is a global structural fact, not a territory-scoped one:
@@ -213,19 +252,20 @@ class LocalCoordinator:
             absence_proofs.append(inheritance_proof)
 
         answer = ""
-        evidence = _rank_global_evidence(evidence, question)[:12]
+        ranked_evidence = _rank_global_evidence(evidence, question)
+        evidence = _select_evidence(self.reasoner, question, ranked_evidence, search)
         if self.synthesizer and evidence:
             coalition_workers = _last_coalition_workers(rounds)
             if coalition_workers:
                 answer = self.synthesizer.synthesize_coalition(
                     question=question,
                     worker_ids=coalition_workers,
-                    evidence=evidence[:12],
+                    evidence=evidence,
                     absence_proofs=absence_proofs,
                 )
             else:
                 answer = self.synthesizer.synthesize(
-                    question=question, evidence=evidence[:12], absence_proofs=absence_proofs
+                    question=question, evidence=evidence, absence_proofs=absence_proofs
                 )
         usage = (
             self.synthesizer.drain_usage() if isinstance(self.synthesizer, UsageReporter) else None
@@ -375,6 +415,7 @@ class LocalCoordinator:
                 )
             )
         scored.sort(key=lambda item: item[0].final_score, reverse=True)
+        scored = _llm_reorder(self.reasoner, query_text, need, scored)
         selected = [(score, worker) for score, worker in scored if score.final_score > 0]
         fallback = list(self.workers)
         return selected or [
@@ -432,13 +473,111 @@ class LocalCoordinator:
         return query or question
 
 
+def _llm_reorder(
+    reasoner: WorkerReasoner,
+    query_text: str,
+    need: UnresolvedNeed | None,
+    scored: list[tuple[WorkerRoutingScore, WorkerCard]],
+) -> list[tuple[WorkerRoutingScore, WorkerCard]]:
+    """Let the reasoner make the actual recruitment call among the top
+    candidates by lexical+dense score, instead of that composite score
+    deciding outright. The composite score still bounds *which* workers are
+    even considered (cost control on a large evolved population) and is the
+    fallback order if the reasoner call degrades -- it just no longer picks
+    the winner by itself.
+    """
+    if not scored:
+        return scored
+    pool_size = DEFAULT_SCORING_CONFIG.routing.llm_routing_candidate_pool_size
+    pool = scored[:pool_size]
+    tail = scored[pool_size:]
+    # Surface the memory-route replay signal as text the reasoner can
+    # actually read, instead of only as an invisible number folded into the
+    # pool-ranking score it no longer decides the winner with.
+    memory_hints = {
+        score.worker_id: f"resolved a similar past need (route bonus +{score.memory_route_bonus})"
+        for score, _ in pool
+        if score.memory_route_bonus > 0
+    }
+    selected_ids = reasoner.select_workers(
+        query=query_text,
+        need=need,
+        candidates=[worker for _, worker in pool],
+        limit=len(pool),
+        memory_hints=memory_hints,
+    )
+    if not selected_ids:
+        return scored
+    by_id = {worker.id: (score, worker) for score, worker in pool}
+    reordered = [by_id[worker_id] for worker_id in selected_ids if worker_id in by_id]
+    reordered_ids = {worker_id for worker_id in selected_ids if worker_id in by_id}
+    remaining = [item for item in pool if item[1].id not in reordered_ids]
+    return reordered + remaining + tail
+
+
+def _select_evidence(
+    reasoner: WorkerReasoner,
+    question: str,
+    ranked_evidence: list[Evidence],
+    search: LocalSearchTool,
+) -> list[Evidence]:
+    """Same pool-then-LLM-decides pattern as _llm_reorder, applied to the
+    final evidence cut before synthesis: the score-ranked order still
+    bounds the candidate pool for prompt-size/cost control, but the
+    reasoner -- not a fixed top-N slice -- decides what actually reaches
+    the synthesizer. Per-worker collection deliberately does no equivalent
+    filtering of its own anymore (AutonomousWorker's evidence_limit is a
+    generous safety cap, not a relevance decision), so this single pass
+    over the fully pooled evidence is the one place spent on real judgment.
+    The same call also flags kept items whose quote is too narrow to answer
+    from; those get their full source region reopened here (Shared
+    Evidence State: "evidence compression is reversible") rather than only
+    at coalition cross-check time.
+    """
+    if not ranked_evidence:
+        return []
+    pool_size = DEFAULT_SCORING_CONFIG.routing.llm_evidence_pool_size
+    keep_limit = DEFAULT_SCORING_CONFIG.routing.llm_evidence_keep_limit
+    pool = ranked_evidence[:pool_size]
+    keep_ids, expand_ids = reasoner.select_evidence(
+        question=question, evidence=pool, limit=keep_limit
+    )
+    kept_indices: list[int] = []
+    for raw_index in keep_ids:
+        try:
+            index = int(raw_index)
+        except ValueError:
+            continue
+        if 0 <= index < len(pool):
+            kept_indices.append(index)
+    if not kept_indices:
+        kept_indices = list(range(min(keep_limit, len(pool))))
+    reopened_map = _reopen_evidence_by_index(expand_ids, pool, search) if expand_ids else {}
+    return [reopened_map.get(index, pool[index]) for index in kept_indices[:keep_limit]]
+
+
 def _matches_term(query_term: str, terms: set[str]) -> bool:
     for term in terms:
         if query_term == term:
             return True
-        if query_term in _compound_parts(term):
+        parts = _compound_parts(term)
+        if query_term in parts:
             return True
         if is_stem_match(query_term, term):
+            return True
+        # Confirmed on a real seaborn trace: a symbol named
+        # `_assign_variables_wideform` compound-splits to {"assign",
+        # "variables", "wideform"} -- "wideform" stays one un-split token
+        # because the source didn't put an underscore between "wide" and
+        # "form". A query term "wide" then matched neither the full term
+        # (stem-match checked only the whole "assign_variables_wideform",
+        # which doesn't start with "wide") nor the compound-part set
+        # (exact membership only, "wide" != "wideform"). Meanwhile a
+        # tutorial file literally named `wide_form_violinplot.py` split
+        # into {"wide", "form", "violinplot"} and got credit "wide" never
+        # could. Stem-matching against each compound part too closes that
+        # gap: "wide" is a >=4-char prefix of "wideform".
+        if any(is_stem_match(query_term, part) for part in parts):
             return True
     return False
 
@@ -661,6 +800,7 @@ def _rank_global_evidence(evidence: list[Evidence], question: str) -> list[Evide
             reason=item.reason,
             terms=terms,
             dense_score=item.dense_score,
+            symbol_name=item.symbols[0] if item.symbols else "",
         )
 
     return sorted(evidence, key=score, reverse=True)
@@ -1151,4 +1291,38 @@ def _reopen_referenced_evidence(
                     }
                 )
             )
+    return reopened
+
+
+def _reopen_evidence_by_index(
+    indices: list[str],
+    pool: list[Evidence],
+    search: LocalSearchTool,
+    context_lines: int = 30,
+) -> dict[int, Evidence]:
+    """Maps pool index -> reopened Evidence (larger source region), for
+    _select_evidence's own expand requests. Kept separate from
+    _reopen_referenced_evidence above (which dedupes by source location
+    across several needs' evidence_ids) since this one resolves a single
+    selection call's own flagged indices.
+    """
+    reopened: dict[int, Evidence] = {}
+    for raw_index in indices:
+        try:
+            index = int(raw_index)
+        except ValueError:
+            continue
+        if not (0 <= index < len(pool)):
+            continue
+        source = pool[index]
+        try:
+            region = search.read_region(source.path, source.line_start, context_lines)
+        except OSError:
+            continue
+        reopened[index] = region.model_copy(
+            update={
+                "worker_id": source.worker_id,
+                "reason": f"Reopened for deeper context: {source.reason}".strip(),
+            }
+        )
     return reopened

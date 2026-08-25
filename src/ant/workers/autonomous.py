@@ -11,6 +11,7 @@ from ant.domain import (
     WorkerCard,
     WorkerObservation,
 )
+from ant.providers.base import WorkerReasoner
 from ant.retrieval import STOP_WORDS, extract_terms, score_evidence
 from ant.tools.local import LocalSearchTool
 
@@ -18,18 +19,54 @@ SYMBOL_RE = re.compile(r"\b(?:class|def)\s+([A-Za-z_][A-Za-z0-9_]*)")
 BASE_RE = re.compile(r"\bclass\s+[A-Za-z_][A-Za-z0-9_]*\(([^)]*)\)")
 DOC_LABEL_RE = re.compile(r"^(Args|Example|Examples|Note|Notes|Return|Returns|Raises)$")
 
+AVAILABLE_TOOLS = (
+    "navigate",
+    "references",
+    "callers",
+    "callees",
+    "assignments",
+    "imports",
+    "subclasses",
+)
+
 
 @dataclass(frozen=True)
 class WorkerRunConfig:
-    max_tool_calls: int = 11
-    evidence_limit: int = 8
+    # Safety valve, not a target: when a reasoner is supplied, how many
+    # tool calls actually happen is the reasoner's own call (see
+    # plan_worker_actions) -- this only guards against a pathological plan
+    # running away. Raised from the old 11 (which used to be the real
+    # operating budget for a fixed, always-fully-run tool sequence) since
+    # it no longer bounds a fixed amount of work, only a worst case.
+    max_tool_calls: int = 30
+    # Safety cap only, not a relevance decision: the real "what actually
+    # matters" judgment now happens once, in LocalCoordinator._select_evidence,
+    # over the full pool from every worker/round. This just bounds a single
+    # worker's own contribution to that pool so a pathological tool-call
+    # sequence can't blow it up; raised from the old 8 (which used to *be*
+    # the relevance filter, via a fixed score-sorted slice) since dropping
+    # something here is now permanent -- the final selection step never
+    # sees what got cut at this layer.
+    evidence_limit: int = 24
 
 
 class AutonomousWorker:
-    def __init__(self, repo_root, card: WorkerCard, tools: LocalSearchTool) -> None:
+    def __init__(
+        self,
+        repo_root,
+        card: WorkerCard,
+        tools: LocalSearchTool,
+        reasoner: WorkerReasoner | None = None,
+    ) -> None:
         self.repo_root = repo_root
         self.card = card
         self.tools = tools
+        # Optional: when set, candidate_symbols (a mechanical regex extraction
+        # over the need text and evidence -- see _candidate_symbols) is
+        # filtered through the reasoner's own judgment before spending tool
+        # calls on any of them. None keeps the old fully-mechanical behavior,
+        # so every caller that doesn't pass one (most tests) is unaffected.
+        self.reasoner = reasoner
 
     def run(self, need: str, config: WorkerRunConfig | None = None) -> WorkerObservation:
         config = config or WorkerRunConfig()
@@ -72,6 +109,122 @@ class AutonomousWorker:
             limit=8,
             need=need,
         )
+        if self.reasoner is not None and candidate_symbols:
+            candidate_symbols = self.reasoner.select_lookups(
+                need=need, evidence=evidence, candidates=candidate_symbols
+            )
+        if self.reasoner is not None:
+            tool_calls = self._run_planned_actions(
+                need, evidence, candidate_symbols, actions, tool_calls, config
+            )
+        else:
+            tool_calls = self._run_fixed_pipeline(
+                need, evidence, candidate_symbols, actions, tool_calls, config
+            )
+
+        evidence = _rank_evidence(_dedupe(evidence), need)[: config.evidence_limit]
+        needs, diagnostics = _detect_unresolved_needs(
+            card=self.card,
+            need=need,
+            evidence=evidence,
+            actions=actions,
+            budget_exhausted=tool_calls >= config.max_tool_calls,
+        )
+        return WorkerObservation(
+            worker_id=self.card.id,
+            territory_id=self.card.territory_id,
+            evidence=evidence,
+            unresolved_needs=needs,
+            diagnostics=diagnostics,
+            actions=actions,
+            stop_reason="budget_exhausted" if tool_calls >= config.max_tool_calls else "complete",
+        )
+
+    def _run_planned_actions(
+        self,
+        need: str,
+        evidence: list[Evidence],
+        candidate_symbols: list[str],
+        actions: list[WorkerAction],
+        tool_calls: int,
+        config: WorkerRunConfig,
+    ) -> int:
+        """Replaces the old fixed tool sequence with one planning call: the
+        reasoner decides which (tool, symbol) lookups are actually worth
+        running, in what order, and when it has enough -- instead of a
+        hardcoded loop that always runs every tool against every candidate
+        symbol regardless of whether earlier results already answered the
+        need. max_tool_calls remains a hard safety ceiling, not the
+        intended operating budget (see WorkerRunConfig).
+        """
+        assert self.reasoner is not None  # only called from run() when set
+        remaining_budget = config.max_tool_calls - tool_calls
+        if remaining_budget <= 0 or not candidate_symbols:
+            return tool_calls
+        hints = []
+        if _asks_for_inheritance(need):
+            hints.append("This need concerns class inheritance/subclasses.")
+        if _asks_for_flow_or_call_path(need):
+            hints.append("This need concerns a call path or data flow across implementation.")
+        plan = self.reasoner.plan_worker_actions(
+            need=need,
+            evidence=evidence,
+            candidate_symbols=candidate_symbols,
+            available_tools=list(AVAILABLE_TOOLS),
+            hints=hints,
+            max_actions=remaining_budget,
+        )
+        for tool, symbol in plan:
+            if tool_calls >= config.max_tool_calls:
+                break
+            if tool not in AVAILABLE_TOOLS or symbol not in candidate_symbols:
+                continue
+            results = self._execute_tool(tool, symbol, need)
+            tool_calls += 1
+            actions.append(
+                WorkerAction(
+                    tool=tool,
+                    query=symbol,
+                    result_count=len(results),
+                    rationale=f"Reasoner-planned {tool} lookup for {symbol}.",
+                )
+            )
+            evidence.extend(results)
+        return tool_calls
+
+    def _execute_tool(self, tool: str, symbol: str, need: str) -> list[Evidence]:
+        if tool == "navigate":
+            results = self.tools.resolve_symbol(symbol, self.card.files, limit=2, need=need)
+            return results or self.tools.navigate(symbol, self.card.files, limit=2)
+        if tool == "references":
+            return self.tools.references(symbol, self.card.files, limit=2)
+        if tool == "callers":
+            results = self.tools.indexed_callers(symbol, self.card.files, limit=2)
+            return results or self.tools.callers(symbol, self.card.files, limit=2)
+        if tool == "callees":
+            return self.tools.callees(symbol, self.card.files, limit=2)
+        if tool == "assignments":
+            return self.tools.assignments(symbol, self.card.files, limit=2)
+        if tool == "imports":
+            return self.tools.imports(symbol, self.card.files, limit=2)
+        if tool == "subclasses":
+            return self.tools.subclasses(symbol, self.card.files, limit=4)
+        return []
+
+    def _run_fixed_pipeline(
+        self,
+        need: str,
+        evidence: list[Evidence],
+        candidate_symbols: list[str],
+        actions: list[WorkerAction],
+        tool_calls: int,
+        config: WorkerRunConfig,
+    ) -> int:
+        """The original fully-mechanical tool sequence, kept as the fallback
+        for when no reasoner is supplied (most direct AutonomousWorker unit
+        tests) -- see _run_planned_actions for the LLM-driven replacement
+        used whenever a reasoner is available.
+        """
         flow_or_call_path = _asks_for_flow_or_call_path(need)
         if _asks_for_inheritance(need):
             for symbol in candidate_symbols:
@@ -211,24 +364,7 @@ class AutonomousWorker:
                 )
             )
             evidence.extend(assignment_results)
-
-        evidence = _rank_evidence(_dedupe(evidence), need)[: config.evidence_limit]
-        needs, diagnostics = _detect_unresolved_needs(
-            card=self.card,
-            need=need,
-            evidence=evidence,
-            actions=actions,
-            budget_exhausted=tool_calls >= config.max_tool_calls,
-        )
-        return WorkerObservation(
-            worker_id=self.card.id,
-            territory_id=self.card.territory_id,
-            evidence=evidence,
-            unresolved_needs=needs,
-            diagnostics=diagnostics,
-            actions=actions,
-            stop_reason="budget_exhausted" if tool_calls >= config.max_tool_calls else "complete",
-        )
+        return tool_calls
 
 
 def _candidate_symbols(query: str, evidence: list[Evidence]) -> list[str]:
@@ -381,6 +517,7 @@ def _rank_evidence(evidence: list[Evidence], need: str) -> list[Evidence]:
             reason=item.reason,
             terms=terms,
             dense_score=item.dense_score,
+            symbol_name=item.symbols[0] if item.symbols else "",
         )
 
     return sorted(evidence, key=score, reverse=True)

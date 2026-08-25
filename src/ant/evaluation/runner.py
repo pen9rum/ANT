@@ -33,7 +33,7 @@ def run_batch(
     repo_root: Path,
     index_path: Path,
     out_path: Path,
-    max_rounds: int = 2,
+    max_rounds: int = 6,
     synthesize: str = "none",
     judge: str = "heuristic",
 ) -> list[BatchResult]:

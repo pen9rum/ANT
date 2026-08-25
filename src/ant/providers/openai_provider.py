@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -28,6 +29,24 @@ from ant.tools.symbol_index import build_symbol_index
 # cost -- this is a ceiling, not a floor, so short answers still cost the
 # same.
 SYNTHESIS_MAX_OUTPUT_TOKENS = 8192
+
+# 30s was tight enough to occasionally time out on an otherwise-successful
+# reasoning-effort call (observed directly: two separate questions across a
+# 20-question batch each lost their entire answer to "TimeoutError: The read
+# operation timed out", not to any actual API error) -- a single slow
+# response killed that example outright with no retry. 120s gives a
+# reasoning-effort call realistic headroom.
+#
+# Note this is enforced as a genuine wall-clock deadline (see
+# _call_with_hard_timeout), not just urlopen's own socket-level read
+# timeout: observed directly that a stuck request can hold a live,
+# Established TCP connection open for 30+ minutes without urlopen's
+# timeout=N ever firing -- consistent with the server (or an intermediate
+# proxy) periodically sending something on the wire to keep the connection
+# alive during a long reasoning pass, which resets a read timeout on every
+# partial receive without ever completing the response. A hard deadline
+# from a separate thread has no such loophole.
+REQUEST_TIMEOUT_SECONDS = 120
 
 
 @dataclass(frozen=True)
@@ -153,8 +172,18 @@ class OpenAIProvider:
             },
             method="POST",
         )
-        with request.urlopen(api_request, timeout=30) as response:
-            data = json.loads(response.read().decode("utf-8"))
+        def _do_request() -> dict:
+            with request.urlopen(api_request, timeout=REQUEST_TIMEOUT_SECONDS) as response:
+                return json.loads(response.read().decode("utf-8"))
+
+        try:
+            data = _call_with_hard_timeout(_do_request, REQUEST_TIMEOUT_SECONDS)
+        except TimeoutError:
+            # One retry for a genuinely transient stall; a second
+            # consecutive timeout is left to propagate rather than retried
+            # again, so a real outage still surfaces as a failure instead of
+            # silently stalling this example even longer.
+            data = _call_with_hard_timeout(_do_request, REQUEST_TIMEOUT_SECONDS)
         return ResponseResult(text=_extract_output_text(data), usage=_extract_usage(data), raw=data)
 
     def _responses_kwargs(self, prompt: str, max_output_tokens: int) -> dict:
@@ -247,6 +276,399 @@ class OpenAIProvider:
             unresolved_needs=unresolved_needs,
         )
 
+    def select_lookups(
+        self,
+        *,
+        need: str,
+        evidence: list[Evidence],
+        candidates: list[str],
+    ) -> list[str]:
+        # Replaces a purely mechanical filter (previously: keep a token if
+        # it's capitalized or underscored) with real judgment. That
+        # heuristic had no way to tell a real code symbol from an ordinary
+        # capitalized word in free-text -- confirmed directly: a need
+        # mentioning "Information about the documentation build system"
+        # got "Information" treated as a lookup-worthy symbol name, wasting
+        # a tool call and, combined with several other misfires, starving
+        # the round of budget for the lookup that would have actually
+        # helped. This costs one extra LLM call per worker per round (not
+        # per candidate/tool call) to keep the increase bounded.
+        if not candidates:
+            return []
+        evidence_text = "\n".join(
+            f"[{index}] {item.path}:{item.line_start}-{item.line_end}\n{item.quote[:600]}"
+            for index, item in enumerate(evidence[:6])
+        )
+        prompt = (
+            "You are deciding which candidate strings are worth a follow-up "
+            "code lookup (definition, callers, or usages) -- not answering "
+            "the question yet. Some candidates are real code symbols "
+            "(classes, functions, constants); others are ordinary words "
+            "pulled from free text that only happen to look like a symbol "
+            "(e.g. capitalized, or an underscore-joined phrase). Keep only "
+            "candidates that plausibly name an actual code identifier "
+            "relevant to the need below, ordered by how likely a lookup on "
+            "them is to help. Drop anything that reads like a normal English "
+            "word or sentence fragment.\n"
+            f"Need: {need}\n"
+            f"Evidence so far:\n{evidence_text}\n"
+            f"Candidates: {candidates}\n"
+            "Return JSON with key selected: an ordered list of the chosen "
+            "candidate strings, copied exactly from Candidates -- no new "
+            "names, no explanations."
+        )
+        result = self.responses_json(prompt, max_output_tokens=256)
+        raw = _extract_selected_list(result.text)
+        if raw is None:
+            # Malformed/empty model response: degrade to the old unfiltered
+            # behavior rather than silently exploring nothing this round.
+            return candidates
+        candidate_set = set(candidates)
+        return [item for item in raw if isinstance(item, str) and item in candidate_set]
+
+    def select_workers(
+        self,
+        *,
+        query: str,
+        need: UnresolvedNeed | None,
+        candidates: list[WorkerCard],
+        limit: int,
+        memory_hints: dict[str, str],
+    ) -> list[str]:
+        # Replaces the decisive step of _rank_worker_scores's lexical/dense
+        # point-scoring formula with real judgment for *this* candidate
+        # pool (the pool itself -- top-K by the existing lexical+dense
+        # score -- still bounds cost and acts as the fallback if this call
+        # degrades). Confirmed directly on a real seaborn trace: a worker
+        # holding the actual implementation (`_assign_variables_wideform`)
+        # lost routing to a worker holding only a tutorial script named
+        # `wide_form_violinplot.py`, purely because the tutorial file's
+        # underscored filename split into separate "wide"/"form" tokens
+        # while the symbol name's un-underscored "wideform" did not -- a
+        # token-boundary accident, not a real relevance difference. An LLM
+        # reading both territories' descriptions does not depend on
+        # underscore placement to recognize the same concept.
+        if not candidates:
+            return []
+        need_text = (
+            f"{need.missing or need.description} (need_type={need.need_type})" if need else ""
+        )
+        card_lines = []
+        for worker in candidates:
+            symbols = ", ".join(
+                symbol.qualname or symbol.name for symbol in worker.symbols[:10]
+            )
+            hint = memory_hints.get(worker.id, "")
+            hint_line = f"\n  memory: {hint}" if hint else ""
+            card_lines.append(
+                f"- id={worker.id} territory={worker.territory_id or 'root'}\n"
+                f"  responsibilities: {'; '.join(worker.responsibilities[:4])}\n"
+                f"  terms: {', '.join(worker.searchable_terms[:16])}\n"
+                f"  key symbols: {symbols}{hint_line}"
+            )
+        prompt = (
+            "You are routing a code-navigation task to the worker(s) whose "
+            "territory most plausibly holds the answer. Judge by what each "
+            "worker's territory actually implements/documents, not by "
+            "superficial word overlap with the query -- a worker whose "
+            "files define the relevant behavior outranks one that merely "
+            "mentions the same words in an unrelated file (e.g. a tutorial "
+            "or example script). A worker's memory line, when present, "
+            "records that a past task with overlapping vocabulary was "
+            "actually resolved there -- treat it as a real but not decisive "
+            "signal, not a guarantee.\n"
+            f"Query: {query}\n"
+            f"Current unresolved need: {need_text or '(none -- initial recruitment)'}\n"
+            f"Candidate workers:\n{chr(10).join(card_lines)}\n"
+            f"Return JSON with key selected: an ordered list of up to {limit} "
+            "worker ids from Candidate workers, most relevant first -- copied "
+            "exactly, no new ids, no explanations."
+        )
+        result = self.responses_json(prompt, max_output_tokens=512)
+        raw = _extract_selected_list(result.text)
+        if raw is None:
+            # Malformed/empty model response: degrade to the pool's
+            # existing lexical+dense order rather than silently recruiting
+            # nothing this round.
+            return [worker.id for worker in candidates]
+        candidate_ids = {worker.id for worker in candidates}
+        return [item for item in raw if isinstance(item, str) and item in candidate_ids][:limit]
+
+    def select_evidence(
+        self,
+        *,
+        question: str,
+        evidence: list[Evidence],
+        limit: int,
+    ) -> tuple[list[str], list[str]]:
+        # Replaces the final fixed score-based evidence[:12] cut with real
+        # judgment. Per-worker collection no longer does its own filtering
+        # pass (AutonomousWorker's own evidence_limit is now a generous
+        # safety cap, not a relevance decision) -- this is the one place
+        # that decides what the synthesizer actually sees, so it is the one
+        # place worth spending an LLM call on rather than a fixed top-N
+        # slice by score alone. Also asks in the same call which kept items
+        # have a quote too narrow to answer from and should be reopened to
+        # their full source region first (Shared Evidence State: "evidence
+        # compression is reversible") -- this used to only exist for the
+        # coalition cross-check branch, never for the common single-worker
+        # path or the final synthesis gate.
+        if not evidence:
+            return [], []
+        evidence_lines = [
+            f"[{index}] {item.path}:{item.line_start}-{item.line_end} "
+            f"(worker={item.worker_id or 'unknown'})\n{item.quote[:900]}"
+            for index, item in enumerate(evidence)
+        ]
+        prompt = (
+            "You are choosing which pieces of grounded evidence are actually "
+            "needed to answer the question below -- not answering it yet. "
+            "Keep everything that contributes a distinct fact, location, or "
+            "step toward a complete, correct answer; drop only evidence that "
+            "is redundant with something already kept or genuinely "
+            "irrelevant to the question. Do not drop something just to keep "
+            "the list short -- an incomplete answer is a worse outcome than "
+            f"a longer one, up to a hard cap of {limit} items. Separately, for "
+            "each kept item whose shown quote is too narrow to actually "
+            "answer from (e.g. it shows a signature or docstring but cuts off "
+            "before the logic that matters), flag it for expansion so its "
+            "full surrounding region gets reopened before the answer is "
+            "written.\n"
+            f"Question: {question}\n"
+            f"Evidence:\n{chr(10).join(evidence_lines)}\n"
+            f"Return JSON with two keys: selected (an ordered list of up to "
+            f"{limit} evidence indices, as strings, most important first) and "
+            "expand (a list, possibly empty, of indices from within selected "
+            "whose region should be reopened) -- indices copied exactly from "
+            "the [N] markers above, no new indices, no explanations."
+        )
+        result = self.responses_json(prompt, max_output_tokens=768)
+        valid_indices = {str(index) for index in range(len(evidence))}
+        selected_raw = _extract_list_field(result.text, "selected")
+        if selected_raw is None:
+            # Malformed/empty model response: degrade to the pool's
+            # existing score order rather than silently handing the
+            # synthesizer nothing.
+            return [str(index) for index in range(len(evidence))][:limit], []
+        selected = [
+            item for item in selected_raw if isinstance(item, str) and item in valid_indices
+        ][:limit]
+        expand_raw = _extract_list_field(result.text, "expand") or []
+        selected_set = set(selected)
+        expand = [
+            item for item in expand_raw if isinstance(item, str) and item in selected_set
+        ]
+        return selected, expand
+
+    def plan_worker_actions(
+        self,
+        *,
+        need: str,
+        evidence: list[Evidence],
+        candidate_symbols: list[str],
+        available_tools: list[str],
+        hints: list[str],
+        max_actions: int,
+    ) -> list[tuple[str, str]]:
+        # Replaces the old fixed tool sequence (always run every tool
+        # against every candidate symbol, in a hardcoded order, until a
+        # call-count budget ran out) with one planning call: the reasoner
+        # decides which (tool, symbol) lookups are actually worth running
+        # and when it already has enough, instead of exhausting the budget
+        # by rote regardless of whether earlier steps already answered the
+        # need. max_actions is a hard ceiling (see WorkerRunConfig), not a
+        # target -- an empty plan is a legitimate answer ("already enough").
+        if not candidate_symbols or max_actions <= 0:
+            return []
+        evidence_text = "\n".join(
+            f"[{index}] {item.path}:{item.line_start}-{item.line_end}\n{item.quote[:600]}"
+            for index, item in enumerate(evidence[:8])
+        )
+        tool_descriptions = {
+            "navigate": "jump to a symbol's own definition/implementation block",
+            "references": "find local references/call sites for a symbol",
+            "callers": "find blocks that call/invoke a symbol",
+            "callees": "find helpers a symbol's implementation calls into",
+            "assignments": "trace local data-flow assignments/uses of a symbol",
+            "imports": "resolve how a symbol is imported, useful before tracing call/data flow",
+            "subclasses": "find class definitions that inherit from a symbol",
+        }
+        tools_text = "\n".join(
+            f"- {tool}: {tool_descriptions.get(tool, '')}" for tool in available_tools
+        )
+        hints_text = "".join(f"Hint: {hint}\n" for hint in hints)
+        prompt = (
+            "You are planning follow-up code lookups (not answering yet) for the "
+            "need below, given the evidence already found. Pick specific (tool, "
+            "symbol) pairs -- do not reflexively run every tool on every symbol; "
+            "skip a lookup if the evidence already answers what it would tell "
+            "you, and stop planning once the need is answerable. Return an empty "
+            "list if the evidence already suffices.\n"
+            f"Need: {need}\n"
+            f"{hints_text}"
+            f"Evidence so far:\n{evidence_text}\n"
+            f"Available tools:\n{tools_text}\n"
+            f"Candidate symbols: {candidate_symbols}\n"
+            f"Return JSON with key actions: an ordered list (most useful first, "
+            f"at most {max_actions} items) of objects with keys tool and symbol, "
+            "both copied exactly from the lists above -- no new tools, no new "
+            "symbols, no explanations."
+        )
+        result = self.responses_json(prompt, max_output_tokens=768)
+        raw = _extract_list_field(result.text, "actions")
+        if raw is None:
+            # Malformed/empty model response: degrade to the old default
+            # order (every tool against every symbol) rather than silently
+            # running nothing this round.
+            default_tools = [
+                tool
+                for tool in ("navigate", "references", "callers", "callees", "assignments")
+                if tool in available_tools
+            ]
+            return [
+                (tool, symbol) for symbol in candidate_symbols for tool in default_tools
+            ][:max_actions]
+        tool_set = set(available_tools)
+        symbol_set = set(candidate_symbols)
+        plan: list[tuple[str, str]] = []
+        for item in raw:
+            if not isinstance(item, dict):
+                continue
+            tool = item.get("tool")
+            symbol = item.get("symbol")
+            if tool in tool_set and symbol in symbol_set:
+                plan.append((tool, symbol))
+        return plan[:max_actions]
+
+    def should_continue_recruiting(
+        self,
+        *,
+        question: str,
+        need: UnresolvedNeed,
+        evidence: list[Evidence],
+        rounds_completed: int,
+    ) -> bool:
+        # Replaces the old fixed max_rounds=2 cap -- which stopped
+        # recruiting after exactly N rounds regardless of whether the need
+        # was actually resolved or the colony genuinely had no better
+        # worker left to try -- with a per-round judgment call. max_rounds
+        # is still a hard safety ceiling (see LocalCoordinator.ask), this
+        # is what decides whether it's worth spending another round *before*
+        # hitting that ceiling.
+        evidence_text = "\n".join(
+            f"[{index}] {item.path}:{item.line_start}-{item.line_end} "
+            f"(worker={item.worker_id or 'unknown'})\n{item.quote[:600]}"
+            for index, item in enumerate(evidence[:10])
+        )
+        prompt = (
+            "A code-navigation task has an unresolved information need after "
+            f"{rounds_completed} round(s) of recruiting workers. Decide whether "
+            "recruiting one more worker for this specific need is worth it, or "
+            "whether the evidence gathered so far already suggests no worker in "
+            "this codebase will resolve it (e.g. the need concerns something "
+            "that plausibly does not exist here, or every plausible territory "
+            "has already been tried without progress).\n"
+            f"Original question: {question}\n"
+            f"Unresolved need: {need.missing or need.description} "
+            f"(need_type={need.need_type}, scope={need.scope})\n"
+            f"Evidence gathered so far:\n{evidence_text or '(none)'}\n"
+            "Return JSON with key continue: true to recruit another worker for "
+            "this need, false to stop here."
+        )
+        result = self.responses_json(prompt, max_output_tokens=128)
+        data = _loads_json_object(result.text)
+        value = data.get("continue")
+        if isinstance(value, bool):
+            return value
+        # Malformed/empty response: degrade to the old unconditional
+        # behavior (keep going until the caller's max_rounds ceiling)
+        # rather than silently cutting recruitment short on a parse error.
+        return True
+
+    def should_specialize(
+        self,
+        *,
+        worker_id: str,
+        worker_summary: str,
+        candidate_groups: dict[str, list[str]],
+        route_summaries: list[str],
+    ) -> bool:
+        # evolve_workers previously decided this purely by counting routes
+        # per subdirectory (>= min_group_routes in >= 2 groups => split),
+        # with zero judgment about whether the resulting groups are actually
+        # distinct specialties or just an arbitrary directory split of one
+        # coherent topic. Route counts still decide *which* worker is even a
+        # candidate (cost control -- this call is per candidate worker per
+        # evolve cycle, not per question); this is the judgment on top.
+        groups_text = "\n".join(
+            f"- {group}: representative terms = {', '.join(terms) or '(none)'}"
+            for group, terms in candidate_groups.items()
+        )
+        routes_text = "\n".join(f"- {summary}" for summary in route_summaries)
+        prompt = (
+            "A worker in a code-navigation colony is a candidate for being "
+            "split into separate specialized workers, one per subgroup below, "
+            "because recurring questions have clustered on each. Judge "
+            "whether these subgroups actually represent distinct specialties "
+            "worth separate ownership, or whether they are really the same "
+            "underlying topic split by an arbitrary directory boundary (in "
+            "which case splitting would just fragment one coherent area into "
+            "pieces that all still need each other).\n"
+            f"Worker: {worker_id} -- {worker_summary}\n"
+            f"Candidate subgroups:\n{groups_text}\n"
+            f"Why each subgroup is a candidate:\n{routes_text}\n"
+            "Return JSON with key specialize: true if these are genuinely "
+            "distinct specialties worth splitting into separate workers, "
+            "false if they belong together as one worker."
+        )
+        result = self.responses_json(prompt, max_output_tokens=128)
+        data = _loads_json_object(result.text)
+        value = data.get("specialize")
+        if isinstance(value, bool):
+            return value
+        # Malformed/empty response: degrade to the old unconditional
+        # behavior (split whenever the structural route-count gate passes)
+        # rather than silently blocking every specialize on a parse error.
+        return True
+
+    def should_merge(
+        self,
+        *,
+        worker_a_id: str,
+        worker_a_summary: str,
+        worker_b_id: str,
+        worker_b_summary: str,
+    ) -> bool:
+        # Same rationale as should_specialize: the old gate was a pure file-
+        # overlap-ratio threshold (>= merge_overlap_threshold => merge),
+        # which cannot tell "these are the same specialty duplicated across
+        # two workers" apart from "these happen to touch a lot of shared
+        # files but are conceptually distinct" (e.g. a bridge worker and a
+        # test-file-heavy worker that both reference the same source files
+        # for different reasons).
+        prompt = (
+            "Two workers in a code-navigation colony have highly overlapping "
+            "file ownership and are candidates for merging into one. Judge "
+            "whether they actually represent the same underlying specialty "
+            "(merging would consolidate duplicated ownership into one clearer "
+            "worker), or whether they are conceptually distinct despite the "
+            "file overlap (merging would dilute one or both into a less "
+            "focused worker).\n"
+            f"Worker A: {worker_a_id} -- {worker_a_summary}\n"
+            f"Worker B: {worker_b_id} -- {worker_b_summary}\n"
+            "Return JSON with key merge: true if these should be merged into "
+            "one worker, false if they should stay separate."
+        )
+        result = self.responses_json(prompt, max_output_tokens=128)
+        data = _loads_json_object(result.text)
+        value = data.get("merge")
+        if isinstance(value, bool):
+            return value
+        # Malformed/empty response: degrade to the old unconditional
+        # behavior (merge whenever the structural overlap gate passes)
+        # rather than silently blocking every merge on a parse error.
+        return True
+
     def synthesize(
         self,
         *,
@@ -331,6 +753,36 @@ def _completeness_section(completeness_text: str) -> str:
     return f"Completeness notes:\n{completeness_text}\n" if completeness_text else ""
 
 
+def _call_with_hard_timeout(fn, timeout_seconds: float):
+    """Run fn() and enforce a genuine wall-clock deadline, not just
+    urlopen's own socket-level read timeout (see REQUEST_TIMEOUT_SECONDS's
+    comment for why that alone was observed to not be sufficient).
+
+    fn runs in a daemon thread; if it hasn't finished within
+    timeout_seconds this raises TimeoutError and stops waiting on it. The
+    thread itself is not killed -- Python has no safe way to do that -- but
+    daemon=True means it can't block process exit, and whatever it
+    eventually returns or raises is simply discarded once abandoned.
+    """
+    result: list = []
+    error: list[BaseException] = []
+
+    def _run() -> None:
+        try:
+            result.append(fn())
+        except BaseException as exc:  # noqa: BLE001 - re-raised on the caller's thread below
+            error.append(exc)
+
+    thread = threading.Thread(target=_run, daemon=True)
+    thread.start()
+    thread.join(timeout_seconds)
+    if thread.is_alive():
+        raise TimeoutError(f"Request did not complete within {timeout_seconds}s (hard deadline)")
+    if error:
+        raise error[0]
+    return result[0]
+
+
 def _extract_output_text(data: dict) -> str:
     parts: list[str] = []
     for output in data.get("output", []):
@@ -378,6 +830,39 @@ def _loads_json_object(text: str) -> dict:
     if start != -1 and end != -1:
         cleaned = cleaned[start : end + 1]
     return json.loads(cleaned)
+
+
+def _extract_list_field(text: str, key: str) -> list | None:
+    """Parses a `{key: [...]}` response, tolerating a model that ignores
+    the requested object wrapper and returns the bare JSON array instead --
+    confirmed to happen in practice (a live seaborn eval run crashed two
+    examples outright with `AttributeError: 'list' object has no attribute
+    'get'` because `_loads_json_object` only looks for `{`/`}` and silently
+    returns whatever `json.loads` parses when neither is present, i.e. a
+    list here).
+    """
+    cleaned = text.strip()
+    if cleaned.startswith("```"):
+        cleaned = cleaned.strip("`")
+        if cleaned.startswith("json"):
+            cleaned = cleaned[4:].strip()
+    try:
+        parsed = json.loads(cleaned)
+    except json.JSONDecodeError:
+        try:
+            parsed = _loads_json_object(text)
+        except json.JSONDecodeError:
+            return None
+    if isinstance(parsed, list):
+        return parsed
+    if isinstance(parsed, dict):
+        value = parsed.get(key)
+        return value if isinstance(value, list) else None
+    return None
+
+
+def _extract_selected_list(text: str) -> list | None:
+    return _extract_list_field(text, "selected")
 
 
 def _owned_symbols(repo_root: Path, files: list[str], limit: int = 160) -> list[CodeSymbol]:

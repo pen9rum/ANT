@@ -26,7 +26,7 @@ from ant.retrieval.dense import WORKER_CARDS_KEY, DenseEmbedder, build_worker_ca
 
 app = typer.Typer(no_args_is_help=True)
 INDEX_OPTION = typer.Option(Path(".ant"), "--index")
-MAX_ROUNDS_OPTION = typer.Option(2, "--max-rounds", min=1)
+MAX_ROUNDS_OPTION = typer.Option(6, "--max-rounds", min=1)
 SAVE_TRACE_OPTION = typer.Option(True, "--save-trace/--no-save-trace")
 LLM_CARDS_OPTION = typer.Option(False, "--llm-cards/--heuristic-cards")
 DENSE_OPTION = typer.Option(False, "--dense/--no-dense")

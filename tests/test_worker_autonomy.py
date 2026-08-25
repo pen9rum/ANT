@@ -1,9 +1,10 @@
 from pathlib import Path
 
-from ant.domain import WorkerCard
+from ant.domain import Evidence, WorkerCard
 from ant.retrieval import BM25Index
 from ant.tools import LocalSearchTool
 from ant.workers import AutonomousWorker, WorkerRunConfig
+from ant.workers.autonomous import _rank_evidence
 
 
 def test_bm25_ranks_matching_document() -> None:
@@ -252,3 +253,117 @@ def test_worker_uses_call_and_data_flow_tools_for_flow_questions(tmp_path: Path)
     assert "callers" in tools
     assert "assignments" in tools
     assert any("execute_circuit" in item.quote for item in observation.evidence)
+
+
+def test_rank_evidence_credits_a_symbol_name_matching_the_need() -> None:
+    # Regression test for a real observed failure: asking "where is X
+    # implemented" for a method whose *name* is the only thing that matches
+    # the query (its body text shares no literal words with the question)
+    # used to score identically to a handful of completely unrelated
+    # sibling methods, because _rank_evidence built score_evidence() calls
+    # without passing symbol_name -- even though the exact same Evidence
+    # items already carry it in their `symbols` field (populated by
+    # _definitions_to_evidence). A real trace showed this: qibo's
+    # Circuit.draw() tied for last place with Circuit._shallow_copy() and
+    # Circuit.decompose() when asked "where is drawing implemented", and
+    # lost the final evidence_limit cut to less-relevant-but-lexically-tied
+    # methods as a result.
+    unrelated = Evidence(
+        path="src/a.py",
+        line_start=10,
+        line_end=20,
+        quote="def _shallow_copy(self):\n    return copy.copy(self)",
+        reason="Resolved symbol definition for Widget.",
+        symbols=["_shallow_copy", "Widget._shallow_copy"],
+    )
+    target = Evidence(
+        path="src/a.py",
+        line_start=30,
+        line_end=40,
+        quote="def draw(self, line_wrap=70):\n    return _render(self)",
+        reason="Resolved symbol definition for Widget.",
+        symbols=["draw", "Widget.draw"],
+    )
+
+    ranked = _rank_evidence([unrelated, target], "Where is drawing implemented?")
+
+    assert ranked[0] is target
+
+
+class _DenylistReasoner:
+    """Stand-in for a real LLM reasoner: filters out one specific candidate,
+    passing everything else through unchanged -- enough to prove
+    AutonomousWorker actually wires a supplied reasoner's select_lookups()
+    into which candidates get explored, without needing a real model call.
+    """
+
+    def __init__(self, denied: str) -> None:
+        self.denied = denied
+        self.seen_candidates: list[str] = []
+
+    def observe(self, *, question, worker_id, territory_id, evidence):
+        raise AssertionError("this test does not exercise observe()")
+
+    def select_lookups(self, *, need, evidence, candidates):
+        self.seen_candidates = list(candidates)
+        return [item for item in candidates if item != self.denied]
+
+    def select_workers(self, *, query, need, candidates, limit, memory_hints):
+        raise AssertionError("this test does not exercise select_workers()")
+
+    def select_evidence(self, *, question, evidence, limit):
+        raise AssertionError("this test does not exercise select_evidence()")
+
+    def plan_worker_actions(
+        self, *, need, evidence, candidate_symbols, available_tools, hints, max_actions
+    ):
+        # Mirrors the old fixed pipeline's default per-symbol tool order
+        # closely enough for this test's purpose: it only cares that a
+        # denied candidate never gets a tool call, not the exact plan.
+        all_tools = ("navigate", "references", "callers", "callees", "assignments")
+        tools = [t for t in all_tools if t in available_tools]
+        return [(tool, symbol) for symbol in candidate_symbols for tool in tools][:max_actions]
+
+    def should_continue_recruiting(self, *, question, need, evidence, rounds_completed):
+        raise AssertionError("this test does not exercise should_continue_recruiting()")
+
+
+def test_autonomous_worker_filters_candidate_symbols_through_a_supplied_reasoner(
+    tmp_path: Path,
+) -> None:
+    # Regression test for a real observed failure: _candidate_symbols()
+    # treats any capitalized, length>3 token in the need text as a
+    # lookup-worthy symbol -- including ordinary English words like
+    # "Information" that a real need's free text happens to capitalize.
+    # Without a reasoner, that noise is unavoidable (see
+    # test_autonomous_worker_records_tool_actions and friends, which rely on
+    # exactly this mechanical behavior). With one supplied, the reasoner's
+    # judgment -- not the regex -- decides what actually gets a tool call.
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "model.py").write_text(
+        "class TargetSymbol:\n    def run(self):\n        return None\n",
+        encoding="utf-8",
+    )
+    card = WorkerCard(
+        id="worker-src",
+        territory_id="src",
+        name="src worker",
+        root="src",
+        searchable_terms=["targetsymbol"],
+        files=["src/model.py"],
+    )
+    reasoner = _DenylistReasoner(denied="Information")
+
+    worker = AutonomousWorker(tmp_path, card, LocalSearchTool(tmp_path), reasoner=reasoner)
+    observation = worker.run(
+        "Information about TargetSymbol behavior",
+        WorkerRunConfig(max_tool_calls=8, evidence_limit=8),
+    )
+
+    # The mechanical extractor did surface the junk candidate (proving this
+    # test would have failed before the fix, not just trivially pass)...
+    assert "Information" in reasoner.seen_candidates
+    # ...but no tool call was ever made against it once the reasoner said no.
+    navigate_queries = [action.query for action in observation.actions if action.tool == "navigate"]
+    assert "Information" not in navigate_queries
+    assert "TargetSymbol" in navigate_queries

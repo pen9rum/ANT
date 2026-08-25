@@ -294,3 +294,87 @@ def test_low_quality_route_is_recorded_for_specialization_but_hidden_from_routin
     assert len(all_routes) == 1
     assert all_routes[0].worker_ids == ["worker-auth"]
     assert all_routes[0].is_high_quality is False
+
+
+def test_record_task_memory_saves_a_per_need_route_carrying_need_type_and_scope(
+    tmp_path: Path,
+) -> None:
+    # Regression test: the task-level aggregate route only ever carried the
+    # original question's generic terms and a single pass/fail flag --
+    # evolve_workers had no way to see WHAT KIND of gap a worker struggled
+    # with (missing an implementation vs. an unanswerable absence question
+    # vs. needing another territory), only THAT it struggled at all. A need
+    # still open when the task ends now gets its own route, tagged with its
+    # own need_type/scope and attributed to the specific worker that raised
+    # it, so evolve_workers' input actually distinguishes failure modes.
+    memory = ColonyMemoryStore(tmp_path)
+    state = EvidenceState(
+        question="How does auth use sessions?",
+        evidence=[
+            Evidence(
+                path="src/auth.py",
+                line_start=1,
+                line_end=2,
+                quote="def authenticate(): ...",
+                reason="definition",
+            )
+        ],
+        unresolved_needs=[
+            UnresolvedNeed(
+                description="Still missing the session refresh path.",
+                need_type="call_path",
+                scope="cross_territory",
+                missing="How the refresh token flows into re-authentication.",
+                suggested_terms=["refresh_token", "reauthenticate"],
+                source_worker_id="worker-auth",
+            )
+        ],
+        rounds=[_round(selected=["worker-auth"], coalition_formed=False)],
+    )
+
+    record_task_memory(memory, state.question, state, is_high_quality=False)
+
+    all_routes = memory.all_routes()
+    # The task-level aggregate route (need_type/scope both "") plus the new
+    # per-need route (need_type/scope populated, single-worker-attributed).
+    assert len(all_routes) == 2
+    per_need = [route for route in all_routes if route.need_type]
+    assert len(per_need) == 1
+    assert per_need[0].need_type == "call_path"
+    assert per_need[0].scope == "cross_territory"
+    assert per_need[0].worker_ids == ["worker-auth"]
+    assert per_need[0].is_high_quality is False
+    assert "refresh_token" in per_need[0].need_terms
+    # Never leaks into the query-time routing bonus -- it's always
+    # is_high_quality=False by construction.
+    assert memory.matching_routes(["refresh_token", "reauthenticate"]) == []
+
+
+def test_record_task_memory_does_not_save_a_per_need_route_for_a_resolved_need(
+    tmp_path: Path,
+) -> None:
+    # A need that was raised mid-task but is no longer in state.unresolved_needs
+    # by the time the task ends was resolved (by a later round or a
+    # coalition) -- that is the mechanism working, not a gap, so it must not
+    # get recorded as a struggle signal.
+    memory = ColonyMemoryStore(tmp_path)
+    state = EvidenceState(
+        question="How does auth use sessions?",
+        evidence=[
+            Evidence(
+                path="src/auth.py",
+                line_start=1,
+                line_end=2,
+                quote="def authenticate(): ...",
+                reason="definition",
+            )
+        ],
+        unresolved_needs=[],
+        rounds=[_round(selected=["worker-auth"], coalition_formed=False)],
+    )
+
+    record_task_memory(memory, state.question, state, is_high_quality=True)
+
+    all_routes = memory.all_routes()
+    assert len(all_routes) == 1
+    assert all_routes[0].need_type == ""

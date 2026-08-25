@@ -5,6 +5,7 @@ from ant.coordinator.local import (
     _close_resolved_needs,
     _matches_term,
     _merge_needs,
+    _rank_global_evidence,
     _relevant_symbol_weights,
     _reopen_referenced_evidence,
 )
@@ -77,6 +78,30 @@ def test_routing_matcher_matches_a_common_grammatical_stem() -> None:
     assert not _matches_term("ingest", {"in"})
 
 
+def test_routing_matcher_stems_against_a_compound_part_not_just_the_whole_term() -> None:
+    # Regression test for a real seaborn trace: the symbol
+    # `assign_variables_wideform` compound-splits to {"assign", "variables",
+    # "wideform"} -- "wideform" stays one token because the source didn't
+    # underscore-separate "wide" and "form". A query term "wide" used to
+    # match neither the whole term (doesn't start with "wide") nor the
+    # compound-part set (exact membership only), while a tutorial file
+    # literally named `wide_form_violinplot.py` (which DOES underscore-split
+    # into "wide"/"form"/"violinplot") got credit the real implementation
+    # never could -- a token-boundary accident, not a real relevance
+    # difference. Only the prefix side of this closes: "wide" is a >=4-char
+    # prefix of "wideform", so it now matches; "form" is a suffix, not a
+    # prefix, of "wideform", and is_stem_match is deliberately prefix-only
+    # (a suffix-only match would make "form" match "platform"/"uniform"/
+    # "transform" too, trading one narrow miss for a much broader false-
+    # positive class), so it still does not match here -- this fix recovers
+    # part of the routing signal, not all of it.
+    assert _matches_term("wide", {"assign_variables_wideform"})
+    assert not _matches_term("form", {"assign_variables_wideform"})
+    # Must not match an unrelated compound part on a short accidental prefix
+    # (same 4-char stem-match floor as the whole-term case above).
+    assert not _matches_term("was", {"assign_variables_wideform"})
+
+
 def test_local_coordinator_records_unresolved_needs(tmp_path: Path) -> None:
     (tmp_path / "docs").mkdir()
     (tmp_path / "docs" / "guide.md").write_text("Release notes only\n", encoding="utf-8")
@@ -97,7 +122,58 @@ def test_local_coordinator_records_unresolved_needs(tmp_path: Path) -> None:
     assert state.rounds[0].observations[0].worker_id == "worker-docs"
 
 
-class NeedRoutingReasoner:
+class _PassthroughLookupsReasoner:
+    """Shared by every scenario-specific test reasoner below: they each
+    exist to test observe()'s behavior for one routing/coalition scenario,
+    not select_lookups(), so this just satisfies the WorkerReasoner protocol
+    with the same no-op AutonomousWorker itself uses when no reasoner is
+    configured -- no filtering, so a scenario's expected tool calls/evidence
+    aren't affected by symbol-lookup filtering it isn't testing.
+    """
+
+    def select_lookups(self, *, need, evidence, candidates):
+        return candidates
+
+    def select_workers(self, *, query, need, candidates, limit, memory_hints):
+        return [worker.id for worker in candidates]
+
+    def select_evidence(self, *, question, evidence, limit):
+        return [str(index) for index in range(len(evidence))][:limit], []
+
+    def plan_worker_actions(
+        self, *, need, evidence, candidate_symbols, available_tools, hints, max_actions
+    ):
+        # Mirrors the pre-existing fixed tool sequence (inheritance/flow
+        # hints first, then navigate/references/callers/callees/assignments
+        # per symbol) as a plan instead of inline execution, so scenarios
+        # written against the old always-run-every-tool behavior keep
+        # exercising the same evidence-gathering shape.
+        plan: list[tuple[str, str]] = []
+        available = set(available_tools)
+        is_inheritance = any("inheritance" in hint.lower() for hint in hints)
+        is_flow = any("flow" in hint.lower() or "call path" in hint.lower() for hint in hints)
+        if is_inheritance and "subclasses" in available:
+            plan.extend(("subclasses", symbol) for symbol in candidate_symbols)
+        if is_flow:
+            for symbol in candidate_symbols[:4]:
+                plan.extend(
+                    (tool, symbol)
+                    for tool in ("imports", "callers", "assignments")
+                    if tool in available
+                )
+        for symbol in candidate_symbols:
+            plan.extend(
+                (tool, symbol)
+                for tool in ("navigate", "references", "callers", "callees", "assignments")
+                if tool in available
+            )
+        return plan[:max_actions]
+
+    def should_continue_recruiting(self, *, question, need, evidence, rounds_completed):
+        return True
+
+
+class NeedRoutingReasoner(_PassthroughLookupsReasoner):
     def observe(self, *, question, worker_id, territory_id, evidence):
         needs = []
         if worker_id == "worker-api":
@@ -155,6 +231,91 @@ def test_semantic_need_routes_follow_up_and_forms_coalition(tmp_path: Path) -> N
     assert state.rounds[1].coalition_formed
 
 
+class CrossTerritoryNoHintReasoner(_PassthroughLookupsReasoner):
+    """Same shape as NeedRoutingReasoner but deliberately omits
+    suggested_territories -- that field alone gives the "correct" worker a
+    large territory_hint_score bonus that would mask whether the
+    cross_territory exclusion fix (not the territory hint) is what forces a
+    different worker to be picked.
+    """
+
+    def observe(self, *, question, worker_id, territory_id, evidence):
+        needs = []
+        if worker_id == "worker-api":
+            needs.append(
+                UnresolvedNeed(
+                    description="Need the persistence implementation.",
+                    kind="missing_implementation",
+                    suggested_terms=["persist_record"],
+                    scope="cross_territory",
+                    source_worker_id="worker-api",
+                )
+            )
+        return WorkerObservation(
+            worker_id=worker_id, territory_id=territory_id, unresolved_needs=needs
+        )
+
+
+def test_cross_territory_need_excludes_the_source_worker_even_when_it_still_ranks_highest(
+    tmp_path: Path,
+) -> None:
+    # Regression test for a real observed failure: two seaborn traces
+    # showed round 1 re-selecting the exact same worker that had just
+    # raised a cross_territory need there, because that worker's card
+    # still scored highest overall for the follow-up query too (a
+    # source_worker_bonus applies specifically to re-selecting it, and the
+    # seen-worker penalty discourages but does not forbid re-picking it).
+    # Re-asking the same worker the same question never surfaces the other
+    # half of a cross-territory answer, and since coalition_formed requires
+    # the round's pick to differ from source_worker_id, no joint
+    # cross-check ever ran either. This isolates that from the "the other
+    # worker happens to score higher anyway" case already covered by
+    # test_semantic_need_routes_follow_up_and_forms_coalition above:
+    # worker-api is deliberately kept top-ranked for the follow-up query
+    # too (its own terms plus the source_worker_bonus), and worker-storage
+    # only enters the round-1 candidate pool via a memory-route bonus, not
+    # any lexical match on the follow-up query.
+    (tmp_path / "api").mkdir()
+    (tmp_path / "storage").mkdir()
+    (tmp_path / "api" / "service.py").write_text(
+        "def submit_record():\n    return persist_record()\n", encoding="utf-8"
+    )
+    (tmp_path / "storage" / "repo.py").write_text(
+        "def persist_record():\n    return 'stored'\n", encoding="utf-8"
+    )
+    workers = [
+        WorkerCard(
+            id="worker-api",
+            territory_id="api",
+            name="api",
+            root="api",
+            searchable_terms=["submit", "persist_record", "implementation"],
+            files=["api/service.py"],
+        ),
+        WorkerCard(
+            id="worker-storage",
+            territory_id="storage",
+            name="storage",
+            root="storage",
+            searchable_terms=["repo"],
+            files=["storage/repo.py"],
+        ),
+    ]
+
+    state = LocalCoordinator(
+        tmp_path,
+        workers,
+        reasoner=CrossTerritoryNoHintReasoner(),
+        memory_routes=[
+            MemoryRoute(need_terms=["persist_record"], worker_ids=["worker-storage"], weight=0.3)
+        ],
+    ).ask("How does submit work?", max_rounds=2)
+
+    assert state.rounds[0].selected_worker_ids == ["worker-api"]
+    assert state.rounds[1].selected_worker_ids == ["worker-storage"]
+    assert state.rounds[1].coalition_formed
+
+
 def test_parallel_initial_recruitment_is_not_a_coalition(tmp_path: Path) -> None:
     for root in ("api", "ui"):
         (tmp_path / root).mkdir()
@@ -184,7 +345,7 @@ def test_parallel_initial_recruitment_is_not_a_coalition(tmp_path: Path) -> None
     )
 
 
-class LocalContinuationReasoner:
+class LocalContinuationReasoner(_PassthroughLookupsReasoner):
     def __init__(self) -> None:
         self.calls = 0
 
@@ -235,7 +396,7 @@ def test_local_need_can_continue_the_same_worker(tmp_path: Path) -> None:
     assert not state.rounds[1].coalition_formed
 
 
-class MissingFocusedReasoner:
+class MissingFocusedReasoner(_PassthroughLookupsReasoner):
     def observe(self, *, question, worker_id, territory_id, evidence):
         needs = []
         if worker_id == "worker-docs":
@@ -321,7 +482,7 @@ def test_follow_up_routing_uses_missing_information_over_original_question(
     assert "worker-examples" not in state.rounds[1].selected_worker_ids
 
 
-class FuzzyTerritoryReasoner:
+class FuzzyTerritoryReasoner(_PassthroughLookupsReasoner):
     def observe(self, *, question, worker_id, territory_id, evidence):
         needs = []
         if worker_id == "worker-api":
@@ -387,7 +548,7 @@ def test_territory_hints_are_fuzzy_soft_scores(tmp_path: Path) -> None:
     assert state.rounds[1].candidate_worker_ids[:2] == ["worker-backends", "worker-tools"]
 
 
-class ImplementationSourceReasoner:
+class ImplementationSourceReasoner(_PassthroughLookupsReasoner):
     def observe(self, *, question, worker_id, territory_id, evidence):
         needs = []
         if worker_id == "worker-tests":
@@ -508,7 +669,14 @@ def test_memory_route_soft_bonus_can_select_known_worker(tmp_path: Path) -> None
             territory_id="backends",
             name="backends",
             root="backends",
-            searchable_terms=["sample_shots"],
+            # Deliberately shares no stem with the question below (not even
+            # via a compound part) -- this test isolates the memory-route
+            # bonus as the sole reason worker-backends gets selected, so its
+            # vocabulary must have zero lexical overlap with the query on
+            # its own. "sample_shots" used to satisfy that, until this
+            # session's _matches_term fix started correctly stemming
+            # "samples" against "sample_shots"'s "sample" compound part.
+            searchable_terms=["detector_events"],
             files=["backends/numpy.py"],
         ),
     ]
@@ -979,7 +1147,7 @@ def test_merge_needs_deduplicates_same_gap_across_rounds() -> None:
     assert sorted(merged[0].relevant_symbols) == ["FALQON", "QAOA"]
 
 
-class StaleSubclassNeedReasoner:
+class StaleSubclassNeedReasoner(_PassthroughLookupsReasoner):
     """Simulates an LLM reasoner that keeps flagging the same completeness
     doubt about QAOA's subclasses every round and never notices on its own
     that a later round's evidence has already grounded it. The coordinator's
@@ -1082,7 +1250,7 @@ def test_reopen_referenced_evidence_ignores_invalid_or_out_of_range_ids(
     assert _reopen_referenced_evidence([need], [], search) == []
 
 
-class CoalitionJointReasoner:
+class CoalitionJointReasoner(_PassthroughLookupsReasoner):
     """Only worker-api raises the cross-territory need that triggers a
     coalition; a distinct "coalition" territory_id call represents the joint
     reasoning pass, referencing evidence index 0 to exercise the reopen path.
@@ -1277,3 +1445,32 @@ def test_inheritance_scan_finds_subclass_in_a_territory_never_recruited(
     assert exhaustive_proofs
     assert exhaustive_proofs[0].conclusion == "found_1_subclass"
     assert "QAOA" in exhaustive_proofs[0].relevant_symbols
+
+
+def test_rank_global_evidence_credits_a_symbol_name_matching_the_question() -> None:
+    # Coordinator-level counterpart to the same fix in
+    # ant.workers.autonomous._rank_evidence: the final cross-worker ranking
+    # pass must also credit an Evidence item's carried symbol name, not just
+    # its literal quote text, or a correctly-recruited method whose name is
+    # the only thing matching the question loses to unrelated siblings tied
+    # at the same baseline score.
+    unrelated = Evidence(
+        path="src/a.py",
+        line_start=10,
+        line_end=20,
+        quote="def _shallow_copy(self):\n    return copy.copy(self)",
+        reason="Resolved symbol definition for Widget.",
+        symbols=["_shallow_copy", "Widget._shallow_copy"],
+    )
+    target = Evidence(
+        path="src/a.py",
+        line_start=30,
+        line_end=40,
+        quote="def draw(self, line_wrap=70):\n    return _render(self)",
+        reason="Resolved symbol definition for Widget.",
+        symbols=["draw", "Widget.draw"],
+    )
+
+    ranked = _rank_global_evidence([unrelated, target], "Where is drawing implemented?")
+
+    assert ranked[0] is target

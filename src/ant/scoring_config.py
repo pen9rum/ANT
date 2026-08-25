@@ -118,6 +118,30 @@ class WorkerRoutingConfig:
     # one) only if its score is at least this fraction of the leader's.
     initial_worker_closeness_ratio: float = 0.9
 
+    # LLM-driven worker selection (reasoner.select_workers): the lexical +
+    # dense score above still decides *which workers even get considered*,
+    # capped to this many top candidates per round, before an LLM makes the
+    # actual recruitment judgment among them. This exists purely for cost
+    # control (bounding prompt size / call cost on a large evolved worker
+    # population, e.g. 30+ workers on qibo after several evolve cycles) --
+    # it is not meant to pre-decide relevance, so it is deliberately
+    # generous rather than tight.
+    llm_routing_candidate_pool_size: int = 12
+
+    # LLM-driven final evidence selection (reasoner.select_evidence,
+    # LocalCoordinator.ask): replaces the old fixed evidence[:12] cut before
+    # synthesis. The score-ranked pool is still capped here purely for
+    # prompt-size/cost control, not as a relevance decision -- the LLM
+    # judges what to keep among the pool, up to llm_evidence_keep_limit.
+    # Per-worker collection no longer does its own relevance filtering (see
+    # AutonomousWorker's evidence_limit, which is now a generous safety cap,
+    # not a decision point), so this single final judgment is deliberately
+    # the one place worth spending on, sized larger than the old 12 to give
+    # the model room to keep a genuinely multi-part answer's worth of
+    # evidence instead of being forced to drop something to make room.
+    llm_evidence_pool_size: int = 40
+    llm_evidence_keep_limit: int = 16
+
 
 @dataclass(frozen=True)
 class EvolutionConfig:
@@ -134,6 +158,35 @@ class EvolutionConfig:
     merge_overlap_threshold: float = 0.9
     min_specialization_routes: int = 4
     min_specialization_group_routes: int = 2
+
+    # A worker counts as "already working well enough to leave alone" once
+    # it has at least this many recorded routes, and at least
+    # `healthy_route_ratio` of them are flagged is_high_quality (derived
+    # from correctness+completeness -- see RouteQualityConfig -- not
+    # relevance/clarity, so a worker that finds something relevant-looking
+    # without actually answering correctly/completely still counts as
+    # struggling). specialize/birth/merge all skip touching a worker (or,
+    # for merge, either side of a candidate pair) that already clears this
+    # bar: added after a real regression -- merging two already-adequate
+    # bridge workers into one test-file-heavy worker measurably degraded a
+    # question that a pre-merge generation had answered well (see qibo's
+    # gen2->gen3 comparison on dc7063c4...), which this gate is designed to
+    # prevent by refusing to touch a worker with a track record of good
+    # answers just because it also happens to satisfy a structural
+    # threshold (overlap ratio, route count, recurring coalition count).
+    min_routes_for_health_check: int = 3
+    healthy_route_ratio: float = 0.7
+
+    # specialize skips a worker once this fraction of its *typed* struggling
+    # routes (need_type is populated -- see MemoryRoute, colony.py's
+    # record_task_memory) are need_type="negative_presence": the repo
+    # genuinely doesn't contain the answer, confirmed directly on both qibo
+    # (a question about a tool that isn't part of that codebase) and seaborn
+    # (a doc-build-performance question with no matching implementation).
+    # Reorganizing territory boundaries cannot fix "the information was
+    # never here" -- this exists so specialize doesn't spend an evolution
+    # cycle on a failure mode it has no power over.
+    negative_presence_gate_ratio: float = 0.5
 
 
 @dataclass(frozen=True)

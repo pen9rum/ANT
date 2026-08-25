@@ -87,6 +87,45 @@ refactor — this file only centralizes their **defaults** so the "why 4, why
 function signature. Passing explicit values to `evolve_workers()` (as the
 two-pass qibo/seaborn experiments do) still works exactly as before.
 
+**`min_routes_for_health_check` / `healthy_route_ratio`** (added after a
+real observed regression, not part of the original design): specialize,
+birth, and merge all now skip touching a worker (for merge, either side of
+a candidate pair) that already has at least `min_routes_for_health_check`
+recorded routes with at least `healthy_route_ratio` of them flagged
+`is_high_quality`. This was added after a three-generation repeated-evolve
+experiment on qibo showed a concrete failure: cycle 2's merge folded an
+already-adequate bridge worker into an overlapping-but-unrelated,
+test-file-heavy bridge worker, and a question a pre-merge generation had
+answered well (citing `distcircuit.py`'s actual implementation, correctness
+8/10) dropped to citing only test-file assertions (correctness 4/10) once
+the merge routed it to the diluted worker instead. Structural signals
+(directory overlap, accumulated route *count*, recurring coalition count)
+were all satisfied in that case; nothing checked whether the worker being
+touched was already working. `is_high_quality` is derived from
+correctness+completeness only (see `RouteQualityConfig` below), not
+relevance/clarity — a worker that returns relevant-looking, well-written
+but factually incomplete answers still counts as struggling, which is
+deliberate: the point of specialize/birth is to dig into a topic further
+when the *substance* isn't there yet, not when the surface signals already
+look fine.
+
+**`negative_presence_gate_ratio` (0.5)** — added alongside a broader fix:
+`record_task_memory()` used to collapse every unresolved need from a task
+into one aggregate route carrying only the original question's terms and a
+single pass/fail flag, discarding the `UnresolvedNeed`'s own `need_type` and
+`scope`. `evolve_workers` could see *that* a worker struggled but never
+*what kind* of gap it struggled with. `MemoryRoute` now also gets a
+per-need route (need_type/scope populated, `is_high_quality=False` by
+construction, never visible to `matching_routes`) for each need still open
+when a task ends. This gate is the first consumer: once at least half of a
+worker's typed routes are `need_type="negative_presence"` (confirmed
+directly on real questions — qibo asked about a tool not in that codebase;
+seaborn asked about doc-build performance with no matching implementation),
+specialize skips it, since reorganizing territory boundaries cannot fix "the
+information was never in this repo." 0.5 (a bare majority) is unvalidated
+like every other ratio in this file — the qualitative direction (skip a
+majority-absence worker) is well-evidenced, the exact cutoff is not.
+
 ### `RouteQualityConfig` — eval runner (`ant/evaluation/runner.py`)
 
 Decides which finished answers are trustworthy enough to feed back into
@@ -126,6 +165,13 @@ lever.
   different mechanism mix entirely, which is exactly why it's worth
   reporting as a swept parameter rather than a fixed given, if evolution
   behavior becomes a paper claim.
+- **`min_routes_for_health_check = 3` / `healthy_route_ratio = 0.7`.** The
+  motivating regression (see `EvolutionConfig` above) is real and the
+  direction of the fix is well-evidenced, but these exact two numbers
+  aren't: 3 routes is a small sample to call a worker's quality "settled,"
+  and 70% is an unvalidated cutoff between "struggling" and "fine." A
+  worker with 2 good routes and 1 bad one currently reads as unhealthy
+  (2/3 = 0.67 < 0.7); one route flipping either way changes the verdict.
 
 ## Running a sensitivity/ablation pass
 
