@@ -44,6 +44,7 @@ def evolve_workers(
     negative_presence_gate_ratio: float = (
         DEFAULT_SCORING_CONFIG.evolution.negative_presence_gate_ratio
     ),
+    min_episode_count: int = DEFAULT_SCORING_CONFIG.evolution.min_episode_count,
 ) -> EvolutionResult:
     store = IndexStore(index_path)
     memory = ColonyMemoryStore(index_path)
@@ -149,6 +150,15 @@ def evolve_workers(
         worker_id for event in merge_events for worker_id in event.source_worker_ids
     )
 
+    if reasoner is not None:
+        workers, episode_events = _apply_episode_actions(
+            workers, memory, reasoner, min_episode_count
+        )
+        events.extend(episode_events)
+        removed_worker_ids.update(
+            worker_id for event in episode_events for worker_id in event.source_worker_ids
+        )
+
     territories = [
         Territory(
             id=worker.territory_id,
@@ -166,6 +176,129 @@ def evolve_workers(
             reason="Worker retired/specialized/merged away by colony evolution.",
         )
     return EvolutionResult(events=events, worker_count=len(workers))
+
+
+def _apply_episode_actions(
+    workers: list[WorkerCard],
+    memory: ColonyMemoryStore,
+    reasoner: EvolutionReasoner,
+    min_episode_count: int,
+) -> tuple[list[WorkerCard], list[EvolutionEvent]]:
+    """Acts on ColonyMemoryStore.aggregate_episodes' recurring (strategy,
+    worker-set) patterns -- e.g. "temporary_bridge kept resolving a
+    proxy-validation-shaped need across 3 separate tasks" -- via
+    EvolutionReasoner.decide_episode_action. This is a richer signal than
+    recurring_coalitions (which only sees raw worker co-occurrence, not
+    which specific temporary adaptation actually worked or how often): the
+    same slow, cross-task timescale as the rest of evolve_workers, never
+    reacting to a single task's own outcome.
+    """
+    worker_by_id = {worker.id: worker for worker in workers}
+    events: list[EvolutionEvent] = []
+    consumed: set[str] = set()
+    for aggregate in memory.aggregate_episodes(min_count=min_episode_count):
+        source_workers = [
+            worker_by_id[worker_id]
+            for worker_id in aggregate.workers
+            if worker_id in worker_by_id and worker_id not in consumed
+        ]
+        if len(source_workers) != len(aggregate.workers):
+            # At least one involved worker no longer exists (already
+            # retired/specialized/merged away this cycle, or by a prior
+            # aggregate in this same loop) -- nothing to act on.
+            continue
+        action = reasoner.decide_episode_action(
+            strategy=aggregate.strategy,
+            need_terms=aggregate.need_terms,
+            occurrences=aggregate.occurrences,
+            successes=aggregate.successes,
+            total_evidence_gain=aggregate.total_evidence_gain,
+            workers=aggregate.workers,
+        )
+        reason = (
+            f"Episode-driven: '{aggregate.strategy}' succeeded in "
+            f"{aggregate.successes}/{aggregate.occurrences} recorded tasks "
+            f"(total evidence gain {aggregate.total_evidence_gain})."
+        )
+        if action == "no_change":
+            continue
+        if action == "strengthen_route":
+            memory.save_route(
+                MemoryRoute(
+                    need_terms=aggregate.need_terms,
+                    worker_ids=aggregate.workers,
+                    weight=5.0,
+                    is_high_quality=True,
+                )
+            )
+            events.append(
+                EvolutionEvent(
+                    kind="strengthen_route",
+                    worker_id=",".join(aggregate.workers),
+                    reason=reason,
+                    source_worker_ids=aggregate.workers,
+                )
+            )
+        elif action == "birth_bridge":
+            bridge_suffix = "-".join(
+                worker_id.removeprefix("worker-") for worker_id in aggregate.workers
+            )
+            bridge_id = f"worker-bridge-{bridge_suffix}"
+            if bridge_id in worker_by_id:
+                continue
+            files = sorted({file for worker in source_workers for file in worker.files})
+            terms = sorted(
+                {term for worker in source_workers for term in worker.searchable_terms}
+            )[:32]
+            bridge = WorkerCard(
+                id=bridge_id,
+                territory_id=bridge_id.removeprefix("worker-"),
+                name=" + ".join(worker.name for worker in source_workers[:3]) + " bridge",
+                root="",
+                responsibilities=[
+                    "Permanent bridge born from a recurring successful temporary adaptation.",
+                    reason,
+                ],
+                searchable_terms=terms,
+                files=files,
+            )
+            workers = [*workers, bridge]
+            worker_by_id[bridge.id] = bridge
+            events.append(
+                EvolutionEvent(
+                    kind="birth",
+                    worker_id=bridge.id,
+                    reason=reason,
+                    source_worker_ids=aggregate.workers,
+                )
+            )
+        elif action == "merge" and len(source_workers) == 2:
+            first, second = source_workers
+            merged_worker = WorkerCard(
+                id=f"worker-merge-{first.id.removeprefix('worker-')}"
+                f"-{second.id.removeprefix('worker-')}",
+                territory_id=f"merge-{first.territory_id}-{second.territory_id}",
+                name=f"{first.name} / {second.name} merged",
+                root=first.root or second.root,
+                responsibilities=[*first.responsibilities, *second.responsibilities, reason],
+                searchable_terms=sorted(
+                    set(first.searchable_terms) | set(second.searchable_terms)
+                ),
+                files=sorted(set(first.files) | set(second.files)),
+            )
+            workers = [w for w in workers if w.id not in (first.id, second.id)]
+            workers.append(merged_worker)
+            worker_by_id = {w.id: w for w in workers}
+            consumed.update({first.id, second.id})
+            events.append(
+                EvolutionEvent(
+                    kind="merge",
+                    worker_id=merged_worker.id,
+                    reason=reason,
+                    source_worker_ids=[first.id, second.id],
+                )
+            )
+    return workers, events
 
 
 def _merge_overlapping_workers(

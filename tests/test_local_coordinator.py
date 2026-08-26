@@ -8,8 +8,9 @@ from ant.coordinator.local import (
     _rank_global_evidence,
     _relevant_symbol_weights,
     _reopen_referenced_evidence,
+    _select_for_active_need,
 )
-from ant.domain import Evidence, UnresolvedNeed, WorkerCard, WorkerObservation
+from ant.domain import Evidence, NeedResolution, UnresolvedNeed, WorkerCard, WorkerObservation
 from ant.memory import MemoryRoute
 from ant.tools import LocalSearchTool
 
@@ -172,6 +173,20 @@ class _PassthroughLookupsReasoner:
     def should_continue_recruiting(self, *, question, need, evidence, rounds_completed):
         return True
 
+    def check_need_resolution(self, *, need, new_evidence, question):
+        # Always "unresolved": these scenario reasoners exist to test one
+        # specific routing/coalition behavior each, not the new resolution-
+        # check/escalation layer -- returning "unresolved" keeps every
+        # existing scenario's need lifecycle exactly as it was before this
+        # method existed (matches MockLLMProvider's own rationale).
+        return NeedResolution(status="unresolved")
+
+    def decide_local_action(self, *, need, evidence, worker_progress, worker):
+        # Always "continue": same rationale as MockLLMProvider -- these
+        # scenario reasoners exist to test one specific behavior each, not
+        # the local-continuation decision layer.
+        return "continue"
+
 
 class NeedRoutingReasoner(_PassthroughLookupsReasoner):
     def observe(self, *, question, worker_id, territory_id, evidence):
@@ -314,6 +329,80 @@ def test_cross_territory_need_excludes_the_source_worker_even_when_it_still_rank
     assert state.rounds[0].selected_worker_ids == ["worker-api"]
     assert state.rounds[1].selected_worker_ids == ["worker-storage"]
     assert state.rounds[1].coalition_formed
+
+
+def test_select_for_active_need_excludes_every_worker_seen_not_just_the_needs_source(
+) -> None:
+    # Regression test for a real observed failure on a yt-dlp trace: rounds
+    # 2-5 of a 6-round task all re-picked the exact same worker (already
+    # proven unable to answer in round 1), producing 11 near-duplicate
+    # unresolved needs instead of ever trying a third territory. The cause:
+    # once a coalition cross-check itself fails to resolve the need, its
+    # own re-raised need carries source_worker_id="coalition:<id>", which
+    # never matches a real WorkerCard.id -- excluding only that exact
+    # string was a silent no-op, so the already-failed worker kept winning
+    # by score. This is the exact shape of that trace: worker-b is the
+    # highest-scored candidate (as it was in round 1, correctly), but it
+    # has already been tried and failed under a synthetic coalition need,
+    # so round 2 must move on to worker-c.
+    workers = [
+        # Already score-ranked, worker-b first: a naive top-1 pick (or the
+        # old buggy exclusion, which never matches the synthetic source id
+        # below) would re-select worker-b here.
+        WorkerCard(id="worker-b", territory_id="storage", name="storage", root="storage"),
+        WorkerCard(id="worker-a", territory_id="api", name="api", root="api"),
+        WorkerCard(id="worker-c", territory_id="backup", name="backup", root="backup"),
+    ]
+    need = UnresolvedNeed(
+        description="Still missing the concrete implementation.",
+        kind="missing_detail",
+        scope="cross_territory",
+        source_worker_id="coalition:worker-b",  # never equals any real WorkerCard.id
+    )
+
+    selected = _select_for_active_need(
+        candidates=workers,
+        active_need=need,
+        seen_worker_ids={"worker-a", "worker-b"},
+    )
+
+    assert [worker.id for worker in selected] == ["worker-c"]
+
+
+def test_select_for_active_need_falls_back_to_a_seen_worker_if_nothing_else_is_left() -> None:
+    workers = [WorkerCard(id="worker-a", territory_id="api", name="api", root="api")]
+    need = UnresolvedNeed(
+        description="Still missing.",
+        scope="cross_territory",
+        source_worker_id="worker-a",
+    )
+
+    selected = _select_for_active_need(
+        candidates=workers,
+        active_need=need,
+        seen_worker_ids={"worker-a"},
+    )
+
+    assert [worker.id for worker in selected] == ["worker-a"]
+
+
+def test_select_for_active_need_takes_the_top_candidate_for_a_local_need() -> None:
+    workers = [
+        WorkerCard(id="worker-a", territory_id="api", name="api", root="api"),
+        WorkerCard(id="worker-b", territory_id="storage", name="storage", root="storage"),
+    ]
+    need = UnresolvedNeed(
+        description="Local follow-up.", scope="local", source_worker_id="worker-a"
+    )
+
+    selected = _select_for_active_need(
+        candidates=workers,
+        active_need=need,
+        seen_worker_ids={"worker-a"},
+    )
+
+    # Non-cross_territory needs are unaffected by this exclusion logic.
+    assert [worker.id for worker in selected] == ["worker-a"]
 
 
 def test_parallel_initial_recruitment_is_not_a_coalition(tmp_path: Path) -> None:
@@ -1474,3 +1563,224 @@ def test_rank_global_evidence_credits_a_symbol_name_matching_the_question() -> N
     ranked = _rank_global_evidence([unrelated, target], "Where is drawing implemented?")
 
     assert ranked[0] is target
+
+
+class ResolvesOnNewEvidenceReasoner(_PassthroughLookupsReasoner):
+    """Always re-raises the same need (by identity) regardless of which
+    worker is asked, and resolves it exactly when a round turns up evidence
+    genuinely new to the pool -- the simplest possible stand-in for real
+    judgment, sufficient to prove the *plumbing* (does resolved status
+    actually remove the need; does a no-progress round actually count as
+    no-progress) without needing a real model.
+    """
+
+    def __init__(self, need_type: str = "data_flow") -> None:
+        self.need_type = need_type
+
+    def observe(self, *, question, worker_id, territory_id, evidence):
+        return WorkerObservation(
+            worker_id=worker_id,
+            territory_id=territory_id,
+            unresolved_needs=[
+                UnresolvedNeed(
+                    description="Need the real archive implementation.",
+                    kind="missing_implementation",
+                    need_type=self.need_type,
+                    suggested_terms=["archive"],
+                    scope="local",
+                    source_worker_id="worker-a",
+                )
+            ],
+        )
+
+    def check_need_resolution(self, *, need, new_evidence, question):
+        return NeedResolution(status="resolved" if new_evidence else "unresolved")
+
+    def should_continue_recruiting(self, *, question, need, evidence, rounds_completed):
+        return True
+
+
+def test_check_need_resolution_closes_a_need_type_the_old_heuristic_never_could(
+    tmp_path: Path,
+) -> None:
+    # need_type="data_flow" is not in _CLOSABLE_BY_EVIDENCE
+    # (coordinator/local.py) -- the old heuristic closure would have left
+    # this need open forever no matter what evidence turned up. The new
+    # resolution check must be the one that actually closes it once the
+    # worker's own re-search surfaces the real implementation.
+    (tmp_path / "api").mkdir()
+    (tmp_path / "api" / "service.py").write_text(
+        "def archive_real():\n    return 'done'\n", encoding="utf-8"
+    )
+    worker = WorkerCard(
+        id="worker-a",
+        territory_id="api",
+        name="api",
+        root="api",
+        searchable_terms=["archive"],
+        files=["api/service.py"],
+    )
+
+    # Deliberately no lexical overlap with the file/need vocabulary: round 0
+    # (driven by this raw question) must find nothing, so round 1's evidence
+    # (once the need's own suggested_terms=["archive"] enter the query) is
+    # genuinely new to the pool, not a re-discovery of something round 0
+    # already found -- otherwise "resolved" would trivially never have new
+    # evidence to react to regardless of whether this check works.
+    state = LocalCoordinator(
+        tmp_path, [worker], reasoner=ResolvesOnNewEvidenceReasoner()
+    ).ask("How does the service work?", max_rounds=2)
+
+    assert not any(
+        need.description == "Need the real archive implementation."
+        for need in state.unresolved_needs
+    )
+
+
+def test_stuck_need_escalates_to_a_worker_outside_the_normal_candidate_pool(
+    tmp_path: Path,
+) -> None:
+    # Regression-shaped test for the design gap identified from a real
+    # yt-dlp trace: a need that makes no genuine progress for
+    # _STUCK_THRESHOLD consecutive rounds must stop being retried the
+    # normal way (re-asking the same worker, which only ever re-finds the
+    # same stub it already found) and escalate to a worker outside the
+    # normal routing pool -- worker-b's routing terms deliberately never
+    # match the query, so it can only ever be reached via escalation's
+    # tactic 1 (expand_pool), which bypasses routing scores entirely.
+    (tmp_path / "api").mkdir()
+    (tmp_path / "storage").mkdir()
+    (tmp_path / "api" / "service.py").write_text(
+        "def archive_stub():\n    pass\n", encoding="utf-8"
+    )
+    (tmp_path / "storage" / "repo.py").write_text(
+        "def archive_real():\n    return 'done'\n", encoding="utf-8"
+    )
+    workers = [
+        WorkerCard(
+            id="worker-a",
+            territory_id="api",
+            name="api",
+            root="api",
+            searchable_terms=["archive"],
+            files=["api/service.py"],
+        ),
+        WorkerCard(
+            id="worker-b",
+            territory_id="storage",
+            name="storage",
+            root="storage",
+            searchable_terms=["unrelated_term"],
+            files=["storage/repo.py"],
+        ),
+    ]
+
+    state = LocalCoordinator(
+        tmp_path, workers, reasoner=ResolvesOnNewEvidenceReasoner()
+    ).ask("Where is archive handling implemented?", max_rounds=4)
+
+    # Rounds 1-2: worker-a re-picked normally, re-finds the same stub each
+    # time (not novel), no progress -- streak reaches _STUCK_THRESHOLD.
+    assert state.rounds[1].selected_worker_ids == ["worker-a"]
+    assert state.rounds[1].escalation_used == ""
+    assert state.rounds[2].selected_worker_ids == ["worker-a"]
+    assert state.rounds[2].escalation_used == ""
+    # Round 3: stuck -> escalates, reaching worker-b (never a normal
+    # routing candidate) and finding its genuinely new evidence.
+    assert state.rounds[3].escalation_used == "expand_pool"
+    assert state.rounds[3].selected_worker_ids == ["worker-b"]
+    assert any(item.path == "storage/repo.py" for item in state.evidence)
+
+
+class AlwaysHandoffReasoner(_PassthroughLookupsReasoner):
+    """Never resolves the need it raises (so it stays active across every
+    round) and always answers "handoff" once asked to decide -- enough to
+    prove decide_local_action's verdict actually overrides which worker
+    gets picked on a local-scope need's second attempt, instead of the
+    routing score alone (which would naturally keep re-picking the same
+    worker on a tie -- see the test below).
+    """
+
+    def observe(self, *, question, worker_id, territory_id, evidence):
+        return WorkerObservation(
+            worker_id=worker_id,
+            territory_id=territory_id,
+            unresolved_needs=[
+                UnresolvedNeed(
+                    description="Need the archive implementation.",
+                    kind="missing_implementation",
+                    need_type="data_flow",
+                    suggested_terms=["archive"],
+                    scope="local",
+                    source_worker_id="worker-a",
+                )
+            ],
+        )
+
+    def check_need_resolution(self, *, need, new_evidence, question):
+        return NeedResolution(status="unresolved")
+
+    def decide_local_action(self, *, need, evidence, worker_progress, worker):
+        return "handoff"
+
+    def should_continue_recruiting(self, *, question, need, evidence, rounds_completed):
+        return True
+
+
+def test_decide_local_action_handoff_overrides_the_routing_ties_default_pick(
+    tmp_path: Path,
+) -> None:
+    # Regression-shaped test for the design gap: a local-scope need's
+    # second attempt used to just re-run _select_for_active_need, which on
+    # a lexical tie keeps the same worker purely because of list order --
+    # not because anyone decided it should continue. worker-a and worker-b
+    # deliberately tie on the need-driven query (both match "archive", one
+    # exactly, one via a compound part), so the *old* behavior would keep
+    # picking worker-a on round 2 as well. A reasoner that always says
+    # "handoff" must override that and force worker-b instead.
+    (tmp_path / "api").mkdir()
+    (tmp_path / "storage").mkdir()
+    (tmp_path / "api" / "service.py").write_text(
+        "def archive_stub():\n    pass\n", encoding="utf-8"
+    )
+    (tmp_path / "storage" / "repo.py").write_text(
+        "def archive_real():\n    return 'done'\n", encoding="utf-8"
+    )
+    # worker-a first: on a genuine scoring tie, stable sort keeps insertion
+    # order, so round 0's fallback (both score 0 on the archive-free
+    # original question) and any later tie both default to worker-a --
+    # exactly the "coincidence, not a decision" behavior this test isolates
+    # decide_local_action's override from.
+    workers = [
+        WorkerCard(
+            id="worker-a",
+            territory_id="api",
+            name="api",
+            root="api",
+            searchable_terms=["archive"],
+            files=["api/service.py"],
+        ),
+        WorkerCard(
+            id="worker-b",
+            territory_id="storage",
+            name="storage",
+            root="storage",
+            searchable_terms=["archive_alt"],
+            files=["storage/repo.py"],
+        ),
+    ]
+
+    # Deliberately no "archive" anywhere in the original question -- only
+    # round 1+'s need-driven query introduces it, so round 0 cannot already
+    # find the answer and short-circuit the need this test needs to persist.
+    state = LocalCoordinator(tmp_path, workers, reasoner=AlwaysHandoffReasoner()).ask(
+        "Where is X handled?", max_rounds=3
+    )
+
+    assert state.rounds[0].selected_worker_ids == ["worker-a"]
+    # Round 1: need's first attempt, still the normal (non-decision) path --
+    # ties toward worker-a, same as before this feature existed.
+    assert state.rounds[1].selected_worker_ids == ["worker-a"]
+    # Round 2: need's second attempt -- decide_local_action fires and its
+    # "handoff" verdict must be what moves this to worker-b, not chance.
+    assert state.rounds[2].selected_worker_ids == ["worker-b"]

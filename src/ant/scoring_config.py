@@ -159,6 +159,14 @@ class EvolutionConfig:
     min_specialization_routes: int = 4
     min_specialization_group_routes: int = 2
 
+    # How many separate *tasks* the same (strategy, worker-set) collaboration
+    # episode must recur in before evolve_workers even asks an
+    # EvolutionReasoner what to do about it (see
+    # ColonyMemoryStore.aggregate_episodes / EvolutionReasoner.
+    # decide_episode_action). Same role as min_coalition_count but for the
+    # richer per-need-strategy-outcome signal, not raw worker co-occurrence.
+    min_episode_count: int = 2
+
     # A worker counts as "already working well enough to leave alone" once
     # it has at least this many recorded routes, and at least
     # `healthy_route_ratio` of them are flagged is_high_quality (derived

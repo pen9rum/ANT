@@ -90,6 +90,22 @@ class UnresolvedNeed(BaseModel):
     relevant_symbols: list[str] = Field(default_factory=list)
 
 
+class NeedResolution(BaseModel):
+    """Verdict from reasoner.check_need_resolution(): whether evidence
+    gathered since a need was raised actually satisfies it, generalizing
+    the old heuristic closure check (which only understood 3 of ~6
+    need_types, silently never closing the rest) to every need_type via
+    real judgment instead of pattern-matching a definition/inheritance
+    quote."""
+
+    status: str = "unresolved"  # "resolved" | "partial" | "unresolved"
+    # Only meaningful when status == "partial": a more specific need that
+    # replaces the original in accumulated_needs, so a need that keeps
+    # getting re-raised sharpens round over round instead of being asked
+    # again verbatim.
+    refined_need: UnresolvedNeed | None = None
+
+
 class WorkerRoutingScore(BaseModel):
     worker_id: str
     territory_id: str
@@ -118,6 +134,10 @@ class RecruitmentRound(BaseModel):
     coalition_formed: bool = False
     coalition_reason: str = ""
     observations: list[WorkerObservation] = Field(default_factory=list)
+    # Which escalation tactic fired this round, if the active need had been
+    # marked stuck ("expand_pool" | "third_worker" | "temporary_bridge" |
+    # "global_fallback"); "" for every normal (non-escalated) round.
+    escalation_used: str = ""
 
 
 class EvidenceState(BaseModel):

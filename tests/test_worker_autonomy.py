@@ -327,6 +327,12 @@ class _DenylistReasoner:
     def should_continue_recruiting(self, *, question, need, evidence, rounds_completed):
         raise AssertionError("this test does not exercise should_continue_recruiting()")
 
+    def check_need_resolution(self, *, need, new_evidence, question):
+        raise AssertionError("this test does not exercise check_need_resolution()")
+
+    def decide_local_action(self, *, need, evidence, worker_progress, worker):
+        raise AssertionError("this test does not exercise decide_local_action()")
+
 
 def test_autonomous_worker_filters_candidate_symbols_through_a_supplied_reasoner(
     tmp_path: Path,

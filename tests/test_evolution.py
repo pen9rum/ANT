@@ -3,6 +3,7 @@ from pathlib import Path
 from ant.domain import CodeSymbol, Territory, WorkerCard
 from ant.evolution import evolve_workers
 from ant.memory import CoalitionRecord, ColonyMemoryStore, IndexStore, MemoryRoute
+from ant.memory.colony import CollaborationEpisode
 
 
 class _AlwaysVetoReasoner:
@@ -17,6 +18,11 @@ class _AlwaysVetoReasoner:
 
     def should_merge(self, *, worker_a_id, worker_a_summary, worker_b_id, worker_b_summary):
         return False
+
+    def decide_episode_action(
+        self, *, strategy, need_terms, occurrences, successes, total_evidence_gain, workers
+    ):
+        raise AssertionError("this test does not exercise decide_episode_action()")
 
 
 def test_evolve_workers_births_bridge_from_recurring_coalition(tmp_path: Path) -> None:
@@ -458,3 +464,111 @@ def test_evolve_workers_does_not_specialize_without_enough_route_diversity(
     assert not [event for event in result.events if event.kind == "specialize"]
     stored_workers = {worker.id for worker in IndexStore(index_path).load_workers()}
     assert stored_workers == {"worker-mixed"}
+
+
+class _BirthBridgeOnRecurringPatternReasoner(_AlwaysVetoReasoner):
+    """Stub EvolutionReasoner whose decide_episode_action always says
+    "birth_bridge" -- proves evolve_workers actually consults the reasoner
+    over aggregated episodes (not just raw coalition counts) and acts on
+    its verdict, without needing a real model call.
+    """
+
+    def decide_episode_action(
+        self, *, strategy, need_terms, occurrences, successes, total_evidence_gain, workers
+    ):
+        return "birth_bridge"
+
+
+class _NoChangeOnEpisodesReasoner(_AlwaysVetoReasoner):
+    """Stub EvolutionReasoner whose decide_episode_action always says
+    "no_change" -- unlike _AlwaysVetoReasoner (which raises if
+    decide_episode_action is ever called, for tests that assert it's never
+    reached), this one lets the call happen and proves evolve_workers
+    honors an explicit "no" the same way it already does for
+    should_specialize/should_merge.
+    """
+
+    def decide_episode_action(
+        self, *, strategy, need_terms, occurrences, successes, total_evidence_gain, workers
+    ):
+        return "no_change"
+
+
+def test_evolve_workers_births_bridge_from_a_recurring_successful_episode_pattern(
+    tmp_path: Path,
+) -> None:
+    index_path = tmp_path / ".ant"
+    workers = [
+        WorkerCard(id="worker-a", territory_id="a", name="a", root="a", files=["a.py"]),
+        WorkerCard(id="worker-b", territory_id="b", name="b", root="b", files=["b.py"]),
+    ]
+    territories = [
+        Territory(id=worker.territory_id, root=worker.root, files=worker.files)
+        for worker in workers
+    ]
+    IndexStore(index_path).save(territories, workers)
+    memory = ColonyMemoryStore(index_path)
+    for need in ("proxy validation boundary task one", "proxy validation boundary task two"):
+        memory.record_episode(
+            CollaborationEpisode(
+                need=need,
+                workers=["worker-a", "worker-b"],
+                strategy="temporary_bridge",
+                outcome="progress",
+                evidence_gain=3,
+            )
+        )
+
+    result = evolve_workers(
+        index_path,
+        reasoner=_BirthBridgeOnRecurringPatternReasoner(),
+        min_coalition_count=99,
+        retire_empty=False,
+        merge_overlap=0.99,
+        min_episode_count=2,
+    )
+
+    birth_events = [event for event in result.events if event.kind == "birth"]
+    assert len(birth_events) == 1
+    assert sorted(birth_events[0].source_worker_ids) == ["worker-a", "worker-b"]
+    stored_workers = {worker.id for worker in IndexStore(index_path).load_workers()}
+    assert "worker-bridge-a-b" in stored_workers
+
+
+def test_evolve_workers_leaves_episodes_alone_when_reasoner_says_no_change(
+    tmp_path: Path,
+) -> None:
+    index_path = tmp_path / ".ant"
+    workers = [
+        WorkerCard(id="worker-a", territory_id="a", name="a", root="a", files=["a.py"]),
+        WorkerCard(id="worker-b", territory_id="b", name="b", root="b", files=["b.py"]),
+    ]
+    territories = [
+        Territory(id=worker.territory_id, root=worker.root, files=worker.files)
+        for worker in workers
+    ]
+    IndexStore(index_path).save(territories, workers)
+    memory = ColonyMemoryStore(index_path)
+    for need in ("proxy validation boundary task one", "proxy validation boundary task two"):
+        memory.record_episode(
+            CollaborationEpisode(
+                need=need,
+                workers=["worker-a", "worker-b"],
+                strategy="temporary_bridge",
+                outcome="progress",
+                evidence_gain=3,
+            )
+        )
+
+    result = evolve_workers(
+        index_path,
+        reasoner=_NoChangeOnEpisodesReasoner(),
+        min_coalition_count=99,
+        retire_empty=False,
+        merge_overlap=0.99,
+        min_episode_count=2,
+    )
+
+    assert not [
+        event for event in result.events if event.kind in ("birth", "merge", "strengthen_route")
+    ]

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from collections import defaultdict
 from pathlib import Path
 
 from pydantic import BaseModel, Field
@@ -15,6 +16,41 @@ class CoalitionRecord(BaseModel):
     question: str
     evidence_count: int
     unresolved_need_count: int
+
+
+class CollaborationEpisode(BaseModel):
+    """One row per need-driven round of a finished task: what was needed,
+    who was recruited, what strategy handled it (a plain follow-up, a
+    coalition, or which escalation tactic), and whether it actually
+    produced anything. This is what evolve_workers reads (via
+    ColonyMemoryStore.aggregate_episodes) to notice "escalation tactic X
+    keeps being the one that works for this kind of need", instead of only
+    seeing raw worker co-occurrence the way recurring_coalitions() does.
+    """
+
+    need: str
+    workers: list[str]
+    strategy: str
+    outcome: str
+    evidence_gain: int
+
+
+class EpisodeAggregate(BaseModel):
+    """A collaboration pattern that recurred across *separate tasks* (not
+    separate rounds of the same task -- see aggregate_episodes), grouped by
+    (strategy, exact worker set): e.g. "temporary_bridge involving worker-a
+    and worker-b succeeded in 3/3 occurrences". need_terms is a supplementary
+    union of vocabulary seen across those occurrences, not part of the
+    grouping key -- the (strategy, workers) pair is a far more stable
+    identifier than independently LLM-worded need text ever is.
+    """
+
+    strategy: str
+    workers: list[str]
+    need_terms: list[str]
+    occurrences: int
+    successes: int
+    total_evidence_gain: int
 
 
 class MemoryRoute(BaseModel):
@@ -56,6 +92,64 @@ class ColonyMemoryStore:
                     record.model_dump_json(),
                 ),
             )
+
+    def record_episode(self, episode: CollaborationEpisode) -> None:
+        with sqlite3.connect(self.db_path) as connection:
+            _create_schema(connection)
+            connection.execute(
+                "insert into episodes(need, strategy, outcome, evidence_gain, payload) "
+                "values (?, ?, ?, ?, ?)",
+                (
+                    episode.need,
+                    episode.strategy,
+                    episode.outcome,
+                    episode.evidence_gain,
+                    episode.model_dump_json(),
+                ),
+            )
+
+    def aggregate_episodes(self, min_count: int = 2) -> list[EpisodeAggregate]:
+        """Groups recorded episodes by (strategy, exact worker set) across
+        every task recorded so far -- deliberately not by need text, which
+        is independently LLM-worded per task and rarely byte-identical
+        even for the same underlying gap. (strategy, workers) is the far
+        more stable identifier: it directly answers "did this specific
+        temporary adaptation keep working for this specific pairing".
+        need_terms is a supplementary union of vocabulary across the
+        group's occurrences, not part of the grouping key.
+        """
+        with sqlite3.connect(self.db_path) as connection:
+            _create_schema(connection)
+            rows = connection.execute(
+                "select need, strategy, outcome, evidence_gain, payload from episodes"
+            ).fetchall()
+        groups: dict[tuple[str, tuple[str, ...]], list[tuple[str, int, list[str]]]] = defaultdict(
+            list
+        )
+        for need, strategy, outcome, evidence_gain, payload in rows:
+            workers = tuple(sorted(json.loads(payload).get("workers", [])))
+            if not workers:
+                continue
+            groups[(strategy, workers)].append((outcome, evidence_gain, extract_terms(need)[:6]))
+        aggregates: list[EpisodeAggregate] = []
+        for (strategy, workers), items in groups.items():
+            if len(items) < min_count:
+                continue
+            successes = sum(1 for outcome, _, _ in items if outcome == "progress")
+            total_gain = sum(gain for _, gain, _ in items)
+            need_terms = sorted({term for _, _, terms in items for term in terms})[:12]
+            aggregates.append(
+                EpisodeAggregate(
+                    strategy=strategy,
+                    workers=list(workers),
+                    need_terms=need_terms,
+                    occurrences=len(items),
+                    successes=successes,
+                    total_evidence_gain=total_gain,
+                )
+            )
+        aggregates.sort(key=lambda item: item.occurrences, reverse=True)
+        return aggregates
 
     def recurring_coalitions(self, min_count: int = 2) -> list[tuple[list[str], int]]:
         with sqlite3.connect(self.db_path) as connection:
@@ -279,16 +373,55 @@ def record_task_memory(
     interactive `ask`) fall back to a judge-free signal: the task ended with
     grounded evidence and no unresolved needs left.
     """
+    # Dedupe by membership within this task before writing: a need that
+    # stayed stuck across several rounds forms a coalition with the exact
+    # same worker pair every one of those rounds (confirmed directly on a
+    # real yt-dlp trace -- 5 rounds stuck on one need inserted 5 identical
+    # coalition rows). recurring_coalitions() counts raw rows, so one buggy
+    # or merely slow task could masquerade as several independent instances
+    # of genuine recurring collaboration and misfire a birth. One row per
+    # unique membership per task keeps that count meaning what it says:
+    # how many separate TASKS this pairing recurred in.
+    seen_memberships: set[tuple[str, ...]] = set()
     for round_state in state.rounds:
-        if round_state.coalition_formed:
-            colony_memory.record_coalition(
-                CoalitionRecord(
-                    worker_ids=_coalition_membership(state.rounds, round_state.round_index),
-                    question=question,
-                    evidence_count=len(state.evidence),
-                    unresolved_need_count=len(state.unresolved_needs),
-                )
+        if not round_state.coalition_formed:
+            continue
+        membership = tuple(_coalition_membership(state.rounds, round_state.round_index))
+        if membership in seen_memberships:
+            continue
+        seen_memberships.add(membership)
+        colony_memory.record_coalition(
+            CoalitionRecord(
+                worker_ids=list(membership),
+                question=question,
+                evidence_count=len(state.evidence),
+                unresolved_need_count=len(state.unresolved_needs),
             )
+        )
+
+    # One episode per need-driven round (round 0's initial recruitment
+    # isn't driven by any specific need, so it's excluded): what was
+    # needed, who was recruited, what strategy handled it, and whether it
+    # actually produced anything. Specifically preserves which escalation
+    # tactic fired, if any, so a future evolve_workers pass could mine
+    # "which temporary adaptation actually works for this kind of stuck
+    # need" -- not read anywhere yet, recorded so the signal exists.
+    for round_state in state.rounds:
+        if not round_state.input_need:
+            continue
+        evidence_gain = sum(len(obs.evidence) for obs in round_state.observations)
+        colony_memory.record_episode(
+            CollaborationEpisode(
+                need=round_state.input_need,
+                workers=round_state.selected_worker_ids,
+                strategy=(
+                    round_state.escalation_used
+                    or ("coalition" if round_state.coalition_formed else "normal")
+                ),
+                outcome="progress" if evidence_gain > 0 else "no_progress",
+                evidence_gain=evidence_gain,
+            )
+        )
 
     worker_ids = _selected_route_workers(state.rounds)
     if not worker_ids:
@@ -416,6 +549,15 @@ def _create_schema(connection: sqlite3.Connection) -> None:
             reason text not null,
             created_at text not null default current_timestamp,
             resolved_at text
+        );
+        create table if not exists episodes (
+            id integer primary key autoincrement,
+            need text not null,
+            strategy text not null,
+            outcome text not null,
+            evidence_gain integer not null,
+            payload text not null,
+            created_at text not null default current_timestamp
         );
         """
     )

@@ -11,6 +11,7 @@ from ant.domain import (
     Territory,
     UnresolvedNeed,
     WorkerCard,
+    WorkerObservation,
 )
 from ant.memory import ColonyMemoryStore, IndexStore, MemoryRoute
 from ant.memory.colony import CoalitionRecord, record_task_memory
@@ -378,3 +379,93 @@ def test_record_task_memory_does_not_save_a_per_need_route_for_a_resolved_need(
     all_routes = memory.all_routes()
     assert len(all_routes) == 1
     assert all_routes[0].need_type == ""
+
+
+def test_record_task_memory_dedupes_coalition_rows_within_one_task(tmp_path: Path) -> None:
+    # Regression test for a real observed bug: a need stuck across several
+    # rounds forms a coalition with the exact same worker pair every one of
+    # those rounds (confirmed directly on a yt-dlp trace -- 5 stuck rounds
+    # inserted 5 identical coalition rows for one task). recurring_coalitions
+    # counts raw rows, so a single slow/stuck task could masquerade as
+    # several independent recurrences and misfire a birth. One row per
+    # unique membership per task is what "recurring across tasks" should
+    # actually mean.
+    memory = ColonyMemoryStore(tmp_path)
+    state = EvidenceState(
+        question="Where is proxy validation implemented?",
+        evidence=[
+            Evidence(
+                path="src/net.py", line_start=1, line_end=2, quote="def validate(): ...",
+                reason="definition",
+            )
+        ],
+        rounds=[
+            _round(selected=["worker-a"], coalition_formed=False, round_index=0),
+            _round(selected=["worker-b"], coalition_formed=True, round_index=1),
+            _round(selected=["worker-b"], coalition_formed=True, round_index=2),
+            _round(selected=["worker-b"], coalition_formed=True, round_index=3),
+            _round(selected=["worker-b"], coalition_formed=True, round_index=4),
+            _round(selected=["worker-b"], coalition_formed=True, round_index=5),
+        ],
+    )
+
+    record_task_memory(memory, state.question, state)
+
+    assert memory.recurring_coalitions(min_count=1) == [(["worker-a", "worker-b"], 1)]
+
+
+def test_record_task_memory_records_a_collaboration_episode_per_need_round(
+    tmp_path: Path,
+) -> None:
+    memory = ColonyMemoryStore(tmp_path)
+    state = EvidenceState(
+        question="Where is archive handling implemented?",
+        evidence=[
+            Evidence(
+                path="storage/repo.py", line_start=1, line_end=2, quote="def archive(): ...",
+                reason="definition",
+            )
+        ],
+        rounds=[
+            _round(selected=["worker-a"], coalition_formed=False, round_index=0),
+            RecruitmentRound(
+                round_index=1,
+                query="q",
+                input_need="Need the real archive implementation.",
+                selected_worker_ids=["worker-b"],
+                rationale="test round",
+                coalition_formed=False,
+                escalation_used="expand_pool",
+                observations=[
+                    WorkerObservation(
+                        worker_id="worker-b",
+                        territory_id="storage",
+                        evidence=[
+                            Evidence(
+                                path="storage/repo.py",
+                                line_start=1,
+                                line_end=2,
+                                quote="def archive(): ...",
+                                reason="definition",
+                            )
+                        ],
+                    )
+                ],
+            ),
+        ],
+    )
+
+    record_task_memory(memory, state.question, state)
+
+    import sqlite3
+
+    with sqlite3.connect(memory.db_path) as connection:
+        rows = connection.execute(
+            "select need, strategy, outcome, evidence_gain from episodes"
+        ).fetchall()
+
+    # Round 0 has no input_need (it's the initial, question-driven
+    # recruitment, not a response to any specific need) and must not
+    # produce an episode; round 1 does, tagged with the escalation tactic
+    # that actually handled it.
+    assert rows == [("Need the real archive implementation.", "expand_pool", "progress", 1)]

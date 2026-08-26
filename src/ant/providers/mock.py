@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 
-from ant.domain import Evidence, UnresolvedNeed, WorkerCard, WorkerObservation
+from ant.domain import Evidence, NeedResolution, UnresolvedNeed, WorkerCard, WorkerObservation
 
 TOKEN_RE = re.compile(r"[A-Za-z][A-Za-z0-9_]{2,}")
 
@@ -136,3 +136,38 @@ class MockLLMProvider:
         # so always-continue-until-the-caller's-max_rounds reproduces that
         # exactly for every test that doesn't supply a real reasoner.
         return True
+
+    def check_need_resolution(
+        self,
+        *,
+        need: UnresolvedNeed,
+        new_evidence: list[Evidence],
+        question: str,
+    ) -> NeedResolution:
+        # Deliberately always "unresolved", never "resolved"/"partial": this
+        # mock exists so orchestration tests can run without an API key, not
+        # to exercise the real satisfied-or-not judgment (that's
+        # OpenAIProvider's job). The existing narrow 3-need_type heuristic
+        # closure (_close_resolved_needs) is untouched by this and keeps
+        # closing what it always closed; always returning "unresolved" here
+        # means this new check never additionally closes/refines a need on
+        # its own, so every existing test's assumptions about which needs
+        # persist across rounds stay exactly as they were before this
+        # method existed.
+        return NeedResolution(status="unresolved")
+
+    def decide_local_action(
+        self,
+        *,
+        need: UnresolvedNeed,
+        evidence: list[Evidence],
+        worker_progress: str,
+        worker: WorkerCard,
+    ) -> str:
+        # Always "continue": this mock exists so orchestration tests can
+        # run without an API key, not to exercise the real judgment (that's
+        # OpenAIProvider's job). Old behavior had no explicit decision at
+        # all -- the same worker kept getting re-selected purely because it
+        # usually still scored highest -- so "continue" reproduces that for
+        # every test that doesn't supply a real reasoner.
+        return "continue"

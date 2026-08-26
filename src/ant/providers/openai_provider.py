@@ -15,6 +15,7 @@ from ant.domain import (
     AbsenceProof,
     CodeSymbol,
     Evidence,
+    NeedResolution,
     TokenUsage,
     UnresolvedNeed,
     WorkerCard,
@@ -585,6 +586,134 @@ class OpenAIProvider:
         # rather than silently cutting recruitment short on a parse error.
         return True
 
+    def check_need_resolution(
+        self,
+        *,
+        need: UnresolvedNeed,
+        new_evidence: list[Evidence],
+        question: str,
+    ) -> NeedResolution:
+        # Generalizes the old heuristic closure (_CLOSABLE_BY_EVIDENCE in
+        # coordinator/local.py), which only understood 3 of ~6 need_types --
+        # subclass_lookup/implementation_location/source_test_coalition --
+        # by pattern-matching a `class X`/`def X` quote. Every other
+        # need_type (data_flow, call_path, behavior_flow, negative_presence,
+        # unknown -- the majority) was never auto-closed at all, so it just
+        # got re-raised, cosmetically reworded, round after round. This
+        # judges every need_type the same way: did the evidence gathered
+        # *since* this need was raised (not the whole accumulated pool --
+        # that would mark a need "resolved" by evidence a much earlier round
+        # already had and had already failed to resolve it with) actually
+        # satisfy it, partially narrow it down, or leave it no better off.
+        if not new_evidence:
+            return NeedResolution(status="unresolved")
+        evidence_text = "\n".join(
+            f"[{index}] {item.path}:{item.line_start}-{item.line_end}\n{item.quote[:900]}"
+            for index, item in enumerate(new_evidence[:8])
+        )
+        prompt = (
+            "Judge whether the NEW evidence below actually resolves the "
+            "unresolved need, given the original question. Three outcomes:\n"
+            "- resolved: the new evidence directly answers what was missing.\n"
+            "- partial: the new evidence narrows the gap (e.g. rules out one "
+            "possibility, points at the right file/module without the exact "
+            "symbol, or answers half of a two-part need) but does not fully "
+            "answer it -- in this case also produce a refined need that is "
+            "MORE SPECIFIC than the original given what was just learned, not "
+            "a restatement of it.\n"
+            "- unresolved: the new evidence does not meaningfully advance this "
+            "need at all.\n"
+            f"Original question: {question}\n"
+            f"Unresolved need: {need.missing or need.description} "
+            f"(need_type={need.need_type}, scope={need.scope})\n"
+            f"New evidence since this need was raised:\n{evidence_text}\n"
+            "Return JSON with key status (one of resolved, partial, "
+            "unresolved) and, only when status is partial, key refined_need: "
+            "an object with description, missing, need_type, scope, "
+            "suggested_terms (list), and suggested_territories (list), "
+            "using the same conventions as the original need but sharpened by "
+            "what the new evidence showed."
+        )
+        result = self.responses_json(prompt, max_output_tokens=512)
+        data = _loads_json_object(result.text)
+        status = data.get("status")
+        if status not in ("resolved", "partial", "unresolved"):
+            # Malformed/empty response: degrade to the conservative default
+            # (treat as still open) rather than guessing a need is resolved
+            # on a parse error.
+            return NeedResolution(status="unresolved")
+        if status != "partial":
+            return NeedResolution(status=status)
+        raw_refined = data.get("refined_need")
+        if not isinstance(raw_refined, dict):
+            # "partial" without a usable refined need degrades to
+            # "unresolved" rather than silently dropping the original need
+            # with nothing to replace it.
+            return NeedResolution(status="unresolved")
+        refined_need = UnresolvedNeed(
+            description=str(raw_refined.get("description") or need.description),
+            kind=need.kind,
+            need_type=str(raw_refined.get("need_type") or need.need_type),
+            missing=str(raw_refined.get("missing") or raw_refined.get("description") or ""),
+            scope=str(raw_refined.get("scope") or need.scope),
+            source_worker_id=need.source_worker_id,
+            suggested_terms=[str(term) for term in raw_refined.get("suggested_terms", [])],
+            suggested_territories=[
+                str(territory) for territory in raw_refined.get("suggested_territories", [])
+            ],
+            relevant_symbols=need.relevant_symbols,
+        )
+        return NeedResolution(status="partial", refined_need=refined_need)
+
+    def decide_local_action(
+        self,
+        *,
+        need: UnresolvedNeed,
+        evidence: list[Evidence],
+        worker_progress: str,
+        worker: WorkerCard,
+    ) -> str:
+        # Replaces letting the routing score alone decide -- purely by
+        # coincidence -- whether the same worker keeps going on a
+        # local-scope need. Only called for a second-or-later attempt (see
+        # WorkerReasoner.decide_local_action), so there is always real
+        # progress information to judge, not a first guess.
+        evidence_text = "\n".join(
+            f"[{index}] {item.path}:{item.line_start}-{item.line_end}\n{item.quote[:600]}"
+            for index, item in enumerate(evidence[:8])
+        )
+        prompt = (
+            "A worker just took another attempt at a local-scope information "
+            "need. Decide what should happen next:\n"
+            "- continue: the current worker's territory is still plausibly "
+            "where the answer is; give it another attempt rather than "
+            "re-routing.\n"
+            "- handoff: a different worker should take over instead.\n"
+            "- coalition: pull in a second worker to reason jointly with the "
+            "current one (the need plausibly spans both territories), rather "
+            "than replacing it.\n"
+            "- escalate: normal recruitment is not going to resolve this -- "
+            "skip straight to broader tactics (wider candidate pool, a third "
+            "worker, an interface-focused bridge, or a repo-wide search).\n"
+            f"Need: {need.missing or need.description} "
+            f"(need_type={need.need_type})\n"
+            f"Current worker: {worker.id} -- "
+            f"{'; '.join(worker.responsibilities[:3]) or 'no description'}\n"
+            f"Progress so far: {worker_progress}\n"
+            f"Evidence gathered so far:\n{evidence_text or '(none)'}\n"
+            "Return JSON with key action: one of continue, handoff, "
+            "coalition, escalate."
+        )
+        result = self.responses_json(prompt, max_output_tokens=128)
+        data = _loads_json_object(result.text)
+        action = data.get("action")
+        if action in ("continue", "handoff", "coalition", "escalate"):
+            return action
+        # Malformed/empty response: degrade to the old default -- the
+        # current worker keeps going -- rather than forcing a re-route on a
+        # parse error.
+        return "continue"
+
     def should_specialize(
         self,
         *,
@@ -668,6 +797,57 @@ class OpenAIProvider:
         # behavior (merge whenever the structural overlap gate passes)
         # rather than silently blocking every merge on a parse error.
         return True
+
+    def decide_episode_action(
+        self,
+        *,
+        strategy: str,
+        need_terms: list[str],
+        occurrences: int,
+        successes: int,
+        total_evidence_gain: int,
+        workers: list[str],
+    ) -> str:
+        # evolve_workers' existing birth/merge signals (recurring_coalitions)
+        # only see raw worker co-occurrence -- they cannot tell "these two
+        # workers happened to get selected together" apart from "a specific
+        # temporary adaptation (e.g. a bridge worker) kept actually solving
+        # this kind of need across separate tasks". This is the richer
+        # signal: which strategy worked, how often, and with how much real
+        # evidence gain, aggregated across tasks by ColonyMemoryStore.
+        # aggregate_episodes -- not a single task's outcome, which
+        # persistent reorganization must not react to on its own.
+        prompt = (
+            "A recurring collaboration pattern was observed across multiple "
+            "separate tasks in a code-navigation colony's memory. Decide what "
+            "the colony's persistent organization should do about it:\n"
+            "- no_change: not compelling enough evidence yet, or the pattern "
+            "does not warrant a structural change.\n"
+            "- strengthen_route: reinforce routing so future similar needs "
+            "reach these workers faster, without creating a new worker.\n"
+            "- birth_bridge: create a permanent worker dedicated to this "
+            "recurring interface between the involved workers' territories.\n"
+            "- merge: the involved workers should be combined into one.\n"
+            f"Strategy that kept being used: {strategy}\n"
+            f"Need vocabulary in common across occurrences: {', '.join(need_terms)}\n"
+            f"Workers involved: {', '.join(workers)}\n"
+            f"Occurrences across separate tasks: {occurrences}\n"
+            f"Of which successful (found genuinely new evidence): {successes}\n"
+            f"Total evidence items gained across all occurrences: {total_evidence_gain}\n"
+            "Return JSON with key action: one of no_change, strengthen_route, "
+            "birth_bridge, merge."
+        )
+        result = self.responses_json(prompt, max_output_tokens=128)
+        data = _loads_json_object(result.text)
+        action = data.get("action")
+        if action in ("no_change", "strengthen_route", "birth_bridge", "merge"):
+            return action
+        # Malformed/empty response: degrade to the conservative default --
+        # do nothing -- rather than guessing a structural change on a parse
+        # error. Unlike should_specialize/should_merge (which gate a
+        # structural change a cheaper signal already proposed), there is no
+        # existing structural trigger here to fall back to.
+        return "no_change"
 
     def synthesize(
         self,
