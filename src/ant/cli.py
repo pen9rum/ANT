@@ -36,6 +36,7 @@ SAVE_TRACE_OPTION = typer.Option(True, "--save-trace/--no-save-trace")
 LLM_CARDS_OPTION = typer.Option(False, "--llm-cards/--heuristic-cards")
 DENSE_OPTION = typer.Option(False, "--dense/--no-dense")
 SYNTHESIZE_OPTION = typer.Option("none", "--synthesize")
+REASONER_OPTION = typer.Option("none", "--reasoner")
 
 
 @app.command()
@@ -213,21 +214,37 @@ def refresh(
 
 @app.command()
 def evolve(
+    repo: Path = Path("."),
     index_path: Path = INDEX_OPTION,
+    reasoner: str = REASONER_OPTION,
     min_coalition_count: int = 2,
     retire_empty: bool = True,
     merge_overlap: float = 0.9,
     min_specialization_routes: int = 4,
     min_specialization_group_routes: int = 2,
+    min_episode_count: int = 3,
 ) -> None:
-    """Apply worker population evolution from recurring coalition/route memory."""
+    """Apply worker population evolution from recurring coalition/route memory.
+
+    Without --reasoner openai, only the structural gates run (file-overlap
+    merge, route-count specialize, empty-file retire, raw coalition-count
+    birth) with no LLM veto on merge/specialize, and the richer episode-driven
+    strengthen_route/birth_bridge/merge path (EvolutionReasoner.decide_episode_action,
+    which also weighs whether a recurring strategy actually worked, not just
+    how often it recurred) is skipped entirely -- ant.evolution.evolve_workers
+    only runs it when a reasoner is passed in at all.
+    """
+    llm_reasoner = OpenAIProvider() if reasoner == "openai" else None
     result = evolve_workers(
         index_path,
+        repo_root=repo.resolve(),
+        reasoner=llm_reasoner,
         min_coalition_count=min_coalition_count,
         retire_empty=retire_empty,
         merge_overlap=merge_overlap,
         min_specialization_routes=min_specialization_routes,
         min_specialization_group_routes=min_specialization_group_routes,
+        min_episode_count=min_episode_count,
     )
     typer.echo(result.model_dump_json(indent=2))
 
