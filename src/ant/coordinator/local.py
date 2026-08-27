@@ -11,12 +11,15 @@ from ant.domain import (
     Evidence,
     EvidenceState,
     FrontierResult,
+    GraphDelta,
     NeedGraph,
     NeedNode,
     NeedResolution,
     NodeExecutionTrace,
     PlanningRound,
+    RecoverySnapshot,
     RoundPlan,
+    StuckEpisodeSnapshot,
     TokenUsage,
     UnresolvedNeed,
     WorkerAction,
@@ -132,6 +135,31 @@ class RecoveryState:
     abandoned_node_ids: set[str] = field(default_factory=set)
 
 
+def _recovery_snapshot(recovery: RecoveryState) -> RecoverySnapshot:
+    """Read-only, JSON-serializable copy of the recovery-relevant fields of
+    a finished task's RecoveryState, for EvidenceState.final_recovery_state
+    -- see that field's docstring for who reads this and why. Sets become
+    sorted lists purely so the same input always serializes identically
+    (stable trace diffs/snapshots), not because ordering is meaningful.
+    """
+    return RecoverySnapshot(
+        stuck_episodes=[
+            StuckEpisodeSnapshot(
+                episode_id=episode.episode_id,
+                members=sorted(episode.members),
+                recovery_streak=episode.recovery_streak,
+                used_special_tactics=sorted(episode.used_special_tactics),
+            )
+            for episode in recovery.stuck_episodes.values()
+        ],
+        abandoned_node_ids=sorted(recovery.abandoned_node_ids),
+        tried_workers_by_node={
+            need_id: sorted(worker_ids)
+            for need_id, worker_ids in recovery.tried_workers_by_node.items()
+        },
+    )
+
+
 class LocalCoordinator:
     def __init__(
         self,
@@ -184,6 +212,17 @@ class LocalCoordinator:
             if not frontier.ready and not frontier.blocked and not frontier.stuck_subgraphs \
                     and not incomplete_parents:
                 break
+
+            # Snapshot for this round's GraphDelta -- only depends_on/children
+            # (list identity, not the object itself: both get mutated in place
+            # during this round, e.g. node.children.append(...) below, so a
+            # dict-of-node-references snapshot would silently "change" along
+            # with the live graph instead of freezing the round's starting
+            # point).
+            nodes_before_round = {
+                need_id: (list(node.depends_on), list(node.children))
+                for need_id, node in graph.nodes.items()
+            }
 
             plan = _plan_round_with_cycle_validation(
                 self.reasoner,
@@ -481,11 +520,31 @@ class LocalCoordinator:
                         for member_id in episode.members:
                             recovery.episode_by_need_id.pop(member_id, None)
 
+            graph_delta = GraphDelta(
+                created_nodes=[
+                    need_id for need_id in graph.nodes if need_id not in nodes_before_round
+                ],
+                dependency_changes={
+                    need_id: list(node.depends_on)
+                    for need_id, node in graph.nodes.items()
+                    if need_id in nodes_before_round
+                    and list(node.depends_on) != nodes_before_round[need_id][0]
+                },
+                created_children={
+                    need_id: list(node.children)
+                    for need_id, node in graph.nodes.items()
+                    if need_id in nodes_before_round
+                    and list(node.children) != nodes_before_round[need_id][1]
+                },
+                assignment_changes=dict(plan.assignments),
+                closure_results=list(derived_resolved_nodes),
+            )
             rounds.append(
                 PlanningRound(
                     round_index=round_index,
                     node_executions=node_executions,
                     derived_resolved_nodes=derived_resolved_nodes,
+                    graph_delta=graph_delta,
                 )
             )
             frontier = _exclude_abandoned(post_frontier, recovery.abandoned_node_ids)
@@ -576,6 +635,8 @@ class LocalCoordinator:
             rounds=rounds,
             absence_proofs=absence_proofs,
             usage=usage if isinstance(usage, TokenUsage) else TokenUsage(),
+            final_need_graph=dict(graph.nodes),
+            final_recovery_state=_recovery_snapshot(recovery),
         )
 
     def _run_selected_workers(

@@ -286,6 +286,39 @@ class NodeExecutionTrace(BaseModel):
     observations: list[WorkerObservation] = Field(default_factory=list)
 
 
+class GraphDelta(BaseModel):
+    """Lightweight record of how the Need Graph's *structure* changed
+    during one round -- separate from NodeExecutionTrace (which records
+    execution outcomes, not structural edits) so a trajectory consumer
+    (e.g. task-conditioned/fast-mode repair) can see how the graph was
+    decomposed/rewired each round without re-deriving it from a full
+    before/after NeedNode diff. Captures the whole round's structural
+    change, including a gap-node the closure check itself creates on a
+    "partial" parent verdict, not just plan.graph_updates.
+    """
+
+    # need_ids that did not exist in the graph before this round.
+    created_nodes: list[str] = Field(default_factory=list)
+    # need_id -> its new depends_on list, only for nodes whose depends_on
+    # actually changed this round (existing nodes not mentioned are
+    # unchanged; a newly-created node's initial edges are on
+    # PlanningRound.node_executions/graph_updates already via
+    # created_nodes, not duplicated here).
+    dependency_changes: dict[str, list[str]] = Field(default_factory=dict)
+    # need_id -> its new children list, only for nodes whose children
+    # list actually changed this round (Orchestrator decomposition, or a
+    # closure check appending a gap-node to an incomplete parent).
+    created_children: dict[str, list[str]] = Field(default_factory=dict)
+    # need_id -> worker ids assigned this round -- same content as
+    # RoundPlan.assignments, kept here too so a trajectory consumer reading
+    # graph_delta alone (without the full plan object) still has it.
+    assignment_changes: dict[str, list[str]] = Field(default_factory=dict)
+    # Parent need_ids closure-resolved this round -- same list as
+    # PlanningRound.derived_resolved_nodes, duplicated here for the same
+    # locality reason as assignment_changes.
+    closure_results: list[str] = Field(default_factory=list)
+
+
 class PlanningRound(BaseModel):
     """One round of the graph-based pipeline: exactly one
     WorkerReasoner.plan_round() call, fanning out to however many nodes
@@ -301,6 +334,33 @@ class PlanningRound(BaseModel):
     # their children all finished -- kept separate from any child's own
     # NodeExecutionTrace.need_reduction (see that field's docstring).
     derived_resolved_nodes: list[str] = Field(default_factory=list)
+    # Structural graph changes this round -- see GraphDelta's docstring.
+    graph_delta: GraphDelta = Field(default_factory=GraphDelta)
+
+
+class StuckEpisodeSnapshot(BaseModel):
+    """Read-only end-of-task copy of one coordinator.local.StuckEpisode --
+    that dataclass is coordinator-internal runtime bookkeeping (mutable
+    sets, never serialized), this is what a trajectory consumer (fast-mode
+    repair, offline analysis) actually gets to see."""
+
+    episode_id: str
+    members: list[str] = Field(default_factory=list)
+    recovery_streak: int = 0
+    used_special_tactics: list[str] = Field(default_factory=list)
+
+
+class RecoverySnapshot(BaseModel):
+    """Read-only end-of-task copy of coordinator.local.RecoveryState's
+    recovery-relevant fields (not tried_workers_by_node's use during
+    execution, which needs a mutable dict[str, set[str]] -- this is the
+    post-hoc, list-ified view for anything reading the finished task's
+    trajectory, not for the coordinator's own hot loop). Everything here
+    defaults empty/zero for a task that never got stuck."""
+
+    stuck_episodes: list[StuckEpisodeSnapshot] = Field(default_factory=list)
+    abandoned_node_ids: list[str] = Field(default_factory=list)
+    tried_workers_by_node: dict[str, list[str]] = Field(default_factory=dict)
 
 
 class EvidenceState(BaseModel):
@@ -311,6 +371,18 @@ class EvidenceState(BaseModel):
     rounds: list[PlanningRound] = Field(default_factory=list)
     absence_proofs: list[AbsenceProof] = Field(default_factory=list)
     usage: TokenUsage = Field(default_factory=TokenUsage)
+    # Full trajectory, always populated (see PlanningRound.graph_delta for
+    # the per-round layer): every need_id's final resolution/execution/
+    # progress/rounds_without_progress/depends_on/children, and the
+    # recovery history (stuck episodes, abandonment, tried workers) that
+    # produced it. Neither is read by slow/colony evolution (ColonyMemoryStore
+    # only ever reads a compressed per-execution extraction of `rounds`, via
+    # record_task_memory -- see its own docstring) -- this exists for
+    # trajectory-conditioned analysis: task-conditioned/fast-mode repair,
+    # debugging, and offline research use, none of which write back to the
+    # persistent colony.
+    final_need_graph: dict[str, NeedNode] = Field(default_factory=dict)
+    final_recovery_state: RecoverySnapshot = Field(default_factory=RecoverySnapshot)
 
     def has_evidence(self) -> bool:
         return bool(self.evidence)

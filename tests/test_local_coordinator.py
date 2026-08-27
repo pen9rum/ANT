@@ -943,6 +943,129 @@ def test_a_stuck_need_gets_abandoned_after_three_failed_recoveries_not_retried_f
     assert len(state.rounds) < 10
 
 
+def test_final_recovery_state_records_the_abandoned_need(tmp_path: Path) -> None:
+    # EvidenceState.final_recovery_state must actually reflect an
+    # abandonment, not just exist with empty defaults -- reuses the same
+    # always-stuck scenario as the recovery-streak regression test above,
+    # this time asserting on the new trajectory snapshot instead of the
+    # round traces.
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "mod.py").write_text("def unrelated():\n    pass\n", encoding="utf-8")
+    worker = WorkerCard(
+        id="worker-src", territory_id="src", name="src", root="src", files=["src/mod.py"]
+    )
+
+    state = LocalCoordinator(
+        tmp_path,
+        [worker],
+        reasoner=_AlwaysStuckAndAlwaysProposesBridgeReasoner(),
+    ).ask("What is the meaning of this codebase?", max_rounds=10)
+
+    assert "root" in state.final_recovery_state.abandoned_node_ids
+    assert "root" in state.final_need_graph
+    # The abandoned episode's bookkeeping must have actually run (not just
+    # left at zero/empty defaults) before the episode got deleted on
+    # abandonment -- stuck_episodes itself is empty afterward (see
+    # RecoveryState's own abandonment cleanup), so this asserts on the
+    # trace evidence of that instead: at least one real (non-deduped)
+    # temporary_bridge execution happened before the abandonment fired.
+    real_bridge_runs = [
+        trace
+        for round_state in state.rounds
+        for trace in round_state.node_executions
+        if trace.special_tactic == "temporary_bridge" and trace.worker_ids
+    ]
+    assert len(real_bridge_runs) == 1
+
+
+class _DecomposesRootIntoTwoChildrenReasoner(_PassthroughLookupsReasoner):
+    """Round 0: splits root into child-a (no deps) and child-b (depends on
+    child-a), assigning nothing. Round 1: edits child-b's depends_on to add
+    a made-up extra dependency, purely to exercise GraphDelta.
+    dependency_changes on an *existing* node (as opposed to a newly-created
+    one's initial edges, which show up via created_nodes instead).
+    """
+
+    def __init__(self) -> None:
+        self._round = 0
+
+    def observe(self, *, question, worker_id, territory_id, evidence):
+        return WorkerObservation(worker_id=worker_id, territory_id=territory_id)
+
+    def check_need_resolution(self, *, need, new_evidence, question):
+        return NeedResolution(status="unresolved")
+
+    def plan_round(
+        self,
+        *,
+        question,
+        graph,
+        resolution_results,
+        evidence,
+        workers,
+        memory_hints,
+        frontier,
+        observed_needs,
+        incomplete_parents,
+        cross_repo_experience,
+        validation_feedback="",
+    ):
+        self._round += 1
+        if self._round == 1:
+            root = graph.nodes["root"]
+            return RoundPlan(
+                graph_updates={
+                    "root": root.model_copy(update={"children": ["child-a", "child-b"]}),
+                    "child-a": NeedNode(
+                        need_id="child-a", need="a", detail=UnresolvedNeed(description="a")
+                    ),
+                    "child-b": NeedNode(
+                        need_id="child-b",
+                        need="b",
+                        depends_on=["child-a"],
+                        detail=UnresolvedNeed(description="b"),
+                    ),
+                }
+            )
+        child_b = graph.nodes["child-b"]
+        return RoundPlan(
+            graph_updates={
+                "child-b": child_b.model_copy(update={"depends_on": ["child-a", "root"]}),
+            }
+        )
+
+
+def test_graph_delta_records_created_nodes_children_and_dependency_changes(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "mod.py").write_text("def f():\n    pass\n", encoding="utf-8")
+    worker = WorkerCard(
+        id="worker-src", territory_id="src", name="src", root="src", files=["src/mod.py"]
+    )
+
+    state = LocalCoordinator(
+        tmp_path, [worker], reasoner=_DecomposesRootIntoTwoChildrenReasoner()
+    ).ask("root question", max_rounds=2)
+
+    assert len(state.rounds) == 2
+    round0, round1 = state.rounds[0].graph_delta, state.rounds[1].graph_delta
+
+    assert sorted(round0.created_nodes) == ["child-a", "child-b"]
+    assert round0.created_children == {"root": ["child-a", "child-b"]}
+    # child-b's initial depends_on=["child-a"] is part of its creation
+    # (created_nodes), not a "change" -- only an already-existing node's
+    # depends_on being edited counts as dependency_changes.
+    assert round0.dependency_changes == {}
+
+    assert round1.created_nodes == []
+    assert round1.dependency_changes == {"child-b": ["child-a", "root"]}
+    assert round1.created_children == {}
+
+    assert state.final_need_graph["root"].children == ["child-a", "child-b"]
+    assert state.final_need_graph["child-b"].depends_on == ["child-a", "root"]
+
+
 class _AssignsSameWorkerToTwoIndependentNeedsReasoner(_PassthroughLookupsReasoner):
     """Regression fixture for a real bug found on a live qibo trace
     (question: "statistical sampling architecture"): the same worker was
