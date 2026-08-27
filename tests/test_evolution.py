@@ -586,6 +586,141 @@ def test_evolve_workers_births_bridge_from_a_recurring_successful_episode_patter
     assert "worker-bridge-a-b" in stored_workers
 
 
+def test_episode_birth_bridge_on_a_single_source_worker_strengthens_instead(
+    tmp_path: Path,
+) -> None:
+    # Regression test for a real bug found on a live qibo run: the reasoner
+    # can call decide_episode_action's verdict "birth_bridge" for an
+    # aggregate whose strategy is "normal" (not an actual coalition) and
+    # whose workers list has exactly one entry -- a "bridge" born from a
+    # single source is just a same-files clone of that worker under a new
+    # id, not a cross-territory specialist. Confirmed directly: this
+    # produced 3 such duplicates in one real evolve call. The single-worker
+    # case this pattern is real evidence for ("this worker does well") is
+    # exactly what strengthen_route already expresses without growing the
+    # worker pool.
+    index_path = tmp_path / ".ant"
+    worker = WorkerCard(id="worker-a", territory_id="a", name="a", root="a", files=["a.py"])
+    territories = [Territory(id="a", root="a", files=["a.py"])]
+    IndexStore(index_path).save(territories, [worker])
+    memory = ColonyMemoryStore(index_path)
+    for need in ("task one", "task two"):
+        memory.record_episode(
+            CollaborationEpisode(
+                need=need, workers=["worker-a"], strategy="normal",
+                outcome="progress", evidence_gain=3,
+            )
+        )
+
+    result = evolve_workers(
+        index_path,
+        reasoner=_BirthBridgeOnRecurringPatternReasoner(),
+        min_coalition_count=99,
+        retire_empty=False,
+        merge_overlap=0.99,
+        min_episode_count=2,
+    )
+
+    assert not [event for event in result.events if event.kind == "birth"]
+    strengthen_events = [event for event in result.events if event.kind == "strengthen_route"]
+    assert len(strengthen_events) == 1
+    assert strengthen_events[0].source_worker_ids == ["worker-a"]
+    stored_worker_ids = {worker.id for worker in IndexStore(index_path).load_workers()}
+    assert stored_worker_ids == {"worker-a"}
+
+
+def test_episode_birth_bridge_with_a_low_success_ratio_is_skipped(tmp_path: Path) -> None:
+    # Regression test for a real bug: an aggregate that recurred often but
+    # mostly DIDN'T work (13/35 successes = 37% on a live qibo run) still
+    # got birth_bridge'd, because the occurrence-count gate
+    # (min_episode_count) only checks how often a pattern recurred, not
+    # whether it actually succeeded when it did -- and the reasoner's own
+    # judgment isn't a reliable enough backstop on its own (it got this one
+    # wrong on the real trace this test reproduces).
+    index_path = tmp_path / ".ant"
+    workers = [
+        WorkerCard(id="worker-a", territory_id="a", name="a", root="a", files=["a.py"]),
+        WorkerCard(id="worker-b", territory_id="b", name="b", root="b", files=["b.py"]),
+    ]
+    territories = [
+        Territory(id=worker.territory_id, root=worker.root, files=worker.files)
+        for worker in workers
+    ]
+    IndexStore(index_path).save(territories, workers)
+    memory = ColonyMemoryStore(index_path)
+    for index in range(3):
+        memory.record_episode(
+            CollaborationEpisode(
+                need=f"task {index}",
+                workers=["worker-a", "worker-b"],
+                strategy="temporary_bridge",
+                outcome="progress" if index == 0 else "no_progress",
+                evidence_gain=3 if index == 0 else 0,
+            )
+        )
+
+    result = evolve_workers(
+        index_path,
+        reasoner=_BirthBridgeOnRecurringPatternReasoner(),
+        min_coalition_count=99,
+        retire_empty=False,
+        merge_overlap=0.99,
+        min_episode_count=2,
+    )
+
+    assert not result.events
+    stored_worker_ids = {worker.id for worker in IndexStore(index_path).load_workers()}
+    assert stored_worker_ids == {"worker-a", "worker-b"}
+
+
+def test_recurring_coalition_birth_skips_a_near_duplicate_of_an_existing_bridge(
+    tmp_path: Path,
+) -> None:
+    # Regression test for a real bug found on a live qibo run: a recurring
+    # coalition between an existing bridge (worker-bridge-a-b, files a.py +
+    # b.py) and one of that bridge's own source workers (worker-b, files
+    # b.py) produced a new "bridge of a bridge" whose file set was
+    # identical to the existing bridge's -- pure redundancy that a merge
+    # pass immediately had to collapse back down in the same evolve call,
+    # leaving a worker id that concatenated both. The resulting file set
+    # must be checked against every current worker, not just the two
+    # immediate sources, so this is caught regardless of which source
+    # carried the redundancy.
+    index_path = tmp_path / ".ant"
+    workers = [
+        WorkerCard(id="worker-a", territory_id="a", name="a", root="a", files=["a.py"]),
+        WorkerCard(id="worker-b", territory_id="b", name="b", root="b", files=["b.py"]),
+        WorkerCard(
+            id="worker-bridge-a-b",
+            territory_id="bridge-a-b",
+            name="a + b bridge",
+            root="",
+            files=["a.py", "b.py"],
+        ),
+    ]
+    territories = [
+        Territory(id=worker.territory_id, root=worker.root, files=worker.files)
+        for worker in workers
+    ]
+    IndexStore(index_path).save(territories, workers)
+    memory = ColonyMemoryStore(index_path)
+    for question in ("q1", "q2", "q3"):
+        memory.record_coalition(
+            CoalitionRecord(
+                worker_ids=["worker-bridge-a-b", "worker-b"],
+                question=question,
+                evidence_count=2,
+                unresolved_need_count=0,
+            )
+        )
+
+    result = evolve_workers(index_path, min_coalition_count=2, merge_overlap=0.9)
+
+    assert not [event for event in result.events if event.kind == "birth"]
+    stored_worker_ids = {worker.id for worker in IndexStore(index_path).load_workers()}
+    assert stored_worker_ids == {"worker-a", "worker-b", "worker-bridge-a-b"}
+
+
 def test_evolve_workers_leaves_episodes_alone_when_reasoner_says_no_change(
     tmp_path: Path,
 ) -> None:

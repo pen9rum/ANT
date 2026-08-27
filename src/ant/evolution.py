@@ -15,6 +15,15 @@ from ant.scoring_config import DEFAULT_SCORING_CONFIG
 
 TOKEN_RE = re.compile(r"[A-Za-z][A-Za-z0-9_]{2,}")
 
+# Episode-driven strengthen_route/birth_bridge (_apply_episode_actions):
+# a recurring pattern is only "actual progress", not just "got called a
+# lot", once at least half its recorded occurrences succeeded. Confirmed
+# necessary on a real qibo run: an aggregate with 13/35 successes (37%) --
+# recurring mostly because it kept NOT working, not because it worked --
+# still got birth_bridge'd by the reasoner. This is a structural floor
+# underneath that judgment call, not a replacement for it.
+_MIN_EPISODE_SUCCESS_RATIO = 0.5
+
 
 def _with_routing_summary(card: WorkerCard, reasoner: EvolutionReasoner | None) -> WorkerCard:
     """Generate/refresh routing_summary for a card that was just born,
@@ -116,6 +125,16 @@ def evolve_workers(
             # that already work fine split apart.
             continue
         files = sorted({file for worker in source_workers for file in worker.files})
+        # A source that is itself already a bridge/merge (e.g. birthing
+        # "gates+models" bridge together with "models") makes this new
+        # worker's file set a near-duplicate of that existing worker's --
+        # confirmed on a real qibo run: this produced a "bridge of a bridge"
+        # that an in-run merge pass then immediately had to collapse back
+        # down, with an id that concatenated both. Checking the resulting
+        # file set against every current worker (not just the two sources)
+        # catches this regardless of which source carried the redundancy.
+        if _overlaps_existing_worker(files, workers, merge_overlap):
+            continue
         terms = sorted({term for worker in source_workers for term in worker.searchable_terms})[:32]
         bridge = _with_routing_summary(
             WorkerCard(
@@ -174,7 +193,7 @@ def evolve_workers(
 
     if reasoner is not None:
         workers, episode_events = _apply_episode_actions(
-            workers, memory, reasoner, min_episode_count
+            workers, memory, reasoner, min_episode_count, merge_overlap
         )
         events.extend(episode_events)
         removed_worker_ids.update(
@@ -205,6 +224,7 @@ def _apply_episode_actions(
     memory: ColonyMemoryStore,
     reasoner: EvolutionReasoner,
     min_episode_count: int,
+    merge_overlap: float,
 ) -> tuple[list[WorkerCard], list[EvolutionEvent]]:
     """Acts on ColonyMemoryStore.aggregate_episodes' recurring (strategy,
     worker-set) patterns -- e.g. "temporary_bridge kept resolving a
@@ -242,6 +262,24 @@ def _apply_episode_actions(
             f"{aggregate.successes}/{aggregate.occurrences} recorded tasks "
             f"(total evidence gain {aggregate.total_evidence_gain})."
         )
+        success_ratio = aggregate.successes / aggregate.occurrences
+        low_success = success_ratio < _MIN_EPISODE_SUCCESS_RATIO
+        if action in ("strengthen_route", "birth_bridge") and low_success:
+            # Recurring often is not the same as working often -- see the
+            # constant's docstring. Downgrades rather than raising: the
+            # occurrence-count gate (min_episode_count) already established
+            # this pattern is real and recurring, it just isn't grounds to
+            # structurally promote or reinforce it yet.
+            continue
+        if action == "birth_bridge" and len(set(aggregate.workers)) < 2:
+            # A "bridge" born from a single worker (a "normal"-strategy
+            # episode, not an actual coalition) is just a same-files clone
+            # under a new id, not a cross-territory specialist -- confirmed
+            # on a real qibo run, this produced 3 such duplicates in one
+            # evolve call. The single-worker case this pattern is real
+            # evidence for is "this worker is doing well", which
+            # strengthen_route already expresses without growing the pool.
+            action = "strengthen_route"
         if action == "no_change":
             continue
         if action == "strengthen_route":
@@ -269,6 +307,8 @@ def _apply_episode_actions(
             if bridge_id in worker_by_id:
                 continue
             files = sorted({file for worker in source_workers for file in worker.files})
+            if _overlaps_existing_worker(files, workers, merge_overlap):
+                continue
             terms = sorted(
                 {term for worker in source_workers for term in worker.searchable_terms}
             )[:32]
@@ -490,6 +530,33 @@ def _specialize_overloaded_workers(
                 )
             )
     return result, events
+
+
+def _overlaps_existing_worker(
+    candidate_files: list[str], workers: list[WorkerCard], threshold: float
+) -> bool:
+    """True when `candidate_files` (a birth candidate's resulting file set)
+    is a near-duplicate -- by the same file-overlap ratio _merge_overlapping_
+    workers uses to decide two *existing* workers should be merged -- of any
+    single current worker. A birth whose source list includes an existing
+    bridge/merge worker can end up with a file set that's effectively just
+    that worker's again (its other source already inside the bridge
+    contributes nothing new); checking against every current worker, not
+    just the immediate sources, catches this regardless of which source
+    carried the redundancy, without needing to track birth provenance
+    recursively.
+    """
+    candidate = set(candidate_files)
+    if not candidate:
+        return False
+    for worker in workers:
+        worker_files = set(worker.files)
+        union = candidate | worker_files
+        if not union:
+            continue
+        if len(candidate & worker_files) / len(union) >= threshold:
+            return True
+    return False
 
 
 def _is_worker_healthy(
