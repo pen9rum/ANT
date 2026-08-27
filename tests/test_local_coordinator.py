@@ -2,16 +2,27 @@ from pathlib import Path
 
 from ant.coordinator import LocalCoordinator
 from ant.coordinator.local import (
+    _build_temporary_bridge,
     _close_resolved_needs,
     _matches_term,
     _merge_needs,
+    _plan_round_with_cycle_validation,
     _rank_global_evidence,
-    _relevant_symbol_weights,
     _reopen_referenced_evidence,
-    _select_for_active_need,
+    _select_evidence,
 )
-from ant.domain import Evidence, NeedResolution, UnresolvedNeed, WorkerCard, WorkerObservation
-from ant.memory import MemoryRoute
+from ant.domain import (
+    Evidence,
+    FrontierResult,
+    NeedGraph,
+    NeedNode,
+    NeedResolution,
+    RoundPlan,
+    UnresolvedNeed,
+    WorkerCard,
+    WorkerObservation,
+)
+from ant.indexing.cards import template_routing_summary
 from ant.tools import LocalSearchTool
 
 
@@ -36,9 +47,8 @@ def test_local_coordinator_returns_grounded_evidence(tmp_path: Path) -> None:
     assert state.has_evidence()
     assert state.evidence[0].path == "src/auth.py"
     assert state.rounds
-    assert state.rounds[0].selected_worker_ids == ["worker-src"]
-    assert state.rounds[0].routing_scores[0].worker_id == "worker-src"
-    assert "authenticate" in state.rounds[0].routing_scores[0].query_hits
+    assert state.rounds[0].node_executions
+    assert state.rounds[0].node_executions[0].worker_ids == ["worker-src"]
 
 
 def test_query_from_needs_keeps_the_original_question_as_a_stable_anchor() -> None:
@@ -120,7 +130,51 @@ def test_local_coordinator_records_unresolved_needs(tmp_path: Path) -> None:
 
     assert not state.has_evidence()
     assert state.unresolved_needs
-    assert state.rounds[0].observations[0].worker_id == "worker-docs"
+    assert state.rounds[0].node_executions[0].observations[0].worker_id == "worker-docs"
+
+
+def test_cross_repo_experience_reaches_plan_round(tmp_path: Path) -> None:
+    # Pre-fetched by the caller (see GlobalMemoryStore.retrieve_similar) and
+    # passed straight through to every round's plan_round() call as
+    # reference text -- LocalCoordinator itself never touches
+    # GlobalMemoryStore directly (same separation as memory_routes).
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "auth.py").write_text("def authenticate():\n    pass\n", encoding="utf-8")
+    worker = WorkerCard(
+        id="worker-src", territory_id="src", name="src", root="src", files=["src/auth.py"]
+    )
+    received: list[list[str]] = []
+
+    class _RecordingReasoner(_PassthroughLookupsReasoner):
+        def observe(self, *, question, worker_id, territory_id, evidence):
+            raise AssertionError("this test does not exercise observe()")
+
+        def plan_round(
+            self,
+            *,
+            question,
+            graph,
+            resolution_results,
+            evidence,
+            workers,
+            memory_hints,
+            frontier,
+            observed_needs,
+            incomplete_parents,
+            cross_repo_experience,
+            validation_feedback="",
+        ):
+            received.append(cross_repo_experience)
+            return RoundPlan()
+
+    LocalCoordinator(
+        tmp_path,
+        [worker],
+        reasoner=_RecordingReasoner(),
+        cross_repo_experience=["a transferable pattern from another repo"],
+    ).ask("Where is authenticate?", max_rounds=1)
+
+    assert received == [["a transferable pattern from another repo"]]
 
 
 class _PassthroughLookupsReasoner:
@@ -187,773 +241,34 @@ class _PassthroughLookupsReasoner:
         # the local-continuation decision layer.
         return "continue"
 
-
-class NeedRoutingReasoner(_PassthroughLookupsReasoner):
-    def observe(self, *, question, worker_id, territory_id, evidence):
-        needs = []
-        if worker_id == "worker-api":
-            needs.append(
-                UnresolvedNeed(
-                    description="Need the persistence implementation.",
-                    kind="missing_implementation",
-                    suggested_terms=["persist_record"],
-                    suggested_territories=["storage"],
-                    scope="cross_territory",
-                    source_worker_id="worker-api",
-                )
-            )
-        return WorkerObservation(
-            worker_id=worker_id, territory_id=territory_id, unresolved_needs=needs
-        )
-
-
-def test_semantic_need_routes_follow_up_and_forms_coalition(tmp_path: Path) -> None:
-    (tmp_path / "api").mkdir()
-    (tmp_path / "storage").mkdir()
-    (tmp_path / "api" / "service.py").write_text(
-        "def submit_record():\n    return persist_record()\n", encoding="utf-8"
-    )
-    (tmp_path / "storage" / "repo.py").write_text(
-        "def persist_record():\n    return 'stored'\n", encoding="utf-8"
-    )
-    workers = [
-        WorkerCard(
-            id="worker-api",
-            territory_id="api",
-            name="api",
-            root="api",
-            searchable_terms=["submit"],
-            files=["api/service.py"],
-        ),
-        WorkerCard(
-            id="worker-storage",
-            territory_id="storage",
-            name="storage",
-            root="storage",
-            searchable_terms=["persist_record"],
-            files=["storage/repo.py"],
-        ),
-    ]
-
-    state = LocalCoordinator(tmp_path, workers, reasoner=NeedRoutingReasoner()).ask(
-        "How does submit work?", max_rounds=2
-    )
-
-    assert state.rounds[0].selected_worker_ids == ["worker-api"]
-    assert not state.rounds[0].coalition_formed
-    assert state.rounds[1].input_need == "Need the persistence implementation."
-    assert state.rounds[1].selected_worker_ids == ["worker-storage"]
-    assert state.rounds[1].coalition_formed
-
-
-class CrossTerritoryNoHintReasoner(_PassthroughLookupsReasoner):
-    """Same shape as NeedRoutingReasoner but deliberately omits
-    suggested_territories -- that field alone gives the "correct" worker a
-    large territory_hint_score bonus that would mask whether the
-    cross_territory exclusion fix (not the territory hint) is what forces a
-    different worker to be picked.
-    """
-
-    def observe(self, *, question, worker_id, territory_id, evidence):
-        needs = []
-        if worker_id == "worker-api":
-            needs.append(
-                UnresolvedNeed(
-                    description="Need the persistence implementation.",
-                    kind="missing_implementation",
-                    suggested_terms=["persist_record"],
-                    scope="cross_territory",
-                    source_worker_id="worker-api",
-                )
-            )
-        return WorkerObservation(
-            worker_id=worker_id, territory_id=territory_id, unresolved_needs=needs
-        )
-
-
-def test_cross_territory_need_excludes_the_source_worker_even_when_it_still_ranks_highest(
-    tmp_path: Path,
-) -> None:
-    # Regression test for a real observed failure: two seaborn traces
-    # showed round 1 re-selecting the exact same worker that had just
-    # raised a cross_territory need there, because that worker's card
-    # still scored highest overall for the follow-up query too (a
-    # source_worker_bonus applies specifically to re-selecting it, and the
-    # seen-worker penalty discourages but does not forbid re-picking it).
-    # Re-asking the same worker the same question never surfaces the other
-    # half of a cross-territory answer, and since coalition_formed requires
-    # the round's pick to differ from source_worker_id, no joint
-    # cross-check ever ran either. This isolates that from the "the other
-    # worker happens to score higher anyway" case already covered by
-    # test_semantic_need_routes_follow_up_and_forms_coalition above:
-    # worker-api is deliberately kept top-ranked for the follow-up query
-    # too (its own terms plus the source_worker_bonus), and worker-storage
-    # only enters the round-1 candidate pool via a memory-route bonus, not
-    # any lexical match on the follow-up query.
-    (tmp_path / "api").mkdir()
-    (tmp_path / "storage").mkdir()
-    (tmp_path / "api" / "service.py").write_text(
-        "def submit_record():\n    return persist_record()\n", encoding="utf-8"
-    )
-    (tmp_path / "storage" / "repo.py").write_text(
-        "def persist_record():\n    return 'stored'\n", encoding="utf-8"
-    )
-    workers = [
-        WorkerCard(
-            id="worker-api",
-            territory_id="api",
-            name="api",
-            root="api",
-            searchable_terms=["submit", "persist_record", "implementation"],
-            files=["api/service.py"],
-        ),
-        WorkerCard(
-            id="worker-storage",
-            territory_id="storage",
-            name="storage",
-            root="storage",
-            searchable_terms=["repo"],
-            files=["storage/repo.py"],
-        ),
-    ]
-
-    state = LocalCoordinator(
-        tmp_path,
+    def plan_round(
+        self,
+        *,
+        question,
+        graph,
+        resolution_results,
+        evidence,
         workers,
-        reasoner=CrossTerritoryNoHintReasoner(),
-        memory_routes=[
-            MemoryRoute(need_terms=["persist_record"], worker_ids=["worker-storage"], weight=0.3)
-        ],
-    ).ask("How does submit work?", max_rounds=2)
-
-    assert state.rounds[0].selected_worker_ids == ["worker-api"]
-    assert state.rounds[1].selected_worker_ids == ["worker-storage"]
-    assert state.rounds[1].coalition_formed
-
-
-def test_select_for_active_need_excludes_every_worker_seen_not_just_the_needs_source(
-) -> None:
-    # Regression test for a real observed failure on a yt-dlp trace: rounds
-    # 2-5 of a 6-round task all re-picked the exact same worker (already
-    # proven unable to answer in round 1), producing 11 near-duplicate
-    # unresolved needs instead of ever trying a third territory. The cause:
-    # once a coalition cross-check itself fails to resolve the need, its
-    # own re-raised need carries source_worker_id="coalition:<id>", which
-    # never matches a real WorkerCard.id -- excluding only that exact
-    # string was a silent no-op, so the already-failed worker kept winning
-    # by score. This is the exact shape of that trace: worker-b is the
-    # highest-scored candidate (as it was in round 1, correctly), but it
-    # has already been tried and failed under a synthetic coalition need,
-    # so round 2 must move on to worker-c.
-    workers = [
-        # Already score-ranked, worker-b first: a naive top-1 pick (or the
-        # old buggy exclusion, which never matches the synthetic source id
-        # below) would re-select worker-b here.
-        WorkerCard(id="worker-b", territory_id="storage", name="storage", root="storage"),
-        WorkerCard(id="worker-a", territory_id="api", name="api", root="api"),
-        WorkerCard(id="worker-c", territory_id="backup", name="backup", root="backup"),
-    ]
-    need = UnresolvedNeed(
-        description="Still missing the concrete implementation.",
-        kind="missing_detail",
-        scope="cross_territory",
-        source_worker_id="coalition:worker-b",  # never equals any real WorkerCard.id
-    )
-
-    selected = _select_for_active_need(
-        candidates=workers,
-        active_need=need,
-        seen_worker_ids={"worker-a", "worker-b"},
-    )
-
-    assert [worker.id for worker in selected] == ["worker-c"]
-
-
-def test_select_for_active_need_falls_back_to_a_seen_worker_if_nothing_else_is_left() -> None:
-    workers = [WorkerCard(id="worker-a", territory_id="api", name="api", root="api")]
-    need = UnresolvedNeed(
-        description="Still missing.",
-        scope="cross_territory",
-        source_worker_id="worker-a",
-    )
-
-    selected = _select_for_active_need(
-        candidates=workers,
-        active_need=need,
-        seen_worker_ids={"worker-a"},
-    )
-
-    assert [worker.id for worker in selected] == ["worker-a"]
-
-
-def test_select_for_active_need_takes_the_top_candidate_for_a_local_need() -> None:
-    workers = [
-        WorkerCard(id="worker-a", territory_id="api", name="api", root="api"),
-        WorkerCard(id="worker-b", territory_id="storage", name="storage", root="storage"),
-    ]
-    need = UnresolvedNeed(
-        description="Local follow-up.", scope="local", source_worker_id="worker-a"
-    )
-
-    selected = _select_for_active_need(
-        candidates=workers,
-        active_need=need,
-        seen_worker_ids={"worker-a"},
-    )
-
-    # Non-cross_territory needs are unaffected by this exclusion logic.
-    assert [worker.id for worker in selected] == ["worker-a"]
-
-
-def test_parallel_initial_recruitment_is_not_a_coalition(tmp_path: Path) -> None:
-    for root in ("api", "ui"):
-        (tmp_path / root).mkdir()
-        (tmp_path / root / "feature.py").write_text(
-            f"def shared_feature():\n    return '{root}'\n", encoding="utf-8"
-        )
-    workers = [
-        WorkerCard(
-            id=f"worker-{root}",
-            territory_id=root,
-            name=root,
-            root=root,
-            searchable_terms=["shared", "feature"],
-            files=[f"{root}/feature.py"],
-        )
-        for root in ("api", "ui")
-    ]
-
-    state = LocalCoordinator(tmp_path, workers).ask("Where is shared feature?", max_rounds=1)
-
-    assert len(state.rounds[0].selected_worker_ids) == 2
-    assert not state.rounds[0].coalition_formed
-    assert all(
-        action.tool != "cross_check"
-        for observation in state.rounds[0].observations
-        for action in observation.actions
-    )
-
-
-class LocalContinuationReasoner(_PassthroughLookupsReasoner):
-    def __init__(self) -> None:
-        self.calls = 0
-
-    def observe(self, *, question, worker_id, territory_id, evidence):
-        self.calls += 1
-        needs = []
-        if self.calls == 1:
-            needs.append(
-                UnresolvedNeed(
-                    description="Need to connect probabilities to sampled outcomes.",
-                    missing="How probabilities become sampled outcomes.",
-                    suggested_terms=["sample_shots", "frequencies"],
-                    suggested_territories=[territory_id],
-                    scope="local",
-                    source_worker_id=worker_id,
-                )
-            )
-        return WorkerObservation(
-            worker_id=worker_id, territory_id=territory_id, unresolved_needs=needs
+        memory_hints,
+        frontier,
+        observed_needs,
+        incomplete_parents,
+        cross_repo_experience,
+        validation_feedback="",
+    ):
+        # TODO(Phase 7): every scenario reasoner below this class exercises
+        # the old routing/escalation-specific ask() mechanics, which the
+        # Phase 6 graph-based round loop replaced outright -- ask() now
+        # always calls plan_round(), so these scenario tests need
+        # rewriting against the new pipeline (or removing, where they only
+        # ever tested since-deleted heuristics), not just a signature fix.
+        raise AssertionError(
+            "this scenario reasoner predates the Phase 6 graph-based round loop and needs "
+            "rewriting against it (see TODO) -- plan_round() is unconditionally called now"
         )
 
-
-def test_local_need_can_continue_the_same_worker(tmp_path: Path) -> None:
-    (tmp_path / "src").mkdir()
-    (tmp_path / "src" / "backend.py").write_text(
-        "def probabilities():\n    return [0.5, 0.5]\n\ndef sample_shots():\n    return {'0': 1}\n",
-        encoding="utf-8",
-    )
-    worker = WorkerCard(
-        id="worker-backend",
-        territory_id="backend",
-        name="backend",
-        root="src/backend",
-        searchable_terms=["probabilities", "sample_shots", "frequencies"],
-        files=["src/backend.py"],
-    )
-    reasoner = LocalContinuationReasoner()
-
-    state = LocalCoordinator(tmp_path, [worker], reasoner=reasoner).ask(
-        "How do probabilities become outcomes?", max_rounds=2
-    )
-
-    assert [round_.selected_worker_ids for round_ in state.rounds] == [
-        ["worker-backend"],
-        ["worker-backend"],
-    ]
-    assert "Continued" in state.rounds[1].selection_reason
-    assert not state.rounds[1].coalition_formed
-
-
-class MissingFocusedReasoner(_PassthroughLookupsReasoner):
-    def observe(self, *, question, worker_id, territory_id, evidence):
-        needs = []
-        if worker_id == "worker-docs":
-            needs.append(
-                UnresolvedNeed(
-                    description="Need the implementation of FusedGate merging.",
-                    missing="Implementation of FusedGate merging.",
-                    known=[
-                        "The original question and docs mention tutorials, examples, and README."
-                    ],
-                    suggested_terms=["FusedGate", "fuse"],
-                    suggested_territories=["gate optimization"],
-                    scope="cross_territory",
-                    source_worker_id=worker_id,
-                )
-            )
-        return WorkerObservation(
-            worker_id=worker_id, territory_id=territory_id, unresolved_needs=needs
-        )
-
-
-def test_follow_up_routing_uses_missing_information_over_original_question(
-    tmp_path: Path,
-) -> None:
-    for root in ("docs", "optimizers", "examples"):
-        (tmp_path / root).mkdir()
-    (tmp_path / "docs" / "guide.py").write_text(
-        "def tutorial_entry():\n    return 'automatic gate fusion docs'\n",
-        encoding="utf-8",
-    )
-    (tmp_path / "optimizers" / "fusion.py").write_text(
-        "class FusedGate:\n    pass\n\ndef fuse():\n    return FusedGate()\n",
-        encoding="utf-8",
-    )
-    (tmp_path / "examples" / "demo.py").write_text(
-        "def tutorial_example():\n    return 'docs examples readme'\n",
-        encoding="utf-8",
-    )
-    workers = [
-        WorkerCard(
-            id="worker-docs",
-            territory_id="docs",
-            name="docs",
-            root="docs",
-            searchable_terms=["automatic", "gate", "fusion", "tutorial"],
-            files=["docs/guide.py"],
-        ),
-        WorkerCard(
-            id="worker-optimizers",
-            territory_id="optimizers",
-            name="gate optimization",
-            root="optimizers",
-            searchable_terms=["FusedGate", "fuse", "merge"],
-            files=["optimizers/fusion.py"],
-        ),
-        WorkerCard(
-            id="worker-examples",
-            territory_id="examples",
-            name="examples",
-            root="examples",
-            searchable_terms=["tutorial", "examples", "readme"],
-            files=["examples/demo.py"],
-        ),
-    ]
-
-    state = LocalCoordinator(tmp_path, workers, reasoner=MissingFocusedReasoner()).ask(
-        "How does the tutorial explain automatic gate fusion examples?", max_rounds=2
-    )
-
-    assert state.rounds[0].selected_worker_ids == ["worker-docs"]
-    # The original question stays present as a stable lexical anchor (it is
-    # never fully dropped, even once a specific need takes over routing),
-    # but the need-derived text is what actually decides the worker pick
-    # below: worker-optimizers wins on "FusedGate"/"fuse" overlap despite
-    # the anchor's "tutorial"/"examples" wording nominally favoring
-    # worker-examples/worker-docs just as strongly on raw term count.
-    assert state.rounds[1].query == (
-        "How does the tutorial explain automatic gate fusion examples? "
-        "Implementation of FusedGate merging. Need the implementation of FusedGate merging. "
-        "FusedGate fuse gate optimization"
-    )
-    assert state.rounds[1].selected_worker_ids == ["worker-optimizers"]
-    assert "worker-examples" not in state.rounds[1].selected_worker_ids
-
-
-class FuzzyTerritoryReasoner(_PassthroughLookupsReasoner):
-    def observe(self, *, question, worker_id, territory_id, evidence):
-        needs = []
-        if worker_id == "worker-api":
-            needs.append(
-                UnresolvedNeed(
-                    description="Need backend sampling implementation.",
-                    missing="Backend sampling implementation.",
-                    suggested_terms=["sample_shots"],
-                    suggested_territories=["backend architecture"],
-                    scope="cross_territory",
-                    source_worker_id=worker_id,
-                )
-            )
-        return WorkerObservation(
-            worker_id=worker_id, territory_id=territory_id, unresolved_needs=needs
-        )
-
-
-def test_territory_hints_are_fuzzy_soft_scores(tmp_path: Path) -> None:
-    for root in ("api", "src/qibo/backends", "tools"):
-        (tmp_path / root).mkdir(parents=True)
-    (tmp_path / "api" / "circuit.py").write_text(
-        "def execute_circuit():\n    return 'measurement'\n", encoding="utf-8"
-    )
-    (tmp_path / "src" / "qibo" / "backends" / "numpy.py").write_text(
-        "def sample_shots():\n    return 'samples'\n", encoding="utf-8"
-    )
-    (tmp_path / "tools" / "sample.py").write_text(
-        "def sample_shots():\n    return 'tool samples'\n", encoding="utf-8"
-    )
-    workers = [
-        WorkerCard(
-            id="worker-api",
-            territory_id="api",
-            name="api",
-            root="api",
-            searchable_terms=["execute_circuit", "measurement"],
-            files=["api/circuit.py"],
-        ),
-        WorkerCard(
-            id="worker-backends",
-            territory_id="src/qibo/backends",
-            name="qibo backend worker",
-            root="src/qibo/backends",
-            searchable_terms=["sample_shots"],
-            files=["src/qibo/backends/numpy.py"],
-        ),
-        WorkerCard(
-            id="worker-tools",
-            territory_id="tools",
-            name="tools",
-            root="tools",
-            searchable_terms=["sample_shots"],
-            files=["tools/sample.py"],
-        ),
-    ]
-
-    state = LocalCoordinator(tmp_path, workers, reasoner=FuzzyTerritoryReasoner()).ask(
-        "Where does measurement data flow?", max_rounds=2
-    )
-
-    assert state.rounds[1].selected_worker_ids == ["worker-backends"]
-    assert state.rounds[1].candidate_worker_ids[:2] == ["worker-backends", "worker-tools"]
-
-
-class ImplementationSourceReasoner(_PassthroughLookupsReasoner):
-    def observe(self, *, question, worker_id, territory_id, evidence):
-        needs = []
-        if worker_id == "worker-tests":
-            needs.append(
-                UnresolvedNeed(
-                    description="Need the source code implementation of draw symbols.",
-                    missing="Source code definition for rendering labels.",
-                    suggested_terms=["render_gate_labels", "Circuit.draw", "symbol mapping"],
-                    suggested_territories=["src package implementation"],
-                    scope="cross_territory",
-                    source_worker_id=worker_id,
-                )
-            )
-        return WorkerObservation(
-            worker_id=worker_id, territory_id=territory_id, unresolved_needs=needs
-        )
-
-
-def test_cross_territory_source_need_prefers_implementation_over_tests(
-    tmp_path: Path,
-) -> None:
-    for root in ("src/tests", "src/models"):
-        (tmp_path / root).mkdir(parents=True)
-    (tmp_path / "src" / "tests" / "test_draw.py").write_text(
-        "def test_draw_symbols():\n    assert 'symbol mapping'\n", encoding="utf-8"
-    )
-    (tmp_path / "src" / "models" / "renderer.py").write_text(
-        "def render_gate_labels():\n    return {'H': 'H'}\n", encoding="utf-8"
-    )
-    workers = [
-        WorkerCard(
-            id="worker-tests",
-            territory_id="src-tests",
-            name="tests",
-            root="src/tests",
-            searchable_terms=["draw_symbols", "Circuit.draw", "symbol mapping"],
-            files=["src/tests/test_draw.py"],
-        ),
-        WorkerCard(
-            id="worker-models",
-            territory_id="src-models",
-            name="src package implementation",
-            root="src/models",
-            searchable_terms=["render_gate_labels", "Circuit.draw"],
-            files=["src/models/renderer.py"],
-        ),
-    ]
-
-    state = LocalCoordinator(tmp_path, workers, reasoner=ImplementationSourceReasoner()).ask(
-        "Where are draw symbols tested?", max_rounds=2
-    )
-
-    assert state.rounds[0].selected_worker_ids == ["worker-tests"]
-    assert state.rounds[1].selected_worker_ids == ["worker-models"]
-
-
-def test_initial_implementation_question_prefers_source_over_tests(
-    tmp_path: Path,
-) -> None:
-    for root in ("src/models", "tests"):
-        (tmp_path / root).mkdir(parents=True)
-    (tmp_path / "src" / "models" / "variational.py").write_text(
-        "class QAOA:\n    pass\n\nclass FALQON(QAOA):\n    pass\n",
-        encoding="utf-8",
-    )
-    (tmp_path / "tests" / "test_variational.py").write_text(
-        "def test_qaoa_falqon():\n    assert 'QAOA FALQON subclass implementation'\n",
-        encoding="utf-8",
-    )
-    workers = [
-        WorkerCard(
-            id="worker-tests",
-            territory_id="tests",
-            name="tests",
-            root="tests",
-            searchable_terms=["QAOA", "FALQON", "subclass", "implementation"],
-            files=["tests/test_variational.py"],
-        ),
-        WorkerCard(
-            id="worker-src-models",
-            territory_id="src-models",
-            name="models",
-            root="src/models",
-            searchable_terms=["QAOA", "FALQON"],
-            files=["src/models/variational.py"],
-        ),
-    ]
-
-    state = LocalCoordinator(tmp_path, workers).ask(
-        "Where is the QAOA subclass implementation?", max_rounds=1
-    )
-
-    assert state.rounds[0].selected_worker_ids == ["worker-src-models"]
-
-
-def test_memory_route_soft_bonus_can_select_known_worker(tmp_path: Path) -> None:
-    for root in ("backends", "docs"):
-        (tmp_path / root).mkdir()
-    (tmp_path / "backends" / "numpy.py").write_text(
-        "def sample_shots(probabilities):\n    return probabilities\n",
-        encoding="utf-8",
-    )
-    (tmp_path / "docs" / "guide.py").write_text(
-        "def measurement_notes():\n    return 'measurement overview'\n",
-        encoding="utf-8",
-    )
-    workers = [
-        WorkerCard(
-            id="worker-docs",
-            territory_id="docs",
-            name="docs",
-            root="docs",
-            searchable_terms=["measurement"],
-            files=["docs/guide.py"],
-        ),
-        WorkerCard(
-            id="worker-backends",
-            territory_id="backends",
-            name="backends",
-            root="backends",
-            # Deliberately shares no stem with the question below (not even
-            # via a compound part) -- this test isolates the memory-route
-            # bonus as the sole reason worker-backends gets selected, so its
-            # vocabulary must have zero lexical overlap with the query on
-            # its own. "sample_shots" used to satisfy that, until this
-            # session's _matches_term fix started correctly stemming
-            # "samples" against "sample_shots"'s "sample" compound part.
-            searchable_terms=["detector_events"],
-            files=["backends/numpy.py"],
-        ),
-    ]
-
-    state = LocalCoordinator(
-        tmp_path,
-        workers,
-        memory_routes=[
-            MemoryRoute(
-                need_terms=["measurement"],
-                worker_ids=["worker-backends"],
-                weight=3.0,
-            )
-        ],
-    ).ask("How are measurement samples produced?", max_rounds=1)
-
-    assert state.rounds[0].selected_worker_ids == ["worker-backends"]
-    assert state.rounds[0].routing_scores[0].memory_route_bonus > 0
-
-
-def test_memory_route_bonus_ignores_a_single_generic_word_shared_with_an_unrelated_route(
-    tmp_path: Path,
-) -> None:
-    (tmp_path / "models").mkdir()
-    (tmp_path / "visualization").mkdir()
-    (tmp_path / "models" / "algorithms.py").write_text(
-        "class QAOA:\n    pass\n", encoding="utf-8"
-    )
-    (tmp_path / "visualization" / "bloch.py").write_text(
-        "def paint_bloch_sphere():\n    return 'quantum state plot'\n", encoding="utf-8"
-    )
-    workers = [
-        WorkerCard(
-            id="worker-models",
-            territory_id="models",
-            name="models",
-            root="models",
-            searchable_terms=["QAOA"],
-            files=["models/algorithms.py"],
-        ),
-        WorkerCard(
-            id="worker-visualization",
-            territory_id="visualization",
-            name="visualization",
-            root="visualization",
-            searchable_terms=["bloch", "sphere"],
-            files=["visualization/bloch.py"],
-        ),
-    ]
-    # Recorded from answering an unrelated earlier question about QAOA
-    # subclasses -- its vocabulary shares only the single generic word
-    # "quantum" with the new, unrelated Bloch-sphere question below.
-    unrelated_route = MemoryRoute(
-        need_terms=[
-            "algorithm",
-            "class",
-            "extended",
-            "inheriting",
-            "methods",
-            "overridden",
-            "qaoa",
-            "quantum",
-            "specialized",
-            "subclasses",
-            "variational",
-        ],
-        worker_ids=["worker-models"],
-        weight=5.0,
-    )
-
-    state = LocalCoordinator(
-        tmp_path, workers, memory_routes=[unrelated_route]
-    ).ask("How does the quantum state get rendered on the Bloch sphere?", max_rounds=1)
-
-    # Without the stale memory bonus, worker-models has no signal at all for
-    # this question and should not even be a candidate -- previously the
-    # capped +12 bonus from the unrelated route alone would have put it
-    # ahead of the genuinely relevant worker.
-    assert "worker-models" not in state.rounds[0].candidate_worker_ids
-    assert state.rounds[0].selected_worker_ids == ["worker-visualization"]
-
-
-def test_inheritance_question_reports_coverage_gap_without_subclass_evidence(
-    tmp_path: Path,
-) -> None:
-    (tmp_path / "src").mkdir()
-    (tmp_path / "src" / "models.py").write_text(
-        "class QAOA:\n    pass\n",
-        encoding="utf-8",
-    )
-    worker = WorkerCard(
-        id="worker-src",
-        territory_id="src",
-        name="src",
-        root="src",
-        searchable_terms=["QAOA"],
-        files=["src/models.py"],
-    )
-
-    state = LocalCoordinator(tmp_path, [worker]).ask(
-        "What subclasses inherit from QAOA?", max_rounds=1
-    )
-
-    assert state.unresolved_needs
-    assert state.unresolved_needs[0].need_type == "subclass_lookup"
-    assert "QAOA" in state.unresolved_needs[0].relevant_symbols
-
-
-def test_implement_stem_without_suffix_triggers_implementation_coverage_gap(
-    tmp_path: Path,
-) -> None:
-    # Regression test: "How does X implement Y" (bare stem, no -ation/-ed
-    # suffix) previously matched none of _asks_for_source_implementation_text's
-    # indicators, so the question fell back to a "negative_presence" need
-    # even when it was clearly asking for an implementation -- meaning
-    # nothing ever flagged that the actual algorithm/code was missing.
-    (tmp_path / "src").mkdir()
-    (tmp_path / "src" / "models.py").write_text(
-        "class Present:\n    pass\n",
-        encoding="utf-8",
-    )
-    worker = WorkerCard(
-        id="worker-src",
-        territory_id="src",
-        name="src",
-        root="src",
-        searchable_terms=["Present"],
-        files=["src/models.py"],
-    )
-
-    state = LocalCoordinator(tmp_path, [worker]).ask(
-        "How does the library implement automatic gate fusion?", max_rounds=1
-    )
-
-    assert state.unresolved_needs[0].need_type == "implementation_location"
-
-
-def test_no_evidence_returns_structured_negative_presence_need(tmp_path: Path) -> None:
-    (tmp_path / "src").mkdir()
-    (tmp_path / "src" / "models.py").write_text(
-        "class Present:\n    pass\n",
-        encoding="utf-8",
-    )
-    worker = WorkerCard(
-        id="worker-src",
-        territory_id="src",
-        name="src",
-        root="src",
-        searchable_terms=["Present"],
-        files=["src/models.py"],
-    )
-
-    state = LocalCoordinator(tmp_path, [worker]).ask(
-        "Is MissingVisualizer implemented?", max_rounds=1
-    )
-
-    assert state.unresolved_needs[0].kind == "coverage_gap"
-    assert state.unresolved_needs[0].need_type == "implementation_location"
-    assert "MissingVisualizer" in state.unresolved_needs[0].relevant_symbols
-    assert state.absence_proofs[0].searched_worker_ids == ["worker-src"]
-    assert state.absence_proofs[0].searched_paths == ["src/models.py"]
-    assert state.absence_proofs[0].conclusion == "not_found"
-
-
-def test_source_test_question_requires_evidence_from_both_sides(tmp_path: Path) -> None:
-    (tmp_path / "src").mkdir()
-    (tmp_path / "src" / "service.py").write_text(
-        "def authenticate():\n    return True\n", encoding="utf-8"
-    )
-    worker = WorkerCard(
-        id="worker-src",
-        territory_id="src",
-        name="src",
-        root="src",
-        searchable_terms=["authenticate"],
-        files=["src/service.py"],
-    )
-
-    state = LocalCoordinator(tmp_path, [worker]).ask(
-        "Where is authenticate implemented and tested?", max_rounds=1
-    )
-
-    coalition_need = next(
-        need for need in state.unresolved_needs if need.need_type == "source_test_coalition"
-    )
-    assert coalition_need.kind == "coverage_gap"
-    assert coalition_need.scope == "cross_territory"
-    assert coalition_need.missing == "test coverage"
+    def summarize_task_experience(self, *, question, rounds, unresolved_needs, evidence_count):
+        raise AssertionError("this test does not exercise summarize_task_experience()")
 
 
 def test_local_search_returns_context_windows(tmp_path: Path) -> None:
@@ -1236,72 +551,6 @@ def test_merge_needs_deduplicates_same_gap_across_rounds() -> None:
     assert sorted(merged[0].relevant_symbols) == ["FALQON", "QAOA"]
 
 
-class StaleSubclassNeedReasoner(_PassthroughLookupsReasoner):
-    """Simulates an LLM reasoner that keeps flagging the same completeness
-    doubt about QAOA's subclasses every round and never notices on its own
-    that a later round's evidence has already grounded it. The coordinator's
-    own closure check -- not the reasoner -- is what must drop the need."""
-
-    def observe(self, *, question, worker_id, territory_id, evidence):
-        return WorkerObservation(
-            worker_id=worker_id,
-            territory_id=territory_id,
-            unresolved_needs=[
-                UnresolvedNeed(
-                    description="Need to confirm all subclasses of QAOA are covered.",
-                    kind="coverage_gap",
-                    need_type="subclass_lookup",
-                    missing="Subclass definitions and their base-class relationship.",
-                    scope="unknown",
-                    relevant_symbols=["QAOA"],
-                    suggested_terms=["QAOA", "subclass", "inherit"],
-                    suggested_territories=["variational subclasses"],
-                    source_worker_id=worker_id,
-                )
-            ],
-        )
-
-
-def test_subclass_lookup_need_closes_once_a_later_round_grounds_it(tmp_path: Path) -> None:
-    (tmp_path / "src" / "base").mkdir(parents=True)
-    (tmp_path / "src" / "variants").mkdir(parents=True)
-    (tmp_path / "src" / "base" / "qaoa.py").write_text(
-        "class QAOA:\n    pass\n", encoding="utf-8"
-    )
-    (tmp_path / "src" / "variants" / "falqon.py").write_text(
-        "class FALQON(QAOA):\n    pass\n", encoding="utf-8"
-    )
-    workers = [
-        WorkerCard(
-            id="worker-base",
-            territory_id="src-base",
-            name="base algorithms",
-            root="src/base",
-            searchable_terms=["QAOA"],
-            files=["src/base/qaoa.py"],
-        ),
-        WorkerCard(
-            id="worker-variants",
-            territory_id="src-variants",
-            name="variational subclasses",
-            root="src/variants",
-            searchable_terms=["FALQON"],
-            files=["src/variants/falqon.py"],
-        ),
-    ]
-
-    state = LocalCoordinator(
-        tmp_path, workers, reasoner=StaleSubclassNeedReasoner()
-    ).ask("What subclasses inherit from QAOA?", max_rounds=2)
-
-    assert state.rounds[0].selected_worker_ids == ["worker-base"]
-    assert state.rounds[1].selected_worker_ids == ["worker-variants"]
-    assert any(
-        "FALQON" in item.quote and "QAOA" in item.quote for item in state.evidence
-    )
-    assert not any(need.need_type == "subclass_lookup" for need in state.unresolved_needs)
-
-
 def test_reopen_referenced_evidence_pulls_a_larger_region(tmp_path: Path) -> None:
     (tmp_path / "src").mkdir()
     lines = [f"# filler {index}" for index in range(1, 41)]
@@ -1339,203 +588,6 @@ def test_reopen_referenced_evidence_ignores_invalid_or_out_of_range_ids(
     assert _reopen_referenced_evidence([need], [], search) == []
 
 
-class CoalitionJointReasoner(_PassthroughLookupsReasoner):
-    """Only worker-api raises the cross-territory need that triggers a
-    coalition; a distinct "coalition" territory_id call represents the joint
-    reasoning pass, referencing evidence index 0 to exercise the reopen path.
-    """
-
-    def observe(self, *, question, worker_id, territory_id, evidence):
-        if territory_id == "coalition":
-            return WorkerObservation(
-                worker_id=worker_id,
-                territory_id=territory_id,
-                unresolved_needs=[
-                    UnresolvedNeed(
-                        description="Need to confirm what submit_record forwards.",
-                        kind="missing_detail",
-                        scope="cross_territory",
-                        evidence_ids=["0"],
-                    )
-                ],
-            )
-        needs = []
-        if worker_id == "worker-api":
-            needs.append(
-                UnresolvedNeed(
-                    description="Need the persistence implementation.",
-                    kind="missing_implementation",
-                    suggested_terms=["persist_record"],
-                    suggested_territories=["storage"],
-                    scope="cross_territory",
-                    source_worker_id="worker-api",
-                )
-            )
-        return WorkerObservation(
-            worker_id=worker_id, territory_id=territory_id, unresolved_needs=needs
-        )
-
-
-def test_coalition_runs_joint_cross_check_and_reopens_referenced_evidence(
-    tmp_path: Path,
-) -> None:
-    (tmp_path / "api").mkdir()
-    (tmp_path / "storage").mkdir()
-    (tmp_path / "api" / "service.py").write_text(
-        "def submit_record():\n    return persist_record()\n", encoding="utf-8"
-    )
-    (tmp_path / "storage" / "repo.py").write_text(
-        "def persist_record():\n    return 'stored'\n", encoding="utf-8"
-    )
-    workers = [
-        WorkerCard(
-            id="worker-api",
-            territory_id="api",
-            name="api",
-            root="api",
-            searchable_terms=["submit"],
-            files=["api/service.py"],
-        ),
-        WorkerCard(
-            id="worker-storage",
-            territory_id="storage",
-            name="storage",
-            root="storage",
-            searchable_terms=["persist_record"],
-            files=["storage/repo.py"],
-        ),
-    ]
-
-    state = LocalCoordinator(tmp_path, workers, reasoner=CoalitionJointReasoner()).ask(
-        "How does submit work?", max_rounds=2
-    )
-
-    assert state.rounds[1].coalition_formed
-    coalition_observations = [
-        observation
-        for observation in state.rounds[1].observations
-        if observation.territory_id == "coalition"
-    ]
-    assert len(coalition_observations) == 1
-    assert coalition_observations[0].stop_reason == "coalition_cross_check"
-    assert any("Reopened for coalition cross-check" in item.reason for item in state.evidence)
-
-
-def test_relevant_symbol_weights_downweight_terms_common_across_the_colony() -> None:
-    qibo_workers = [
-        WorkerCard(
-            id=f"worker-qibo-{index}",
-            territory_id=f"qibo-{index}",
-            name=f"qibo module {index}",
-            root=f"src/qibo/mod{index}",
-            files=[f"src/qibo/mod{index}/file.py"],
-        )
-        for index in range(6)
-    ]
-    examples_worker = WorkerCard(
-        id="worker-examples-bloch",
-        territory_id="examples-bloch",
-        name="bloch example",
-        root="examples/bloch",
-        searchable_terms=["Bloch"],
-        files=["examples/bloch/plot.py"],
-    )
-    workers = [*qibo_workers, examples_worker]
-
-    weights = _relevant_symbol_weights({"Qibo", "Bloch"}, workers)
-
-    # "Qibo" matches 6 of 7 workers purely via the repo-name-in-every-path
-    # fallback and must be heavily discounted; "Bloch" matches exactly one
-    # worker for a real reason and must keep close to full weight.
-    assert weights["Qibo"] < weights["Bloch"]
-    assert weights["Bloch"] == 6
-
-
-def test_repo_name_matching_every_src_path_does_not_bury_the_real_match(
-    tmp_path: Path,
-) -> None:
-    for index in range(6):
-        (tmp_path / "src" / "qibo" / f"mod{index}").mkdir(parents=True)
-        (tmp_path / "src" / "qibo" / f"mod{index}" / "file.py").write_text(
-            "def unrelated():\n    return 1\n", encoding="utf-8"
-        )
-    (tmp_path / "examples" / "bloch").mkdir(parents=True)
-    (tmp_path / "examples" / "bloch" / "plot.py").write_text(
-        "def paint_bloch_sphere():\n    return 'bloch'\n", encoding="utf-8"
-    )
-    qibo_workers = [
-        WorkerCard(
-            id=f"worker-qibo-{index}",
-            territory_id=f"qibo-{index}",
-            name=f"qibo module {index}",
-            root=f"src/qibo/mod{index}",
-            searchable_terms=["qibo"],
-            files=[f"src/qibo/mod{index}/file.py"],
-        )
-        for index in range(6)
-    ]
-    examples_worker = WorkerCard(
-        id="worker-examples-bloch",
-        territory_id="examples-bloch",
-        name="bloch example",
-        root="examples/bloch",
-        searchable_terms=["Bloch", "paint_bloch_sphere"],
-        files=["examples/bloch/plot.py"],
-    )
-
-    state = LocalCoordinator(tmp_path, [*qibo_workers, examples_worker]).ask(
-        "How does Qibo's visualization render the Bloch sphere?", max_rounds=1
-    )
-
-    assert state.rounds[0].selected_worker_ids == ["worker-examples-bloch"]
-
-
-def test_inheritance_scan_finds_subclass_in_a_territory_never_recruited(
-    tmp_path: Path,
-) -> None:
-    (tmp_path / "base").mkdir()
-    (tmp_path / "other").mkdir()
-    (tmp_path / "base" / "qaoa.py").write_text("class QAOA:\n    pass\n", encoding="utf-8")
-    (tmp_path / "other" / "falqon.py").write_text(
-        "class FALQON(QAOA):\n    pass\n", encoding="utf-8"
-    )
-    workers = [
-        WorkerCard(
-            id="worker-base",
-            territory_id="base",
-            name="base",
-            root="base",
-            searchable_terms=["QAOA"],
-            files=["base/qaoa.py"],
-        ),
-        WorkerCard(
-            id="worker-other",
-            territory_id="other",
-            name="other",
-            root="other",
-            searchable_terms=["something_unrelated"],
-            files=["other/falqon.py"],
-        ),
-    ]
-
-    state = LocalCoordinator(tmp_path, workers).ask(
-        "What subclasses inherit from QAOA?", max_rounds=1
-    )
-
-    # Routing only ever recruited worker-base: worker-other's own terms don't
-    # match the question at all, so this evidence could only have come from
-    # the repo-wide completeness scan, not from need-conditioned recruitment.
-    assert [round_.selected_worker_ids for round_ in state.rounds] == [["worker-base"]]
-    assert any(
-        "FALQON" in item.quote and "QAOA" in item.quote for item in state.evidence
-    )
-    assert not any(need.need_type == "subclass_lookup" for need in state.unresolved_needs)
-    exhaustive_proofs = [proof for proof in state.absence_proofs if proof.exhaustive]
-    assert exhaustive_proofs
-    assert exhaustive_proofs[0].conclusion == "found_1_subclass"
-    assert "QAOA" in exhaustive_proofs[0].relevant_symbols
-
-
 def test_rank_global_evidence_credits_a_symbol_name_matching_the_question() -> None:
     # Coordinator-level counterpart to the same fix in
     # ant.workers.autonomous._rank_evidence: the final cross-worker ranking
@@ -1565,222 +617,422 @@ def test_rank_global_evidence_credits_a_symbol_name_matching_the_question() -> N
     assert ranked[0] is target
 
 
-class ResolvesOnNewEvidenceReasoner(_PassthroughLookupsReasoner):
-    """Always re-raises the same need (by identity) regardless of which
-    worker is asked, and resolves it exactly when a round turns up evidence
-    genuinely new to the pool -- the simplest possible stand-in for real
-    judgment, sufficient to prove the *plumbing* (does resolved status
-    actually remove the need; does a no-progress round actually count as
-    no-progress) without needing a real model.
-    """
-
-    def __init__(self, need_type: str = "data_flow") -> None:
-        self.need_type = need_type
-
-    def observe(self, *, question, worker_id, territory_id, evidence):
-        return WorkerObservation(
-            worker_id=worker_id,
-            territory_id=territory_id,
-            unresolved_needs=[
-                UnresolvedNeed(
-                    description="Need the real archive implementation.",
-                    kind="missing_implementation",
-                    need_type=self.need_type,
-                    suggested_terms=["archive"],
-                    scope="local",
-                    source_worker_id="worker-a",
-                )
-            ],
-        )
-
-    def check_need_resolution(self, *, need, new_evidence, question):
-        return NeedResolution(status="resolved" if new_evidence else "unresolved")
-
-    def should_continue_recruiting(self, *, question, need, evidence, rounds_completed):
-        return True
-
-
-def test_check_need_resolution_closes_a_need_type_the_old_heuristic_never_could(
-    tmp_path: Path,
-) -> None:
-    # need_type="data_flow" is not in _CLOSABLE_BY_EVIDENCE
-    # (coordinator/local.py) -- the old heuristic closure would have left
-    # this need open forever no matter what evidence turned up. The new
-    # resolution check must be the one that actually closes it once the
-    # worker's own re-search surfaces the real implementation.
-    (tmp_path / "api").mkdir()
-    (tmp_path / "api" / "service.py").write_text(
-        "def archive_real():\n    return 'done'\n", encoding="utf-8"
-    )
-    worker = WorkerCard(
-        id="worker-a",
-        territory_id="api",
-        name="api",
-        root="api",
-        searchable_terms=["archive"],
-        files=["api/service.py"],
-    )
-
-    # Deliberately no lexical overlap with the file/need vocabulary: round 0
-    # (driven by this raw question) must find nothing, so round 1's evidence
-    # (once the need's own suggested_terms=["archive"] enter the query) is
-    # genuinely new to the pool, not a re-discovery of something round 0
-    # already found -- otherwise "resolved" would trivially never have new
-    # evidence to react to regardless of whether this check works.
-    state = LocalCoordinator(
-        tmp_path, [worker], reasoner=ResolvesOnNewEvidenceReasoner()
-    ).ask("How does the service work?", max_rounds=2)
-
-    assert not any(
-        need.description == "Need the real archive implementation."
-        for need in state.unresolved_needs
-    )
-
-
-def test_stuck_need_escalates_to_a_worker_outside_the_normal_candidate_pool(
-    tmp_path: Path,
-) -> None:
-    # Regression-shaped test for the design gap identified from a real
-    # yt-dlp trace: a need that makes no genuine progress for
-    # _STUCK_THRESHOLD consecutive rounds must stop being retried the
-    # normal way (re-asking the same worker, which only ever re-finds the
-    # same stub it already found) and escalate to a worker outside the
-    # normal routing pool -- worker-b's routing terms deliberately never
-    # match the query, so it can only ever be reached via escalation's
-    # tactic 1 (expand_pool), which bypasses routing scores entirely.
-    (tmp_path / "api").mkdir()
-    (tmp_path / "storage").mkdir()
-    (tmp_path / "api" / "service.py").write_text(
-        "def archive_stub():\n    pass\n", encoding="utf-8"
-    )
-    (tmp_path / "storage" / "repo.py").write_text(
-        "def archive_real():\n    return 'done'\n", encoding="utf-8"
-    )
-    workers = [
+def test_build_temporary_bridge_gets_a_nonempty_routing_summary_via_template() -> None:
+    # Ephemeral, never persisted -- not worth an LLM call -- but it still
+    # becomes a candidate in the same round it's built, and the
+    # Orchestrator planning call reads only routing_summary, not the full
+    # card, so it must not be left at the WorkerCard default "".
+    tried = [
         WorkerCard(
             id="worker-a",
-            territory_id="api",
-            name="api",
-            root="api",
-            searchable_terms=["archive"],
-            files=["api/service.py"],
+            territory_id="a",
+            name="a",
+            root="a",
+            files=["a.py"],
+            searchable_terms=["alpha"],
         ),
         WorkerCard(
             id="worker-b",
-            territory_id="storage",
-            name="storage",
-            root="storage",
-            searchable_terms=["unrelated_term"],
-            files=["storage/repo.py"],
+            territory_id="b",
+            name="b",
+            root="b",
+            files=["b.py"],
+            searchable_terms=["beta"],
         ),
     ]
 
-    state = LocalCoordinator(
-        tmp_path, workers, reasoner=ResolvesOnNewEvidenceReasoner()
-    ).ask("Where is archive handling implemented?", max_rounds=4)
+    bridge = _build_temporary_bridge(tried)
 
-    # Rounds 1-2: worker-a re-picked normally, re-finds the same stub each
-    # time (not novel), no progress -- streak reaches _STUCK_THRESHOLD.
-    assert state.rounds[1].selected_worker_ids == ["worker-a"]
-    assert state.rounds[1].escalation_used == ""
-    assert state.rounds[2].selected_worker_ids == ["worker-a"]
-    assert state.rounds[2].escalation_used == ""
-    # Round 3: stuck -> escalates, reaching worker-b (never a normal
-    # routing candidate) and finding its genuinely new evidence.
-    assert state.rounds[3].escalation_used == "expand_pool"
-    assert state.rounds[3].selected_worker_ids == ["worker-b"]
-    assert any(item.path == "storage/repo.py" for item in state.evidence)
+    assert bridge.routing_summary
+    assert bridge.routing_summary == template_routing_summary(
+        bridge.model_copy(update={"routing_summary": ""})
+    )
 
 
-class AlwaysHandoffReasoner(_PassthroughLookupsReasoner):
-    """Never resolves the need it raises (so it stays active across every
-    round) and always answers "handoff" once asked to decide -- enough to
-    prove decide_local_action's verdict actually overrides which worker
-    gets picked on a local-scope need's second attempt, instead of the
-    routing score alone (which would naturally keep re-picking the same
-    worker on a tie -- see the test below).
+def test_select_evidence_shows_the_reasoner_every_item_with_no_relevance_cap(
+    tmp_path: Path,
+) -> None:
+    # Regression-shaped: a previous version scored evidence with
+    # score_evidence()/_rank_global_evidence and cut to a fixed top-40
+    # before the reasoner ever saw the rest. Verified empirically on real
+    # sanic/yt-dlp traces that this cap discarded relevant evidence the
+    # reasoner never got a chance to judge -- _select_evidence must now
+    # pass every deduped item through, regardless of pool size.
+    seen_counts: list[int] = []
+
+    class _RecordingReasoner(_PassthroughLookupsReasoner):
+        def observe(self, *, question, worker_id, territory_id, evidence):
+            raise AssertionError("this test does not exercise observe()")
+
+        def select_evidence(self, *, question, evidence, limit):
+            seen_counts.append(len(evidence))
+            return [str(index) for index in range(len(evidence))][:limit], []
+
+    evidence = [
+        Evidence(
+            path=f"src/file_{index}.py",
+            line_start=1,
+            line_end=2,
+            quote=f"def function_{index}(): pass",
+            reason="match",
+        )
+        for index in range(55)  # well past the old 40-item pool cap
+    ]
+
+    _select_evidence(_RecordingReasoner(), "question", evidence, LocalSearchTool(tmp_path))
+
+    assert seen_counts == [55]
+
+
+def test_plan_round_accepts_an_acyclic_plan_without_retrying() -> None:
+    graph = NeedGraph(
+        nodes={
+            "n1": NeedNode(
+                need_id="n1", need="n1 text", detail=UnresolvedNeed(description="n1 text")
+            )
+        }
+    )
+    frontier = FrontierResult(ready=["n1"], blocked=[], stuck_subgraphs=[])
+    calls: list[str] = []
+
+    class _AcyclicReasoner(_PassthroughLookupsReasoner):
+        def observe(self, *, question, worker_id, territory_id, evidence):
+            raise AssertionError("this test does not exercise observe()")
+
+
+        def plan_round(
+            self,
+            *,
+            question,
+            graph,
+            resolution_results,
+            evidence,
+            workers,
+            memory_hints,
+            frontier,
+            observed_needs,
+            incomplete_parents,
+            cross_repo_experience,
+            validation_feedback="",
+        ):
+            calls.append(validation_feedback)
+            return RoundPlan(assignments={"n1": ["worker-a"]})
+
+    plan = _plan_round_with_cycle_validation(
+        _AcyclicReasoner(),
+        question="q",
+        graph=graph,
+        resolution_results={},
+        evidence=[],
+        workers=[],
+        memory_hints={},
+        frontier=frontier,
+        observed_needs=[],
+        incomplete_parents=[],
+        cross_repo_experience=[],
+    )
+
+    assert plan.assignments == {"n1": ["worker-a"]}
+    assert calls == [""]  # exactly one call, no retry
+
+
+def test_plan_round_rejects_a_cyclic_plan_and_retries_with_the_cycle_described() -> None:
+    graph = NeedGraph(nodes={})
+    frontier = FrontierResult(ready=[], blocked=[], stuck_subgraphs=[])
+    calls: list[str] = []
+
+    class _FixesOnRetryReasoner(_PassthroughLookupsReasoner):
+        def observe(self, *, question, worker_id, territory_id, evidence):
+            raise AssertionError("this test does not exercise observe()")
+
+
+        def plan_round(
+            self,
+            *,
+            question,
+            graph,
+            resolution_results,
+            evidence,
+            workers,
+            memory_hints,
+            frontier,
+            observed_needs,
+            incomplete_parents,
+            cross_repo_experience,
+            validation_feedback="",
+        ):
+            calls.append(validation_feedback)
+            if not validation_feedback:
+                # First attempt: a genuine self-loop cycle.
+                return RoundPlan(
+                    graph_updates={
+                        "n1": NeedNode(
+                            need_id="n1",
+                            need="n1",
+                            depends_on=["n1"],
+                            detail=UnresolvedNeed(description="n1"),
+                        )
+                    }
+                )
+            # Retry, informed by the feedback: acyclic.
+            return RoundPlan(
+                graph_updates={
+                    "n1": NeedNode(need_id="n1", need="n1", detail=UnresolvedNeed(description="n1"))
+                }
+            )
+
+    plan = _plan_round_with_cycle_validation(
+        _FixesOnRetryReasoner(),
+        question="q",
+        graph=graph,
+        resolution_results={},
+        evidence=[],
+        workers=[],
+        memory_hints={},
+        frontier=frontier,
+        observed_needs=[],
+        incomplete_parents=[],
+        cross_repo_experience=[],
+    )
+
+    assert len(calls) == 2
+    assert calls[0] == ""
+    assert "cycle" in calls[1].lower()
+    assert plan.graph_updates["n1"].depends_on == []
+
+
+def test_plan_round_accepts_the_retry_even_if_it_is_still_cyclic() -> None:
+    # Bounded worst case: exactly one retry, then accept whatever comes
+    # back even if still cyclic -- a round must not loop indefinitely
+    # waiting for the reasoner to self-correct.
+    graph = NeedGraph(nodes={})
+    frontier = FrontierResult(ready=[], blocked=[], stuck_subgraphs=[])
+    calls: list[str] = []
+
+    class _NeverFixesReasoner(_PassthroughLookupsReasoner):
+        def observe(self, *, question, worker_id, territory_id, evidence):
+            raise AssertionError("this test does not exercise observe()")
+
+
+        def plan_round(
+            self,
+            *,
+            question,
+            graph,
+            resolution_results,
+            evidence,
+            workers,
+            memory_hints,
+            frontier,
+            observed_needs,
+            incomplete_parents,
+            cross_repo_experience,
+            validation_feedback="",
+        ):
+            calls.append(validation_feedback)
+            return RoundPlan(
+                graph_updates={
+                    "n1": NeedNode(
+                        need_id="n1",
+                        need="n1",
+                        depends_on=["n1"],
+                        detail=UnresolvedNeed(description="n1"),
+                    )
+                }
+            )
+
+    plan = _plan_round_with_cycle_validation(
+        _NeverFixesReasoner(),
+        question="q",
+        graph=graph,
+        resolution_results={},
+        evidence=[],
+        workers=[],
+        memory_hints={},
+        frontier=frontier,
+        observed_needs=[],
+        incomplete_parents=[],
+        cross_repo_experience=[],
+    )
+
+    assert len(calls) == 2
+    assert plan.graph_updates["n1"].depends_on == ["n1"]
+
+
+
+
+class _AlwaysStuckAndAlwaysProposesBridgeReasoner(_PassthroughLookupsReasoner):
+    """Regression fixture for a real bug found on a live qibo trace: a stuck
+    need got temporary_bridge'd 4+ consecutive rounds, almost all with
+    ev_gain=0, because the old recovery-streak keying (a "root" recomputed
+    fresh from compute_frontier()'s stuck_subgraphs every round) silently
+    drifted and never accumulated to the abandonment threshold. This
+    reasoner reproduces the failure condition directly: check_need_resolution
+    NEVER advances (guaranteed stuck), and plan_round ALWAYS re-proposes
+    temporary_bridge for every currently-stuck need_id, every round, for as
+    long as the coordinator keeps showing it one.
     """
 
     def observe(self, *, question, worker_id, territory_id, evidence):
-        return WorkerObservation(
-            worker_id=worker_id,
-            territory_id=territory_id,
-            unresolved_needs=[
-                UnresolvedNeed(
-                    description="Need the archive implementation.",
-                    kind="missing_implementation",
-                    need_type="data_flow",
-                    suggested_terms=["archive"],
-                    scope="local",
-                    source_worker_id="worker-a",
-                )
-            ],
-        )
+        return WorkerObservation(worker_id=worker_id, territory_id=territory_id)
 
     def check_need_resolution(self, *, need, new_evidence, question):
         return NeedResolution(status="unresolved")
 
-    def decide_local_action(self, *, need, evidence, worker_progress, worker):
-        return "handoff"
+    def plan_round(
+        self,
+        *,
+        question,
+        graph,
+        resolution_results,
+        evidence,
+        workers,
+        memory_hints,
+        frontier,
+        observed_needs,
+        incomplete_parents,
+        cross_repo_experience,
+        validation_feedback="",
+    ):
+        assignments = {need_id: [workers[0].id] for need_id in frontier.ready}
+        special_tactics = {
+            need_id: "temporary_bridge"
+            for group in frontier.stuck_subgraphs
+            for need_id in group
+        }
+        return RoundPlan(assignments=assignments, special_tactics=special_tactics)
 
-    def should_continue_recruiting(self, *, question, need, evidence, rounds_completed):
-        return True
 
-
-def test_decide_local_action_handoff_overrides_the_routing_ties_default_pick(
+def test_a_stuck_need_gets_abandoned_after_three_failed_recoveries_not_retried_forever(
     tmp_path: Path,
 ) -> None:
-    # Regression-shaped test for the design gap: a local-scope need's
-    # second attempt used to just re-run _select_for_active_need, which on
-    # a lexical tie keeps the same worker purely because of list order --
-    # not because anyone decided it should continue. worker-a and worker-b
-    # deliberately tie on the need-driven query (both match "archive", one
-    # exactly, one via a compound part), so the *old* behavior would keep
-    # picking worker-a on round 2 as well. A reasoner that always says
-    # "handoff" must override that and force worker-b instead.
-    (tmp_path / "api").mkdir()
-    (tmp_path / "storage").mkdir()
-    (tmp_path / "api" / "service.py").write_text(
-        "def archive_stub():\n    pass\n", encoding="utf-8"
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "mod.py").write_text("def unrelated():\n    pass\n", encoding="utf-8")
+    worker = WorkerCard(
+        id="worker-src", territory_id="src", name="src", root="src", files=["src/mod.py"]
     )
-    (tmp_path / "storage" / "repo.py").write_text(
-        "def archive_real():\n    return 'done'\n", encoding="utf-8"
-    )
-    # worker-a first: on a genuine scoring tie, stable sort keeps insertion
-    # order, so round 0's fallback (both score 0 on the archive-free
-    # original question) and any later tie both default to worker-a --
-    # exactly the "coincidence, not a decision" behavior this test isolates
-    # decide_local_action's override from.
-    workers = [
-        WorkerCard(
-            id="worker-a",
-            territory_id="api",
-            name="api",
-            root="api",
-            searchable_terms=["archive"],
-            files=["api/service.py"],
-        ),
-        WorkerCard(
-            id="worker-b",
-            territory_id="storage",
-            name="storage",
-            root="storage",
-            searchable_terms=["archive_alt"],
-            files=["storage/repo.py"],
-        ),
+
+    state = LocalCoordinator(
+        tmp_path,
+        [worker],
+        reasoner=_AlwaysStuckAndAlwaysProposesBridgeReasoner(),
+    ).ask("What is the meaning of this codebase?", max_rounds=10)
+
+    bridge_traces = [
+        trace
+        for round_state in state.rounds
+        for trace in round_state.node_executions
+        if trace.special_tactic == "temporary_bridge"
     ]
+    real_bridge_runs = [trace for trace in bridge_traces if trace.worker_ids]
 
-    # Deliberately no "archive" anywhere in the original question -- only
-    # round 1+'s need-driven query introduces it, so round 0 cannot already
-    # find the answer and short-circuit the need this test needs to persist.
-    state = LocalCoordinator(tmp_path, workers, reasoner=AlwaysHandoffReasoner()).ask(
-        "Where is X handled?", max_rounds=3
+    # Proposed at most _MAX_CONSECUTIVE_FAILED_RECOVERIES (3) times total --
+    # the 4th proposal the old bug allowed must never happen, because the
+    # need is abandoned (excluded from frontier.stuck_subgraphs) right after
+    # the 3rd failed attempt.
+    assert len(bridge_traces) <= 3
+    # And only the FIRST of those actually ran a worker -- every repeat
+    # proposal for the same episode is deduped (no worker_ids, no tool
+    # calls spent) rather than rebuilding and re-running an identical
+    # bridge against an unchanged territory.
+    assert len(real_bridge_runs) == 1
+
+    # The task terminates instead of looping until max_rounds regardless:
+    # once the stuck need is abandoned, nothing is left in the frontier for
+    # it, so ask() stops well before round 10.
+    assert len(state.rounds) < 10
+
+
+class _AssignsSameWorkerToTwoIndependentNeedsReasoner(_PassthroughLookupsReasoner):
+    """Regression fixture for a real bug found on a live qibo trace
+    (question: "statistical sampling architecture"): the same worker was
+    independently assigned to several different need_ids across rounds and,
+    each time, rediscovered the same symbol's definition via its own
+    navigate/references lookups -- producing literal (path, line_start,
+    line_end, quote) duplicates in the final evidence pool (one 2-line
+    `set_seed` definition kept 4 times), crowding out genuinely distinct
+    evidence the same run had also found elsewhere. This reasoner creates
+    that exact shape directly: round 1 assigns `root` to the only worker;
+    round 2 adds one independent leaf need and assigns it to the *same*
+    worker, which searches the *same* one-symbol file again.
+    """
+
+    def __init__(self) -> None:
+        self._added_aux_need = False
+
+    def observe(self, *, question, worker_id, territory_id, evidence):
+        return WorkerObservation(worker_id=worker_id, territory_id=territory_id)
+
+    def check_need_resolution(self, *, need, new_evidence, question):
+        return NeedResolution(status="unresolved")
+
+    def plan_round(
+        self,
+        *,
+        question,
+        graph,
+        resolution_results,
+        evidence,
+        workers,
+        memory_hints,
+        frontier,
+        observed_needs,
+        incomplete_parents,
+        cross_repo_experience,
+        validation_feedback="",
+    ):
+        worker_id = workers[0].id
+        if not self._added_aux_need:
+            self._added_aux_need = True
+            return RoundPlan(
+                assignments={"root": [worker_id]},
+                graph_updates={
+                    "aux-need": NeedNode(
+                        need_id="aux-need",
+                        need="Independently re-inspect the same symbol.",
+                        detail=UnresolvedNeed(
+                            description="Independently re-inspect the same symbol."
+                        ),
+                    )
+                },
+            )
+        return RoundPlan(assignments={"aux-need": [worker_id]})
+
+
+def test_final_evidence_pool_is_deduped_even_without_any_inheritance_evidence(
+    tmp_path: Path,
+) -> None:
+    # Regression test: _dedupe_evidence on the final evidence pool used to
+    # only run inside `if inheritance_evidence:` (local.py, right before
+    # _rank_global_evidence/_select_evidence) -- for any question that
+    # isn't a subclass/inheritance lookup (the overwhelming majority),
+    # inheritance_evidence is empty and that branch never executes, so the
+    # raw pool -- which every worker execution appends to via
+    # evidence.extend() with no dedup of its own -- reached synthesis with
+    # literal duplicates whenever two different need executions
+    # independently rediscovered the same (path, line_start, line_end,
+    # quote) region. _dedupe_evidence itself was never broken; it just
+    # wasn't being called on this path.
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "backend.py").write_text(
+        "def set_seed(seed):\n    np.random.seed(seed)\n",
+        encoding="utf-8",
+    )
+    worker = WorkerCard(
+        id="worker-src",
+        territory_id="src",
+        name="src worker",
+        root="src",
+        searchable_terms=["set_seed"],
+        files=["src/backend.py"],
     )
 
-    assert state.rounds[0].selected_worker_ids == ["worker-a"]
-    # Round 1: need's first attempt, still the normal (non-decision) path --
-    # ties toward worker-a, same as before this feature existed.
-    assert state.rounds[1].selected_worker_ids == ["worker-a"]
-    # Round 2: need's second attempt -- decide_local_action fires and its
-    # "handoff" verdict must be what moves this to worker-b, not chance.
-    assert state.rounds[2].selected_worker_ids == ["worker-b"]
+    state = LocalCoordinator(
+        tmp_path, [worker], reasoner=_AssignsSameWorkerToTwoIndependentNeedsReasoner()
+    ).ask("Where is set_seed defined for reproducible sampling?", max_rounds=2)
+
+    keys = [(item.path, item.line_start, item.line_end, item.quote) for item in state.evidence]
+    assert keys, "expected the worker to find real evidence in this test"
+    assert len(keys) == len(set(keys)), (
+        f"duplicate (path, lines, quote) evidence reached synthesis: {keys}"
+    )

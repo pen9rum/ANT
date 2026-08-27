@@ -7,7 +7,8 @@ from ant.domain import (
     CodeSymbol,
     Evidence,
     EvidenceState,
-    RecruitmentRound,
+    NodeExecutionTrace,
+    PlanningRound,
     Territory,
     UnresolvedNeed,
     WorkerCard,
@@ -155,14 +156,26 @@ def test_recurring_coalitions_excludes_stale_entries_until_revalidated(
 
 
 def _round(
-    *, selected: list[str], coalition_formed: bool, round_index: int = 0
-) -> RecruitmentRound:
-    return RecruitmentRound(
+    *,
+    selected: list[str],
+    coalition_formed: bool,
+    round_index: int = 0,
+    need_id: str = "n0",
+) -> PlanningRound:
+    # A coalition-forming NodeExecutionTrace carries its FULL membership
+    # directly in worker_ids now (unlike the old RecruitmentRound shape,
+    # which only ever recruited one new worker per round and needed
+    # reconstructing membership from prior rounds) -- pass every coalition
+    # member in `selected` for a coalition_formed=True round.
+    return PlanningRound(
         round_index=round_index,
-        query="q",
-        selected_worker_ids=selected,
-        rationale="test round",
-        coalition_formed=coalition_formed,
+        node_executions=[
+            NodeExecutionTrace(
+                need_id=need_id,
+                worker_ids=selected,
+                coalition_formed=coalition_formed,
+            )
+        ],
     )
 
 
@@ -182,19 +195,23 @@ def test_record_task_memory_records_coalition_and_high_quality_route(
             )
         ],
         rounds=[
-            _round(selected=["worker-auth"], coalition_formed=False, round_index=0),
-            _round(selected=["worker-session"], coalition_formed=True, round_index=1),
+            _round(selected=["worker-auth"], coalition_formed=False, round_index=0, need_id="n0"),
+            _round(
+                selected=["worker-auth", "worker-session"],
+                coalition_formed=True,
+                round_index=1,
+                need_id="n1",
+            ),
         ],
     )
 
     record_task_memory(memory, state.question, state)
 
-    # The coalition record reflects the FULL membership -- the worker
-    # selected this round plus every worker selected in earlier rounds of
-    # the same task -- not just this round's own single new recruit, since
-    # evolve_workers' recurring-coalition birth requires >=2 members and
-    # would never fire on a single-worker "coalition". The route separately
-    # reflects the full accumulated path across every round of the task.
+    # The coalition record reflects the FULL membership carried directly on
+    # the coalition-forming NodeExecutionTrace -- evolve_workers'
+    # recurring-coalition birth requires >=2 members and would never fire
+    # on a single-worker "coalition". The route separately reflects the
+    # full accumulated path across every round of the task.
     assert memory.recurring_coalitions(min_count=1) == [
         (["worker-auth", "worker-session"], 1)
     ]
@@ -214,7 +231,9 @@ def test_coalition_membership_is_order_independent_across_tasks(tmp_path: Path) 
         evidence=[Evidence(path="a.py", line_start=1, line_end=1, quote="x", reason="r")],
         rounds=[
             _round(selected=["worker-session"], coalition_formed=False, round_index=0),
-            _round(selected=["worker-auth"], coalition_formed=True, round_index=1),
+            _round(
+                selected=["worker-session", "worker-auth"], coalition_formed=True, round_index=1
+            ),
         ],
     )
     task_two = EvidenceState(
@@ -222,7 +241,9 @@ def test_coalition_membership_is_order_independent_across_tasks(tmp_path: Path) 
         evidence=[Evidence(path="a.py", line_start=1, line_end=1, quote="x", reason="r")],
         rounds=[
             _round(selected=["worker-auth"], coalition_formed=False, round_index=0),
-            _round(selected=["worker-session"], coalition_formed=True, round_index=1),
+            _round(
+                selected=["worker-auth", "worker-session"], coalition_formed=True, round_index=1
+            ),
         ],
     )
 
@@ -401,11 +422,11 @@ def test_record_task_memory_dedupes_coalition_rows_within_one_task(tmp_path: Pat
         ],
         rounds=[
             _round(selected=["worker-a"], coalition_formed=False, round_index=0),
-            _round(selected=["worker-b"], coalition_formed=True, round_index=1),
-            _round(selected=["worker-b"], coalition_formed=True, round_index=2),
-            _round(selected=["worker-b"], coalition_formed=True, round_index=3),
-            _round(selected=["worker-b"], coalition_formed=True, round_index=4),
-            _round(selected=["worker-b"], coalition_formed=True, round_index=5),
+            _round(selected=["worker-a", "worker-b"], coalition_formed=True, round_index=1),
+            _round(selected=["worker-a", "worker-b"], coalition_formed=True, round_index=2),
+            _round(selected=["worker-a", "worker-b"], coalition_formed=True, round_index=3),
+            _round(selected=["worker-a", "worker-b"], coalition_formed=True, round_index=4),
+            _round(selected=["worker-a", "worker-b"], coalition_formed=True, round_index=5),
         ],
     )
 
@@ -427,26 +448,30 @@ def test_record_task_memory_records_a_collaboration_episode_per_need_round(
             )
         ],
         rounds=[
-            _round(selected=["worker-a"], coalition_formed=False, round_index=0),
-            RecruitmentRound(
+            PlanningRound(round_index=0, node_executions=[]),
+            PlanningRound(
                 round_index=1,
-                query="q",
-                input_need="Need the real archive implementation.",
-                selected_worker_ids=["worker-b"],
-                rationale="test round",
-                coalition_formed=False,
-                escalation_used="expand_pool",
-                observations=[
-                    WorkerObservation(
-                        worker_id="worker-b",
-                        territory_id="storage",
-                        evidence=[
-                            Evidence(
-                                path="storage/repo.py",
-                                line_start=1,
-                                line_end=2,
-                                quote="def archive(): ...",
-                                reason="definition",
+                node_executions=[
+                    NodeExecutionTrace(
+                        need_id="n1",
+                        need="Need the real archive implementation.",
+                        worker_ids=["worker-b"],
+                        coalition_formed=False,
+                        special_tactic="expand_pool",
+                        evidence_gain=1,
+                        observations=[
+                            WorkerObservation(
+                                worker_id="worker-b",
+                                territory_id="storage",
+                                evidence=[
+                                    Evidence(
+                                        path="storage/repo.py",
+                                        line_start=1,
+                                        line_end=2,
+                                        quote="def archive(): ...",
+                                        reason="definition",
+                                    )
+                                ],
                             )
                         ],
                     )

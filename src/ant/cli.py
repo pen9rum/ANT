@@ -19,7 +19,12 @@ from ant.evolution import evolve_workers
 from ant.generation import generate_worker_cards
 from ant.git_refresh import refresh_changed_workers
 from ant.indexing import discover_territories
-from ant.memory import IndexStore
+from ant.memory import (
+    GlobalMemoryStore,
+    IndexStore,
+    record_global_experience_safe,
+    retrieve_cross_repo_experience_safe,
+)
 from ant.memory.colony import ColonyMemoryStore, record_task_memory
 from ant.providers import OpenAIProvider
 from ant.retrieval.dense import WORKER_CARDS_KEY, DenseEmbedder, build_worker_card_index
@@ -71,22 +76,36 @@ def ask(
     """Ask a local evidence question using saved worker cards."""
     store = IndexStore(index_path)
     colony_memory = ColonyMemoryStore(index_path)
+    global_memory = GlobalMemoryStore()
     workers = store.load_workers()
     provider = OpenAIProvider() if synthesize == "openai" else None
     memory_routes = colony_memory.matching_routes(question.split())
-    state = LocalCoordinator(
+    # Only when a real reasoner is in play: MockLLMProvider's plan_round
+    # ignores cross_repo_experience entirely and its summarize_task_experience
+    # always returns "", so retrieving/recording anything here would just be
+    # a real embedding-model load spent on a result nothing will ever use.
+    cross_repo_experience = (
+        retrieve_cross_repo_experience_safe(global_memory, question) if provider else []
+    )
+    coordinator = LocalCoordinator(
         repo.resolve(),
         workers,
         synthesizer=provider,
         memory_routes=memory_routes,
         index_path=index_path,
-    ).ask(
+        cross_repo_experience=cross_repo_experience,
+    )
+    state = coordinator.ask(
         question,
         max_rounds=max_rounds,
     )
     if save_trace:
         store.save_trace(state)
     record_task_memory(colony_memory, question, state)
+    if provider:
+        record_global_experience_safe(
+            global_memory, coordinator.reasoner, question, state, repo=repo.resolve().name
+        )
     typer.echo(json.dumps(state.model_dump(), indent=2))
 
 

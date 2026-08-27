@@ -21,6 +21,16 @@ class WorkerCard(BaseModel):
     searchable_terms: list[str] = Field(default_factory=list)
     files: list[str] = Field(default_factory=list)
     symbols: list[CodeSymbol] = Field(default_factory=list)
+    # Fixed-format ("territory + core capability + typical needs handled"),
+    # short, persistent text generated once at birth/specialize/merge (see
+    # CardGenerator.summarize_routing) -- what the Orchestrator planning
+    # call reads for every worker every round instead of the full card
+    # above. Every worker is shown to the Orchestrator every round with no
+    # relevance-based prefiltering; this field exists purely to keep that
+    # affordable at colony sizes of 30+ evolved workers by compressing each
+    # worker's *representation*, not by excluding any worker from
+    # consideration.
+    routing_summary: str = ""
 
 
 class CodeSymbol(BaseModel):
@@ -106,38 +116,191 @@ class NeedResolution(BaseModel):
     refined_need: UnresolvedNeed | None = None
 
 
-class WorkerRoutingScore(BaseModel):
-    worker_id: str
-    territory_id: str
-    final_score: int
-    query_hits: list[str] = Field(default_factory=list)
-    suggested_term_hits: list[str] = Field(default_factory=list)
-    relevant_symbol_hits: list[str] = Field(default_factory=list)
-    territory_hint_score: int = 0
-    source_worker_bonus: int = 0
-    source_path_bonus: int = 0
-    memory_route_bonus: int = 0
-    dense_routing_bonus: int = 0
-    test_path_penalty: int = 0
-    seen_worker_penalty: int = 0
+class NeedNode(BaseModel):
+    """One node in a task's Need Graph.
+
+    `need_id` is assigned once at creation and is permanent: a replan may
+    add children, add/remove edges, or close a node, but must never
+    delete-and-recreate "the same underlying gap" under a new id -- that
+    permanence is what lets recovery-attempt bookkeeping (see
+    NeedGraph.recovery_streaks) survive across however many times a stuck
+    subgraph gets reorganized.
+
+    Three independently-sourced status dimensions, deliberately never
+    collapsed into one "status" field -- a node can be partial + ready +
+    stuck all at once, and each dimension has exactly one writer so they
+    can never contradict each other:
+    - `resolution`: written only by WorkerReasoner.check_need_resolution()
+      (per-node, after its worker(s) execute; for a node with children,
+      written only once as a one-time closure-verification pass after
+      every child first reaches "resolved" -- see `children` below).
+    - `execution`: written only by the Dependency Graph Analyzer's
+      Kahn's-algorithm pass over `depends_on` edges. Meaningless (never
+      updated) once `children` is non-empty -- a parent with children is
+      not itself an execution target, see below.
+    - `progress`: written only by the coordinator's own no-progress
+      counter (`rounds_without_progress`), not by any LLM judgment.
+
+    The Orchestrator (the one LLM planning call per round) writes none of
+    these three dimensions. It only ever creates/decomposes nodes
+    (`children`) and edits `depends_on`/`related_to` -- the semantic,
+    judgment-requiring part of the graph, not the status bookkeeping.
+    """
+
+    need_id: str
+    need: str
+    depends_on: list[str] = Field(default_factory=list)
+    related_to: list[str] = Field(default_factory=list)
+    # Non-empty once the Orchestrator has decomposed this node into finer
+    # sub-needs. A node with children is a pure hierarchical container: it
+    # is excluded from the Analyzer's ready/blocked frontier and is never
+    # itself assigned a worker or given its own per-round
+    # check_need_resolution() call -- only leaf nodes (children == [])
+    # participate in execution. Children resolving does not by itself mark
+    # the parent resolved (a decomposition can be incomplete relative to
+    # the parent's original scope); see `resolution`'s closure-check note
+    # above.
+    children: list[str] = Field(default_factory=list)
+
+    resolution: str = "unresolved"  # "unresolved" | "partial" | "resolved"
+    execution: str = "ready"  # "ready" | "blocked" -- meaningful only for leaf nodes
+    progress: str = "not_stuck"  # "not_stuck" | "stuck"
+
+    # Consecutive rounds this node has been touched with neither a
+    # `resolution` advance (unresolved->partial/resolved) nor a dependency
+    # release that produced a new ready node -- genuinely new evidence with
+    # no accepted effect on resolution does NOT reset this. Once this
+    # reaches the coordinator's stuck threshold, `progress` flips to
+    # "stuck".
+    rounds_without_progress: int = 0
+
+    # The semantic content of the gap itself (what's missing, need_type,
+    # scope, suggested terms/territories, ...) -- reuses UnresolvedNeed
+    # rather than duplicating its fields, since check_need_resolution() and
+    # the rest of the existing need-consuming machinery already operate on
+    # UnresolvedNeed.
+    detail: UnresolvedNeed
 
 
-class RecruitmentRound(BaseModel):
-    round_index: int
-    query: str
-    input_need: str = ""
-    candidate_worker_ids: list[str] = Field(default_factory=list)
-    routing_scores: list[WorkerRoutingScore] = Field(default_factory=list)
-    selected_worker_ids: list[str] = Field(default_factory=list)
-    rationale: str
-    selection_reason: str = ""
+class NeedGraph(BaseModel):
+    """The full Need Graph for one in-progress task, keyed by `need_id`.
+
+    Deliberately pure problem structure only -- no execution/recovery
+    bookkeeping (recovery-attempt streaks, which special tactics have
+    already been tried, which persistent workers were already tried per
+    node). That belongs to LocalCoordinator's own runtime RecoveryState
+    instead, kept separate so the graph stays a clean record of the task's
+    needs and their relationships, not a mix of problem structure and
+    coordinator execution history.
+    """
+
+    nodes: dict[str, NeedNode] = Field(default_factory=dict)
+
+
+class FrontierResult(BaseModel):
+    """Output of the pure, deterministic Dependency Graph Analyzer
+    (ant.coordinator.graph_analyzer.compute_frontier), computed fresh each
+    round from a NeedGraph's `depends_on` edges via Kahn's-algorithm-style
+    frontier computation and Tarjan's SCC for cycle detection -- never
+    guessed by an LLM. Lives in ant.domain (not the analyzer module
+    itself) purely so WorkerReasoner.plan_round() can reference its type
+    without ant.providers depending on ant.coordinator.
+    """
+
+    # Leaf node ids (children == []) whose every depends_on target is
+    # already resolved, and which are not themselves marked
+    # progress=="stuck" -- this round's assignable frontier.
+    ready: list[str] = Field(default_factory=list)
+    # Leaf node ids that are not yet resolved, not stuck, and not (yet)
+    # ready.
+    blocked: list[str] = Field(default_factory=list)
+    # Groups of node ids that together make up one genuinely stuck
+    # subgraph: either a real depends_on cycle (should never occur in
+    # validated state -- see find_cycles) or a chain of blocked nodes
+    # whose root cause traces back to one node already marked
+    # progress=="stuck". Always empty when `ready` is non-empty.
+    stuck_subgraphs: list[list[str]] = Field(default_factory=list)
+
+
+class RoundPlan(BaseModel):
+    """Output of WorkerReasoner.plan_round(): the Orchestrator's single
+    per-round decision. This covers everything the Orchestrator is
+    responsible for in the new graph-based pipeline -- decomposing or
+    creating need nodes, editing `depends_on`/`related_to` edges, and
+    assigning workers to this round's frontier (a single worker id means a
+    plain follow-up/handoff, more than one means a coalition; both are the
+    same kind of entry here, no separate escalation-tactic vocabulary
+    needed for them). It never writes `resolution`/`execution`/`progress`
+    -- each of those three dimensions has exactly one other writer (see
+    NeedNode's docstring).
+    """
+
+    # New or updated nodes this call wants to add/change, keyed by
+    # need_id. A node already in the existing graph that isn't mentioned
+    # here is left untouched. need_id is permanent (see NeedNode): this
+    # can introduce a brand-new id, or update an existing node's
+    # `need`/`depends_on`/`related_to`/`children` -- it must never reuse
+    # an existing need_id to mean something semantically different.
+    graph_updates: dict[str, NeedNode] = Field(default_factory=dict)
+    # need_id -> worker ids assigned this round. Only ready-frontier
+    # need_ids (or, for a stuck subgraph handed to this call, one of its
+    # members) should appear here.
+    assignments: dict[str, list[str]] = Field(default_factory=dict)
+    # Stuck-subgraph root need_id -> "temporary_bridge" | "global_fallback"
+    # -- only present when the Orchestrator's recovery plan for that
+    # subgraph (see FrontierResult.stuck_subgraphs) calls for one of the
+    # two special, executor-mediated tactics. Every other kind of recovery
+    # (reassign, redecompose, form a coalition) is expressed as ordinary
+    # graph_updates/assignments above; no special flag needed for those.
+    special_tactics: dict[str, str] = Field(default_factory=dict)
+    # Indices into that call's own `observed_needs` argument that this plan
+    # has acted on in some way (created a node from, merged into an
+    # existing node's edit, or deliberately decided not to track) -- the
+    # coordinator drops exactly these from its persistent observed-needs
+    # buffer afterward, everything else stays pending for a future round.
+    # Mirrors reasoner.select_evidence's index-based consumption pattern
+    # rather than requiring content-matching heuristics to guess which
+    # buffered need a graph_updates entry came from.
+    resolved_observed_need_indices: list[str] = Field(default_factory=list)
+
+
+class NodeExecutionTrace(BaseModel):
+    """One need node's execution within a PlanningRound: who worked it,
+    how, and what it produced. `need_reduction` is deliberately *direct*
+    only (1 if this specific node's own resolution became "resolved" this
+    execution, 0 otherwise) -- a closure check resolving a parent whose
+    children just finished is attributed at the PlanningRound level
+    instead (see `derived_resolved_nodes`), not pinned onto whichever
+    child happened to execute last within a multi-node round, which would
+    only reflect execution order, not which child actually "caused" it.
+    """
+
+    need_id: str
+    need: str = ""  # the node's own need text at the time of this execution
+    worker_ids: list[str] = Field(default_factory=list)
     coalition_formed: bool = False
-    coalition_reason: str = ""
+    resolution: str = "unresolved"  # this node's resolution status after this execution
+    special_tactic: str = ""  # "" | "temporary_bridge" | "global_fallback"
+    evidence_gain: int = 0
+    need_reduction: int = 0  # 0 or 1, direct only -- see docstring above
     observations: list[WorkerObservation] = Field(default_factory=list)
-    # Which escalation tactic fired this round, if the active need had been
-    # marked stuck ("expand_pool" | "third_worker" | "temporary_bridge" |
-    # "global_fallback"); "" for every normal (non-escalated) round.
-    escalation_used: str = ""
+
+
+class PlanningRound(BaseModel):
+    """One round of the graph-based pipeline: exactly one
+    WorkerReasoner.plan_round() call, fanning out to however many nodes
+    its assignments/special_tactics touched. Replaces RecruitmentRound
+    (which assumed one node per round) for this pipeline -- round_index
+    stays unambiguous ("the Nth plan_round() call") even though a round
+    can now execute several nodes at once.
+    """
+
+    round_index: int
+    node_executions: list[NodeExecutionTrace] = Field(default_factory=list)
+    # Parent need_ids whose closure check resolved them THIS round because
+    # their children all finished -- kept separate from any child's own
+    # NodeExecutionTrace.need_reduction (see that field's docstring).
+    derived_resolved_nodes: list[str] = Field(default_factory=list)
 
 
 class EvidenceState(BaseModel):
@@ -145,7 +308,7 @@ class EvidenceState(BaseModel):
     answer: str = ""
     evidence: list[Evidence] = Field(default_factory=list)
     unresolved_needs: list[UnresolvedNeed] = Field(default_factory=list)
-    rounds: list[RecruitmentRound] = Field(default_factory=list)
+    rounds: list[PlanningRound] = Field(default_factory=list)
     absence_proofs: list[AbsenceProof] = Field(default_factory=list)
     usage: TokenUsage = Field(default_factory=TokenUsage)
 

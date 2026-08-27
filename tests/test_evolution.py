@@ -24,6 +24,9 @@ class _AlwaysVetoReasoner:
     ):
         raise AssertionError("this test does not exercise decide_episode_action()")
 
+    def summarize_routing(self, *, card):
+        return f"stub routing summary for {card.id}"
+
 
 def test_evolve_workers_births_bridge_from_recurring_coalition(tmp_path: Path) -> None:
     index_path = tmp_path / ".ant"
@@ -59,6 +62,48 @@ def test_evolve_workers_births_bridge_from_recurring_coalition(tmp_path: Path) -
     assert result.events[0].kind == "birth"
     stored_workers = IndexStore(index_path).load_workers()
     assert any(worker.id.startswith("worker-bridge") for worker in stored_workers)
+    # No reasoner supplied -- routing_summary must still be non-empty (the
+    # zero-cost template fallback), not left at the WorkerCard default "".
+    bridge = next(worker for worker in stored_workers if worker.id.startswith("worker-bridge"))
+    assert bridge.routing_summary
+
+
+def test_recurring_coalition_birth_uses_the_reasoners_routing_summary_when_supplied(
+    tmp_path: Path,
+) -> None:
+    index_path = tmp_path / ".ant"
+    workers = [
+        WorkerCard(id="worker-a", territory_id="a", name="a", root="a", files=["a.py"]),
+        WorkerCard(id="worker-b", territory_id="b", name="b", root="b", files=["b.py"]),
+    ]
+    territories = [
+        Territory(id="a", root="a", files=["a.py"]),
+        Territory(id="b", root="b", files=["b.py"]),
+    ]
+    IndexStore(index_path).save(territories, workers)
+    memory = ColonyMemoryStore(index_path)
+    for question in ("q1", "q2"):
+        memory.record_coalition(
+            CoalitionRecord(
+                worker_ids=["worker-a", "worker-b"],
+                question=question,
+                evidence_count=2,
+                unresolved_need_count=0,
+            )
+        )
+
+    result = evolve_workers(index_path, reasoner=_AlwaysVetoReasoner(), min_coalition_count=2)
+
+    assert result.events[0].kind == "birth"
+    bridge = next(
+        worker
+        for worker in IndexStore(index_path).load_workers()
+        if worker.id.startswith("worker-bridge")
+    )
+    # A reasoner was supplied, so routing_summary must come from
+    # reasoner.summarize_routing() -- distinguishable from the zero-cost
+    # template fallback the no-reasoner test above gets instead.
+    assert bridge.routing_summary == f"stub routing summary for {bridge.id}"
 
 
 def test_evolve_workers_retires_empty_and_merges_overlap(tmp_path: Path) -> None:
@@ -77,6 +122,12 @@ def test_evolve_workers_retires_empty_and_merges_overlap(tmp_path: Path) -> None
     result = evolve_workers(index_path, min_coalition_count=99, merge_overlap=0.9)
 
     assert {event.kind for event in result.events} == {"retire", "merge"}
+    merged = next(
+        worker
+        for worker in IndexStore(index_path).load_workers()
+        if worker.id.startswith("worker-merge")
+    )
+    assert merged.routing_summary
 
 
 def test_evolve_workers_does_not_merge_when_the_reasoner_vetoes_it(tmp_path: Path) -> None:

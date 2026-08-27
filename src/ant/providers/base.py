@@ -5,7 +5,11 @@ from typing import Protocol, runtime_checkable
 from ant.domain import (
     AbsenceProof,
     Evidence,
+    FrontierResult,
+    NeedGraph,
     NeedResolution,
+    PlanningRound,
+    RoundPlan,
     UnresolvedNeed,
     WorkerCard,
     WorkerObservation,
@@ -48,16 +52,6 @@ class WorkerReasoner(Protocol):
         candidates: list[str],
     ) -> list[str]: ...
 
-    def select_workers(
-        self,
-        *,
-        query: str,
-        need: UnresolvedNeed | None,
-        candidates: list[WorkerCard],
-        limit: int,
-        memory_hints: dict[str, str],
-    ) -> list[str]: ...
-
     def select_evidence(
         self,
         *,
@@ -94,29 +88,94 @@ class WorkerReasoner(Protocol):
         rounds_completed: int,
     ) -> bool: ...
 
-    def decide_local_action(
+    def plan_round(
         self,
         *,
-        need: UnresolvedNeed,
+        question: str,
+        graph: NeedGraph,
+        resolution_results: dict[str, NeedResolution],
         evidence: list[Evidence],
-        worker_progress: str,
-        worker: WorkerCard,
+        workers: list[WorkerCard],
+        memory_hints: dict[str, str],
+        frontier: FrontierResult,
+        observed_needs: list[UnresolvedNeed],
+        incomplete_parents: list[str],
+        cross_repo_experience: list[str],
+        validation_feedback: str = "",
+    ) -> RoundPlan:
+        """The single per-round Orchestrator planning call: replaces
+        select_workers/decide_local_action and the hand-coded escalation
+        ladder together. Reads the whole current picture -- the Need
+        Graph (all three status dimensions, but writes none of them; see
+        NeedNode's docstring), this round's freshly-computed
+        check_need_resolution results, the full zero-truncation evidence
+        pool, every worker's routing_summary (never a relevance-filtered
+        subset -- see WorkerCard.routing_summary), repo-local memory
+        hints, and the Dependency Graph Analyzer's frontier -- and decides
+        three things at once: how to decompose/create/edit need nodes,
+        which worker(s) to assign to each ready-frontier node (a
+        single-worker entry is a plain follow-up/handoff, multiple is a
+        coalition -- both are the same kind of entry, no separate
+        escalation-tactic vocabulary), and, only for a stuck subgraph
+        handed to it via `frontier.stuck_subgraphs`, whether its recovery
+        plan needs one of the two special, executor-mediated tactics
+        ("temporary_bridge" | "global_fallback" -- everything else a
+        recovery plan might do, like reassigning or redecomposing, is
+        expressed as ordinary graph_updates/assignments, no special flag).
+
+        `observed_needs` is the coordinator's persistent buffer of gaps
+        raised by workers' own observe() calls that have not yet been
+        acted on -- shown explicitly (not folded into `evidence`) so a
+        real gap can't quietly get lost in evidence-context noise; this
+        call decides per item whether to create a node from it, merge it
+        into an existing node's edit, or leave/discard it, and reports
+        which indices it handled via RoundPlan.resolved_observed_need_indices.
+
+        `incomplete_parents` lists parent need_ids whose children just all
+        resolved but whose own closure check (check_need_resolution on the
+        parent itself) came back "unresolved" -- the decomposition under
+        them didn't actually cover their original scope. These need_ids
+        are not otherwise assignable (a node with children is never a
+        direct execution target), so this is the one explicit channel that
+        forces the Orchestrator to add more children (or otherwise address
+        them) rather than the graph silently having no path forward.
+
+        `cross_repo_experience` is a handful of repo-agnostic verbal case
+        studies retrieved (once per task, by semantic similarity to the
+        question -- see GlobalMemoryStore.retrieve_similar) from *other*
+        repos' finished tasks -- reference text only, never a rule this
+        call is required to follow; whether a past pattern actually
+        applies here is this call's own judgment to make.
+
+        `validation_feedback` is "" on the normal call; the coordinator
+        passes a non-empty description of a detected depends_on cycle on
+        the one retry it makes when this call's own graph_updates would
+        produce one (depends_on is entirely LLM-drawn, so a cycle here is
+        presumptively a planning mistake -- see
+        ant.coordinator.graph_analyzer.find_cycles -- not evidence the
+        underlying needs are genuinely circular).
+        """
+        ...
+
+    def summarize_task_experience(
+        self,
+        *,
+        question: str,
+        rounds: list[PlanningRound],
+        unresolved_needs: list[UnresolvedNeed],
+        evidence_count: int,
     ) -> str:
-        """Only called for a local-scope need's *second and later* attempt
-        (the first attempt has no prior progress yet to judge). Replaces
-        letting the routing score alone decide -- purely by coincidence --
-        whether the same worker keeps going: makes "continue with the
-        current worker" a deliberate action instead of an emergent side
-        effect of scoring. Returns one of:
-        - "continue": the current worker is still the right one; give it
-          another round in its own territory rather than re-routing.
-        - "handoff": a different worker should take this need instead.
-        - "coalition": pull in a second worker to reason jointly with the
-          current one, rather than replacing it.
-        - "escalate": normal recruitment is not going to resolve this;
-          jump straight to the escalation ladder (see
-          LocalCoordinator._escalate_stuck_need) instead of spending
-          another normal round first.
+        """Called once, after a task finishes: a repo-agnostic verbal case
+        study of how it went -- what kind of need showed up, where it got
+        stuck, what recovery actually worked and why -- for
+        GlobalMemoryStore.record_experience. Must abstract away anything
+        repo-specific (worker ids, exact file/symbol names, this repo's own
+        vocabulary): the whole point is a pattern transferable to a
+        completely different codebase, not a summary of this one task.
+        Returns "" for a task with nothing collaboration-shaped worth
+        remembering (e.g. a single ready-node, single-round lookup with no
+        stuck/recovery/coalition shape to it) -- not every task is worth
+        recording.
         """
         ...
 
@@ -169,6 +228,17 @@ class EvolutionReasoner(Protocol):
         """
         ...
 
+    def summarize_routing(self, *, card: WorkerCard) -> str:
+        """Same generation as CardGenerator.summarize_routing, declared
+        here too because evolve_workers' specialize/merge/bridge-birth
+        sites build new WorkerCards directly (not via
+        CardGenerator.generate_card) and only ever receive an
+        EvolutionReasoner, not a separate CardGenerator -- one concrete
+        provider implements both protocols; this method is just declared
+        on whichever protocol each call site already has in hand.
+        """
+        ...
+
 
 class CardGenerator(Protocol):
     def generate_card(
@@ -178,6 +248,20 @@ class CardGenerator(Protocol):
         territory_root: str,
         files: list[str],
     ) -> WorkerCard: ...
+
+    def summarize_routing(self, *, card: WorkerCard) -> str:
+        """Fixed-format, short routing text for `card` -- territory + core
+        capability + typical needs handled. Generated once whenever a
+        WorkerCard is created or its responsibilities change (birth,
+        specialize, merge, bridge-birth) and persisted on
+        WorkerCard.routing_summary. This, not the full card, is what the
+        Orchestrator planning call reads for every worker every round: the
+        colony is shown to it with no relevance-based prefiltering (see
+        WorkerCard.routing_summary's docstring), so this exists to keep
+        that affordable by compressing each worker's *representation*, not
+        by excluding any worker from consideration.
+        """
+        ...
 
 
 class AnswerSynthesizer(Protocol):

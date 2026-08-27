@@ -27,19 +27,33 @@ def build_worker_cards(repo_root: Path, territories: list[Territory]) -> list[Wo
         readme_summary = _readme_summary(repo_root, territory.files)
         if readme_summary:
             responsibilities.append(readme_summary)
-        cards.append(
-            WorkerCard(
-                id=f"worker-{territory.id}",
-                territory_id=territory.id,
-                name=f"{territory.root or 'root'} worker",
-                root=territory.root,
-                responsibilities=responsibilities,
-                searchable_terms=terms,
-                files=territory.files,
-                symbols=symbols,
-            )
+        card = WorkerCard(
+            id=f"worker-{territory.id}",
+            territory_id=territory.id,
+            name=f"{territory.root or 'root'} worker",
+            root=territory.root,
+            responsibilities=responsibilities,
+            searchable_terms=terms,
+            files=territory.files,
+            symbols=symbols,
         )
+        cards.append(card.model_copy(update={"routing_summary": template_routing_summary(card)}))
     return cards
+
+
+def template_routing_summary(card: WorkerCard) -> str:
+    """Deterministic, zero-cost routing_summary: territory + core
+    capability + typical needs handled, built from a card's own fields
+    with no LLM call. Used whenever no LLM is available (`ant index`
+    without `--llm-cards`, or an evolution call with no reasoner) and for
+    the ephemeral temporary-bridge worker (LocalCoordinator's
+    _build_temporary_bridge -- never worth an LLM call for something built
+    and thrown away within a single task).
+    """
+    territory = card.territory_id or card.root or "root"
+    capability = "; ".join(card.responsibilities[:2]) or card.name
+    terms = ", ".join(card.searchable_terms[:6])
+    return f"territory: {territory} | capability: {capability} | typical needs: {terms}"
 
 
 def _top_terms(

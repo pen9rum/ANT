@@ -129,17 +129,14 @@ class WorkerRoutingConfig:
     llm_routing_candidate_pool_size: int = 12
 
     # LLM-driven final evidence selection (reasoner.select_evidence,
-    # LocalCoordinator.ask): replaces the old fixed evidence[:12] cut before
-    # synthesis. The score-ranked pool is still capped here purely for
-    # prompt-size/cost control, not as a relevance decision -- the LLM
-    # judges what to keep among the pool, up to llm_evidence_keep_limit.
-    # Per-worker collection no longer does its own relevance filtering (see
-    # AutonomousWorker's evidence_limit, which is now a generous safety cap,
-    # not a decision point), so this single final judgment is deliberately
-    # the one place worth spending on, sized larger than the old 12 to give
-    # the model room to keep a genuinely multi-part answer's worth of
-    # evidence instead of being forced to drop something to make room.
-    llm_evidence_pool_size: int = 40
+    # LocalCoordinator._select_evidence): replaces the old fixed
+    # evidence[:12] cut before synthesis. Deliberately no pool-size cap
+    # here (unlike llm_routing_candidate_pool_size above) -- every dedup'd
+    # piece of evidence gathered across every round is shown to the
+    # reasoner, verified empirically to matter (a real sanic trace lost
+    # relevant evidence to a since-removed 40-item score-ranked cap before
+    # the reasoner ever saw it). This is the cap on how many of those the
+    # reasoner may keep for synthesis, not on how many it gets to judge.
     llm_evidence_keep_limit: int = 16
 
 

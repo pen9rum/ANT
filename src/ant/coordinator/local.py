@@ -1,26 +1,32 @@
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import cast
 
+from ant.coordinator.graph_analyzer import compute_frontier, find_cycles
 from ant.domain import (
     AbsenceProof,
     Evidence,
     EvidenceState,
+    FrontierResult,
+    NeedGraph,
+    NeedNode,
     NeedResolution,
-    RecruitmentRound,
+    NodeExecutionTrace,
+    PlanningRound,
+    RoundPlan,
     TokenUsage,
     UnresolvedNeed,
     WorkerAction,
     WorkerCard,
     WorkerObservation,
-    WorkerRoutingScore,
 )
+from ant.indexing.cards import template_routing_summary
 from ant.memory import MemoryRoute
 from ant.providers import AnswerSynthesizer, MockLLMProvider, UsageReporter, WorkerReasoner
 from ant.retrieval import STOP_WORDS, TOKEN_RE, extract_terms, is_stem_match, score_evidence
-from ant.retrieval.dense import WORKER_CARDS_KEY, EmbeddingIndex, get_shared_embedder
 from ant.scoring_config import DEFAULT_SCORING_CONFIG
 from ant.tools import LocalSearchTool
 from ant.tools.path_prior import has_low_value_part, has_source_part
@@ -41,6 +47,90 @@ _CLOSABLE_BY_EVIDENCE = {"subclass_lookup", "implementation_location", "source_t
 # of it is.
 _STUCK_THRESHOLD = 2
 
+# How many consecutive recovery attempts (any kind: reassign, redecompose,
+# coalition, temporary_bridge, global_fallback) a stuck subgraph -- or an
+# incomplete parent whose closure check keeps coming back unresolved -- may
+# make with no progress before the coordinator gives up on it
+# deterministically, instead of an LLM's own "I give up" judgment. An
+# engineering bounded-computation safeguard, not a routing heuristic.
+_MAX_CONSECUTIVE_FAILED_RECOVERIES = 3
+
+# unresolved < partial < resolved: the one ordering "did resolution
+# genuinely advance this round" is judged against, for both a single
+# node's own stuck counter and a stuck episode's recovery streak
+# (_resolution_advanced below) -- partial -> partial is NOT an advance,
+# even though its status is "not unresolved".
+_RESOLUTION_RANK = {"unresolved": 0, "partial": 1, "resolved": 2}
+
+
+@dataclass
+class StuckEpisode:
+    """One persistent "this part of the graph is stuck" saga.
+
+    `episode_id` is assigned ONCE, the first round any of its `members` is
+    ever detected in a stuck subgraph, and never changes again for the
+    lifetime of this episode -- even as `members` grows (a previously
+    unrelated node joins the same stuck chain) or the Dependency Graph
+    Analyzer's *dynamically recomputed* grouping of those same members
+    shifts round to round (e.g. because the Orchestrator edited
+    depends_on). Recovery bookkeeping keys off `episode_id`, never off
+    whatever compute_frontier() happens to return this round -- that
+    output is topology detection, not identity, and re-deriving an
+    identity from it every round is exactly the bug this type exists to
+    prevent (confirmed directly on a real qibo trace: the same stuck need
+    got temporary_bridge'd 4+ rounds in a row because the "root" used as
+    the streak's dict key silently drifted).
+    """
+
+    episode_id: str
+    members: set[str] = field(default_factory=set)
+    recovery_streak: int = 0
+    # Persists for the episode's whole lifetime, NOT reset when a partial
+    # streak-reset happens -- once a special tactic has been tried for
+    # this episode, it stays tried; a fresh episode (after this one fully
+    # resolves or gets abandoned) starts its own clean record.
+    used_special_tactics: set[str] = field(default_factory=set)
+
+
+@dataclass
+class RecoveryState:
+    """Coordinator-local execution bookkeeping for one task's ask() call --
+    deliberately NOT part of NeedGraph (which stays pure problem
+    structure/state, see its docstring).
+    """
+
+    # Every currently-open stuck episode, keyed by its own permanent
+    # episode_id (see StuckEpisode's docstring) -- not by anything
+    # recomputed per round.
+    stuck_episodes: dict[str, StuckEpisode] = field(default_factory=dict)
+    # need_id -> the episode_id it currently belongs to, for O(1) lookup
+    # from a touched need_id back to its episode. A need_id is removed
+    # from here (see _reconcile_stuck_episodes) once it's no longer part
+    # of any stuck subgraph -- a stale mapping is otherwise harmless (its
+    # resolution-rank diff each round is inert once actually resolved),
+    # but keeping it accurate avoids acting on membership that no longer
+    # reflects the graph's real structure.
+    episode_by_need_id: dict[str, str] = field(default_factory=dict)
+    # Persistent worker ids actually assigned to each need_id via ordinary
+    # (non-ephemeral) assignments, accumulated unconditionally as
+    # assignments execute -- looked up lazily (union over a stuck
+    # episode's member ids) when a temporary_bridge is actually built, so
+    # the bridge spans every real worker already tried for that episode.
+    # A prior bridge's own ephemeral id is deliberately never recorded
+    # here: it is not a real, reusable candidate for a future bridge.
+    tried_workers_by_node: dict[str, set[str]] = field(default_factory=dict)
+    # Consecutive rounds a parent has stayed in incomplete_parents (closure
+    # check keeps saying its children don't fully cover it), keyed by the
+    # parent's own need_id (permanent, same stability guarantee as
+    # StuckEpisode -- a parent's own need_id never changes either). Same
+    # abandonment threshold and rationale as a stuck episode's streak.
+    incomplete_parent_streaks: dict[str, int] = field(default_factory=dict)
+    # need_ids (leaf or parent) the coordinator has given up on -- excluded
+    # from the frontier shown to future plan_round() calls and from the
+    # closure-check pass, and surfaced honestly in the final
+    # unresolved_needs output instead of silently vanishing.
+    abandoned_node_ids: set[str] = field(default_factory=set)
+
 
 class LocalCoordinator:
     def __init__(
@@ -51,6 +141,7 @@ class LocalCoordinator:
         synthesizer: AnswerSynthesizer | None = None,
         memory_routes: list[MemoryRoute] | None = None,
         index_path: Path | None = None,
+        cross_repo_experience: list[str] | None = None,
     ) -> None:
         self.repo_root = repo_root
         self.workers = workers
@@ -60,242 +151,345 @@ class LocalCoordinator:
         self.synthesizer = synthesizer
         self.memory_routes = memory_routes or []
         self.index_path = index_path
-        self._worker_card_index: EmbeddingIndex | None = None
-        self._worker_card_index_loaded = False
+        # Pre-fetched by the caller (see GlobalMemoryStore.retrieve_similar),
+        # not owned by LocalCoordinator itself -- same separation as
+        # memory_routes above, which the caller also fetches from
+        # ColonyMemoryStore before construction rather than this class
+        # reaching for either memory store directly.
+        self.cross_repo_experience = cross_repo_experience or []
 
     def ask(self, question: str, max_rounds: int = 6) -> EvidenceState:
-        # Hard safety ceiling only, not the intended stopping point: whether
-        # to actually use another round is now the reasoner's
-        # should_continue_recruiting() call each iteration (see below),
-        # made fresh from the current need/evidence rather than a fixed
-        # round-count cutoff. Raised from the old 2 (which used to *be* the
-        # real stopping rule) since it now only guards against a
-        # pathological "always says continue" loop.
+        # max_rounds is a blunt outer safety ceiling only -- the real
+        # per-node/per-subgraph stopping logic is the Dependency Graph
+        # Analyzer (ready/blocked/stuck) plus RecoveryState's bounded
+        # recovery-attempt streaks below, not a fixed round count.
         evidence: list[Evidence] = []
-        accumulated_needs: list[UnresolvedNeed] = []
-        rounds: list[RecruitmentRound] = []
         seen_worker_ids: set[str] = set()
-        query = question
-        active_need: UnresolvedNeed | None = None
         search = LocalSearchTool(self.repo_root, index_path=self.index_path)
         worker_config = WorkerRunConfig(max_tool_calls=11)
-        # Per-need-identity count of consecutive rounds with neither new
-        # evidence nor resolution progress; a need whose streak reaches
-        # _STUCK_THRESHOLD is escalated (see _escalate_stuck_need) instead
-        # of retried the normal way. Cleared whenever a need makes
-        # progress, so a need that stalls, gets set aside for a different
-        # one, and later becomes active again starts its streak fresh
-        # rather than inheriting stale history.
-        no_progress_streak: dict[tuple[str, str], int] = {}
-        # Needs every escalation tactic already failed on: kept in
-        # accumulated_needs (so they still surface in the final
-        # unresolved_needs report) but never picked as active_need again --
-        # retrying forever is exactly the stuck loop this exists to avoid.
-        abandoned_need_keys: set[tuple[str, str]] = set()
-        # Which worker last attempted a given local-scope need, and whether
-        # that attempt made progress: lets a local need's *second and
-        # later* attempt go through decide_local_action (continue this
-        # worker / handoff / coalition / escalate) instead of the routing
-        # score alone incidentally re-picking (or not re-picking) the same
-        # worker. A need's first attempt has no prior progress to judge, so
-        # it always goes through the normal path below.
-        local_last_worker: dict[tuple[str, str], WorkerCard] = {}
-        local_last_progress: dict[tuple[str, str], bool] = {}
+        worker_by_id = {worker.id: worker for worker in self.workers}
+        memory_hints = _memory_hints_from_routes(self.memory_routes)
+        recovery = RecoveryState()
+        observed_needs: list[UnresolvedNeed] = []
+        incomplete_parents: list[str] = []
+
+        root = NeedNode(need_id="root", need=question, detail=UnresolvedNeed(description=question))
+        graph = NeedGraph(nodes={"root": root})
+        resolution_results: dict[str, NeedResolution] = {}
+        frontier = _exclude_abandoned(compute_frontier(graph), recovery.abandoned_node_ids)
+        _reconcile_stuck_episodes(recovery, frontier.stuck_subgraphs)
+        rounds: list[PlanningRound] = []
 
         for round_index in range(max_rounds):
-            # Snapshot before this round's workers run: a worker re-run on
-            # an unchanged query deterministically re-finds the same
-            # evidence it found last round, so "evidence.extend() grew"
-            # cannot be the progress signal -- only content genuinely new
-            # to the pool counts. Compared against the *evidence* list's
-            # own dedupe key (see _dedupe_evidence) after the round, not a
-            # bare count.
-            pre_round_evidence_keys = {_evidence_key(item) for item in evidence}
-            ranked = self._rank_worker_scores(query, seen_worker_ids, active_need)
-            candidates = [worker for _, worker in ranked]
-            routing_scores = [score for score, _ in ranked[:10]]
-            escalation_used = ""
-            local_action = ""
-            if active_need is None:
-                selected = self._initial_workers(candidates, question)
-                observations, round_needs = self._run_selected_workers(
-                    selected, query, question, search, worker_config, evidence, seen_worker_ids
-                )
-            elif no_progress_streak.get(_need_identity(active_need), 0) >= _STUCK_THRESHOLD:
-                escalation_used, selected, observations, round_needs = self._escalate_stuck_need(
-                    question=question,
-                    active_need=active_need,
-                    seen_worker_ids=seen_worker_ids,
-                    evidence=evidence,
-                    search=search,
-                    worker_config=worker_config,
-                )
-            elif active_need.scope == "local" and _need_identity(active_need) in local_last_worker:
-                need_key = _need_identity(active_need)
-                (
-                    local_action,
-                    escalation_used,
-                    selected,
-                    observations,
-                    round_needs,
-                ) = self._decide_and_run_local_action(
-                    active_need=active_need,
-                    last_worker=local_last_worker[need_key],
-                    made_progress_last_time=local_last_progress.get(need_key, False),
-                    candidates=candidates,
-                    query=query,
-                    question=question,
-                    search=search,
-                    worker_config=worker_config,
-                    evidence=evidence,
-                    seen_worker_ids=seen_worker_ids,
-                )
-            else:
-                selected = _select_for_active_need(candidates, active_need, seen_worker_ids)
-                observations, round_needs = self._run_selected_workers(
-                    selected, query, question, search, worker_config, evidence, seen_worker_ids
-                )
-            if not selected and not escalation_used:
+            if not frontier.ready and not frontier.blocked and not frontier.stuck_subgraphs \
+                    and not incomplete_parents:
                 break
 
-            coalition_formed = (
-                escalation_used in ("third_worker", "temporary_bridge")
-                or local_action == "coalition"
-                or bool(
-                    active_need
-                    and not escalation_used
-                    and not local_action
-                    and active_need.scope == "cross_territory"
-                    and any(worker.id != active_need.source_worker_id for worker in selected)
-                    and any(item.evidence for item in observations)
-                )
+            plan = _plan_round_with_cycle_validation(
+                self.reasoner,
+                question=question,
+                graph=graph,
+                resolution_results=resolution_results,
+                evidence=evidence,
+                workers=self.workers,
+                memory_hints=memory_hints,
+                frontier=frontier,
+                observed_needs=observed_needs,
+                incomplete_parents=incomplete_parents,
+                cross_repo_experience=self.cross_repo_experience,
             )
-            if coalition_formed and not escalation_used:
-                _add_coalition_cross_checks(observations, evidence)
-                joint_observation = _run_coalition_cross_check(
-                    reasoner=self.reasoner,
-                    question=question,
-                    selected=selected,
-                    evidence=evidence,
-                    search=search,
-                )
-                if joint_observation is not None:
-                    observations.append(joint_observation)
-                    evidence.extend(joint_observation.evidence)
-                    round_needs.extend(joint_observation.unresolved_needs)
+            graph = _merge_plan_into_graph(graph, plan)
+            observed_needs = [
+                need
+                for index, need in enumerate(observed_needs)
+                if str(index) not in plan.resolved_observed_need_indices
+            ]
 
-            rounds.append(
-                RecruitmentRound(
-                    round_index=round_index,
-                    query=query,
-                    input_need=active_need.description if active_need else "",
-                    candidate_worker_ids=[worker.id for worker in candidates],
-                    routing_scores=routing_scores,
-                    selected_worker_ids=[worker.id for worker in selected],
-                    rationale="Selected workers by overlap with query terms and worker card terms.",
-                    selection_reason=(
-                        f"Escalated a stuck need via {escalation_used}."
-                        if escalation_used
-                        else (
-                            f"Local continuation decision: {local_action}."
-                            if local_action
-                            else (
-                                (
-                                    "Continued the best local worker for a semantic need."
-                                    if active_need
-                                    and selected[0].id == active_need.source_worker_id
-                                    else "Recruited the best worker for a semantic need."
-                                )
-                                if active_need
-                                else "Initial focused recruitment from the user question."
-                            )
-                        )
-                    ),
-                    coalition_formed=coalition_formed,
-                    coalition_reason=(
-                        "Cross-territory follow-up evidence was related to prior evidence."
-                        if coalition_formed
-                        else ""
-                    ),
-                    observations=observations,
-                    escalation_used=escalation_used,
-                )
+            # Baseline captured AFTER the graph edit, BEFORE execution: a
+            # pure Orchestrator rewrite (e.g. dropping a depends_on edge)
+            # must never itself count as this round's progress -- only
+            # what execution actually produces should.
+            pre_execution_frontier = _exclude_abandoned(
+                compute_frontier(graph), recovery.abandoned_node_ids
             )
+            pre_resolution_status = {
+                need_id: node.resolution for need_id, node in graph.nodes.items()
+            }
 
-            # Resolution check + progress tracking for the need that drove
-            # this round, generalizing the old 3-need_type-only heuristic
-            # closure (_close_resolved_needs below, still run first as a
-            # cheap bulk pass) to every need_type via real judgment instead
-            # of silently never closing -- or re-raising verbatim forever --
-            # the rest.
-            resolution: NeedResolution | None = None
-            active_key: tuple[str, str] | None = None
-            if active_need is not None:
-                active_key = _need_identity(active_need)
-                new_round_evidence = [
+            node_executions: list[NodeExecutionTrace] = []
+            derived_resolved_nodes: list[str] = []
+            pre_round_evidence_keys = {_evidence_key(item) for item in evidence}
+
+            for need_id, worker_ids in plan.assignments.items():
+                node = graph.nodes.get(need_id)
+                selected = [worker_by_id[wid] for wid in worker_ids if wid in worker_by_id]
+                if node is None or not selected:
+                    continue
+
+                recovery.tried_workers_by_node.setdefault(need_id, set()).update(
+                    worker.id for worker in selected
+                )
+
+                query = self._query_from_needs(question, [node.detail])
+                observations, round_needs = self._run_selected_workers(
+                    selected, query, question, search, worker_config, evidence, seen_worker_ids
+                )
+                coalition_formed = len(selected) > 1
+                if coalition_formed:
+                    _add_coalition_cross_checks(observations, evidence)
+                    joint_observation = _run_coalition_cross_check(
+                        reasoner=self.reasoner,
+                        question=question,
+                        selected=selected,
+                        evidence=evidence,
+                        search=search,
+                    )
+                    if joint_observation is not None:
+                        observations.append(joint_observation)
+                        evidence.extend(joint_observation.evidence)
+                        round_needs.extend(joint_observation.unresolved_needs)
+                round_normalized = _normalize_coverage_needs(question, round_needs, self.workers)
+                observed_needs = _merge_needs(observed_needs, round_normalized)
+
+                new_evidence = [
                     item
                     for obs in observations
                     for item in obs.evidence
                     if _evidence_key(item) not in pre_round_evidence_keys
                 ]
                 resolution = self.reasoner.check_need_resolution(
-                    need=active_need, new_evidence=new_round_evidence, question=question
+                    need=node.detail, new_evidence=new_evidence, question=question
                 )
-                made_progress = bool(new_round_evidence) or resolution.status != "unresolved"
-                if made_progress:
-                    no_progress_streak.pop(active_key, None)
-                elif escalation_used:
-                    # Every escalation tactic ran and none surfaced anything --
-                    # this need is genuinely stuck, not just slow.
-                    abandoned_need_keys.add(active_key)
+                resolution_results[need_id] = resolution
+                node.resolution = resolution.status
+                if resolution.status == "partial" and resolution.refined_need is not None:
+                    node.detail = resolution.refined_need
+                    node.need = resolution.refined_need.description
+
+                node_executions.append(
+                    NodeExecutionTrace(
+                        need_id=need_id,
+                        need=node.need,
+                        worker_ids=[worker.id for worker in selected],
+                        coalition_formed=coalition_formed,
+                        resolution=resolution.status,
+                        evidence_gain=len(new_evidence),
+                        need_reduction=int(resolution.status == "resolved"),
+                        observations=observations,
+                    )
+                )
+
+            for need_id, tactic in plan.special_tactics.items():
+                episode = _episode_for_need(recovery, need_id)
+                node = graph.nodes.get(need_id)
+                if node is None or episode is None or tactic not in (
+                    "temporary_bridge",
+                    "global_fallback",
+                ):
+                    continue
+                if tactic in episode.used_special_tactics:
+                    # Already tried for this exact episode -- re-running it
+                    # (same bridge/territory, since neither the tried-worker
+                    # set nor the search scope has changed) would just spend
+                    # tool-call budget to rediscover nothing new. Confirmed
+                    # directly on a real qibo trace: the same need got
+                    # temporary_bridge'd 4+ consecutive rounds, almost all
+                    # ev_gain=0, because nothing stopped the identical tactic
+                    # from being proposed and re-executed over and over.
+                    # Record it as a real (touched, no-progress) recovery
+                    # attempt -- the streak finalization below still counts
+                    # it -- without actually re-running anything.
+                    node_executions.append(
+                        NodeExecutionTrace(
+                            need_id=need_id,
+                            need=node.need,
+                            coalition_formed=False,
+                            resolution=node.resolution,
+                            special_tactic=tactic,
+                            evidence_gain=0,
+                            need_reduction=0,
+                        )
+                    )
+                    continue
+                if tactic == "temporary_bridge":
+                    tried_worker_ids: set[str] = set()
+                    for member_id in episode.members:
+                        tried_worker_ids |= recovery.tried_workers_by_node.get(member_id, set())
+                    tried_workers = [
+                        worker_by_id[wid] for wid in tried_worker_ids if wid in worker_by_id
+                    ]
+                    if not tried_workers:
+                        continue
+                    bridge = _build_temporary_bridge(tried_workers)
+                    observations, _ = self._run_selected_workers(
+                        [bridge],
+                        self._query_from_needs(question, [node.detail]),
+                        question,
+                        search,
+                        worker_config,
+                        evidence,
+                        seen_worker_ids,
+                    )
+                    worker_ids_used = [bridge.id]
+                    # bridge.id is deliberately NOT written to
+                    # tried_workers_by_node -- ephemeral, never a real
+                    # persistent candidate for a future bridge.
+                else:  # global_fallback
+                    all_files = sorted({file for worker in self.workers for file in worker.files})
+                    hits = search.search(
+                        self._query_from_needs(question, [node.detail]), all_files, limit=8
+                    )
+                    evidence.extend(hits)
+                    observations = [
+                        WorkerObservation(
+                            worker_id="global-fallback",
+                            territory_id="global",
+                            evidence=hits,
+                            stop_reason="global_fallback",
+                        )
+                    ]
+                    worker_ids_used = []
+                episode.used_special_tactics.add(tactic)
+
+                new_evidence = [
+                    item
+                    for obs in observations
+                    for item in obs.evidence
+                    if _evidence_key(item) not in pre_round_evidence_keys
+                ]
+                resolution = self.reasoner.check_need_resolution(
+                    need=node.detail, new_evidence=new_evidence, question=question
+                )
+                resolution_results[need_id] = resolution
+                node.resolution = resolution.status
+                node_executions.append(
+                    NodeExecutionTrace(
+                        need_id=need_id,
+                        need=node.need,
+                        worker_ids=worker_ids_used,
+                        coalition_formed=False,
+                        resolution=resolution.status,
+                        special_tactic=tactic,
+                        evidence_gain=len(new_evidence),
+                        need_reduction=int(resolution.status == "resolved"),
+                        observations=observations,
+                    )
+                )
+
+            # Closure check: a parent whose children just all resolved.
+            # "unresolved" is explicitly handed back to the Orchestrator
+            # (via incomplete_parents next round) instead of silently
+            # stalling -- a parent with children is never itself
+            # assignable, so without this it could sit forever with no
+            # path forward once its (incomplete) children were all done.
+            new_incomplete_parents: list[str] = []
+            for node in graph.nodes.values():
+                if node.need_id in recovery.abandoned_node_ids:
+                    continue
+                if (
+                    node.children
+                    and node.resolution != "resolved"
+                    and all(
+                        graph.nodes[child_id].resolution == "resolved"
+                        for child_id in node.children
+                    )
+                ):
+                    closure = self.reasoner.check_need_resolution(
+                        need=node.detail, new_evidence=evidence, question=question
+                    )
+                    if closure.status == "resolved":
+                        node.resolution = "resolved"
+                        derived_resolved_nodes.append(node.need_id)
+                        recovery.incomplete_parent_streaks.pop(node.need_id, None)
+                    elif closure.status == "partial" and closure.refined_need is not None:
+                        gap = NeedNode(
+                            need_id=f"{node.need_id}-gap-{len(node.children)}",
+                            need=closure.refined_need.description,
+                            detail=closure.refined_need,
+                        )
+                        graph.nodes[gap.need_id] = gap
+                        node.children.append(gap.need_id)
+                        recovery.incomplete_parent_streaks.pop(node.need_id, None)
+                    else:
+                        new_incomplete_parents.append(node.need_id)
+                        streak = recovery.incomplete_parent_streaks.get(node.need_id, 0) + 1
+                        recovery.incomplete_parent_streaks[node.need_id] = streak
+                        if streak >= _MAX_CONSECUTIVE_FAILED_RECOVERIES:
+                            recovery.abandoned_node_ids.add(node.need_id)
+                            new_incomplete_parents.remove(node.need_id)
+            incomplete_parents = new_incomplete_parents
+
+            post_frontier = _exclude_abandoned(compute_frontier(graph), recovery.abandoned_node_ids)
+            newly_ready = set(post_frontier.ready) - set(pre_execution_frontier.ready)
+            touched_this_round = {trace.need_id for trace in node_executions}
+
+            # Per-node progress: a rank-increasing resolution transition
+            # only (partial -> partial is NOT progress, even though its
+            # status is "not unresolved") -- only touched nodes accumulate
+            # this counter, since an untouched blocked node was never given
+            # a chance to fail in the first place.
+            for need_id in touched_this_round:
+                node = graph.nodes[need_id]
+                if _resolution_advanced(
+                    need_id, touched_this_round, pre_resolution_status, resolution_results
+                ):
+                    node.rounds_without_progress = 0
+                    node.progress = "not_stuck"
                 else:
-                    no_progress_streak[active_key] = no_progress_streak.get(active_key, 0) + 1
-                if active_need.scope == "local" and selected:
-                    # Feeds decide_local_action's *next* call for this need:
-                    # which worker just attempted it, and whether that
-                    # attempt actually went anywhere.
-                    local_last_worker[active_key] = selected[0]
-                    local_last_progress[active_key] = made_progress
+                    node.rounds_without_progress += 1
+                    if node.rounds_without_progress >= _STUCK_THRESHOLD:
+                        node.progress = "stuck"
 
-            round_normalized = _normalize_coverage_needs(question, round_needs, self.workers)
-            accumulated_needs = _merge_needs(accumulated_needs, round_normalized)
-            # Re-check every open need against the evidence accumulated so far
-            # (across all rounds, not just this one) so a need raised early is
-            # dropped as soon as later evidence actually resolves it.
-            accumulated_needs = _close_resolved_needs(accumulated_needs, evidence, question)
-            if resolution is not None and active_key is not None:
-                if resolution.status == "resolved":
-                    accumulated_needs = [
-                        need for need in accumulated_needs if _need_identity(need) != active_key
-                    ]
-                elif resolution.status == "partial" and resolution.refined_need is not None:
-                    accumulated_needs = [
-                        need for need in accumulated_needs if _need_identity(need) != active_key
-                    ]
-                    accumulated_needs.append(resolution.refined_need)
+            # Recovery-streak finalization: episode-LOCAL (see StuckEpisode),
+            # and covers every kind of recovery attempt (special tactic,
+            # ordinary reassignment/coalition, or redecomposition via
+            # graph_updates) touching an episode's members this round -- not
+            # just special_tactics, so "just keep replanning without a
+            # special tactic" cannot dodge the streak counter. Uses the
+            # PRE-round episode membership (frontier.stuck_subgraphs, as
+            # reconciled at the end of the previous round) -- reconciling
+            # against this round's post_frontier happens after, for the
+            # *next* round, so a member that resolved this round (and so
+            # would no longer appear in a freshly recomputed group) still
+            # gets credited as progress for the episode it was part of when
+            # the round started. Progress = resolution rank advanced for ANY
+            # current member, or a dependency release produced a new ready
+            # node among them -- matches every criterion a real recovery
+            # attempt can succeed by, not just "fully resolved".
+            touched_episode_ids: set[str] = set()
+            for need_id in [*plan.special_tactics, *plan.assignments, *plan.graph_updates]:
+                episode = _episode_for_need(recovery, need_id)
+                if episode is not None:
+                    touched_episode_ids.add(episode.episode_id)
+            for episode_id in touched_episode_ids:
+                episode = recovery.stuck_episodes.get(episode_id)
+                if episode is None:
+                    continue
+                progressed = bool(newly_ready & episode.members) or any(
+                    _resolution_advanced(
+                        member_id, touched_this_round, pre_resolution_status, resolution_results
+                    )
+                    for member_id in episode.members
+                )
+                if progressed:
+                    episode.recovery_streak = 0
+                else:
+                    episode.recovery_streak += 1
+                    if episode.recovery_streak >= _MAX_CONSECUTIVE_FAILED_RECOVERIES:
+                        recovery.abandoned_node_ids.update(episode.members)
+                        del recovery.stuck_episodes[episode_id]
+                        for member_id in episode.members:
+                            recovery.episode_by_need_id.pop(member_id, None)
 
-            pending = [
-                need
-                for need in accumulated_needs
-                if (need.suggested_terms or need.description)
-                and _need_identity(need) not in abandoned_need_keys
-            ]
-            if not pending:
-                break
-            active_need = pending[0]
-            # max_rounds is a safety ceiling, not the intended stopping
-            # point (see ask()'s default): whether another round is worth
-            # it -- vs. the colony genuinely having nothing better left to
-            # try for this need -- is the reasoner's call, made fresh each
-            # round rather than fixed at a round-count cutoff.
-            if not self.reasoner.should_continue_recruiting(
-                question=question,
-                need=active_need,
-                evidence=evidence,
-                rounds_completed=round_index + 1,
-            ):
-                break
-            query = self._query_from_needs(question, [active_need])
+            rounds.append(
+                PlanningRound(
+                    round_index=round_index,
+                    node_executions=node_executions,
+                    derived_resolved_nodes=derived_resolved_nodes,
+                )
+            )
+            frontier = _exclude_abandoned(post_frontier, recovery.abandoned_node_ids)
+            _reconcile_stuck_episodes(recovery, frontier.stuck_subgraphs)
 
         # Inheritance is a global structural fact, not a territory-scoped one:
         # recruitment routing only ever proves "this worker's own files have
@@ -305,10 +499,24 @@ class LocalCoordinator:
         inheritance_evidence, inheritance_proof = _verify_inheritance_completeness(
             question, self.workers, search
         )
-        if inheritance_evidence:
-            evidence = _dedupe_evidence([*evidence, *inheritance_evidence])
+        # Unconditional: this is the only dedup pass ever applied to the
+        # full accumulated pool before ranking/synthesis (every per-round
+        # evidence.extend() call above adds raw, undeduped worker output).
+        # Gating this behind `if inheritance_evidence:` -- true only for
+        # subclass/inheritance-lookup questions -- meant every other
+        # question (the overwhelming majority) skipped it entirely.
+        # Confirmed on a real qibo trace: the same 2-line `set_seed`
+        # definition, independently rediscovered by the same worker across
+        # different need executions, was kept 4 times in the final pool,
+        # crowding out genuinely distinct evidence the run had also found.
+        evidence = _dedupe_evidence([*evidence, *inheritance_evidence])
 
-        unresolved_needs = accumulated_needs
+        unresolved_needs = [
+            _with_source_worker_fallback(node, recovery)
+            for node in graph.nodes.values()
+            if node.resolution != "resolved"
+            and (not node.children or node.need_id in recovery.abandoned_node_ids)
+        ]
         unresolved_needs = unresolved_needs + _coverage_needs(
             question, evidence, unresolved_needs, self.workers
         )
@@ -418,341 +626,6 @@ class LocalCoordinator:
             seen_worker_ids.add(worker.id)
         return observations, round_needs
 
-    def _escalate_stuck_need(
-        self,
-        *,
-        question: str,
-        active_need: UnresolvedNeed,
-        seen_worker_ids: set[str],
-        evidence: list[Evidence],
-        search: LocalSearchTool,
-        worker_config: WorkerRunConfig,
-    ) -> tuple[str, list[WorkerCard], list[WorkerObservation], list[UnresolvedNeed]]:
-        """Tactics that are qualitatively different from normal recruitment
-        (not just "pick another worker and hope"), tried in order, stopping
-        at the first one that surfaces new evidence:
-
-        1. Widen the candidate pool past the LLM-routing prefilter -- a
-           worker with a real answer but a low lexical/dense score never
-           even enters the top-K pool select_workers() judges from during
-           normal recruitment.
-        2. Recruit a third complementary worker and cross-check jointly
-           with everyone already tried for this need -- a real 3-way
-           coalition, not another 1:1 handoff.
-        3. An ephemeral, in-task-only "bridge" worker whose territory is
-           the union of every worker already tried, framed specifically
-           around the interface between them -- never persisted to colony
-           state (that is evolve_workers' job, at a slow cross-task
-           timescale, not a single stuck task's).
-        4. Last resort: search the whole indexed repository, unscoped by
-           any single worker's territory.
-
-        Returns (tactic name, or "" if every tactic failed; the worker(s)
-        actually involved; their observations; any needs they raised).
-        """
-        query = self._query_from_needs(question, [active_need])
-
-        unseen = [worker for worker in self.workers if worker.id not in seen_worker_ids]
-        if unseen:
-            picked_ids = self.reasoner.select_workers(
-                query=query, need=active_need, candidates=unseen, limit=len(unseen), memory_hints={}
-            )
-            by_id = {worker.id: worker for worker in unseen}
-            candidate = next((by_id[wid] for wid in picked_ids if wid in by_id), unseen[0])
-            observations, round_needs = self._run_selected_workers(
-                [candidate], query, question, search, worker_config, evidence, seen_worker_ids
-            )
-            if any(observation.evidence for observation in observations):
-                return "expand_pool", [candidate], observations, round_needs
-
-        unseen_after = [worker for worker in self.workers if worker.id not in seen_worker_ids]
-        if unseen_after:
-            third = unseen_after[0]
-            observations, round_needs = self._run_selected_workers(
-                [third], query, question, search, worker_config, evidence, seen_worker_ids
-            )
-            tried_workers = [worker for worker in self.workers if worker.id in seen_worker_ids]
-            joint_observation = _run_coalition_cross_check(
-                reasoner=self.reasoner,
-                question=question,
-                selected=tried_workers,
-                evidence=evidence,
-                search=search,
-            )
-            if joint_observation is not None:
-                observations.append(joint_observation)
-                evidence.extend(joint_observation.evidence)
-                round_needs.extend(joint_observation.unresolved_needs)
-            if any(observation.evidence for observation in observations):
-                return "third_worker", [third], observations, round_needs
-
-        tried_workers = [worker for worker in self.workers if worker.id in seen_worker_ids]
-        if len(tried_workers) >= 2:
-            bridge = _build_temporary_bridge(tried_workers)
-            bridge_query = (
-                f"{query} -- focus specifically on the interface/connection "
-                "between these territories."
-            )
-            observations, round_needs = self._run_selected_workers(
-                [bridge], bridge_query, question, search, worker_config, evidence, seen_worker_ids
-            )
-            if any(observation.evidence for observation in observations):
-                return "temporary_bridge", [bridge], observations, round_needs
-
-        all_files = sorted({file for worker in self.workers for file in worker.files})
-        global_hits = search.search(query, all_files, limit=8)
-        if global_hits:
-            evidence.extend(global_hits)
-            observation = WorkerObservation(
-                worker_id="global-fallback",
-                territory_id="global",
-                evidence=global_hits,
-                stop_reason="global_fallback",
-            )
-            return "global_fallback", [], [observation], []
-
-        return "", [], [], []
-
-    def _decide_and_run_local_action(
-        self,
-        *,
-        active_need: UnresolvedNeed,
-        last_worker: WorkerCard,
-        made_progress_last_time: bool,
-        candidates: list[WorkerCard],
-        query: str,
-        question: str,
-        search: LocalSearchTool,
-        worker_config: WorkerRunConfig,
-        evidence: list[Evidence],
-        seen_worker_ids: set[str],
-    ) -> tuple[str, str, list[WorkerCard], list[WorkerObservation], list[UnresolvedNeed]]:
-        """Makes "continue with the current worker" a deliberate action for
-        a local-scope need's second-and-later attempt (see
-        WorkerReasoner.decide_local_action), instead of an emergent side
-        effect of whichever worker the routing score happens to rank
-        highest. Returns (local_action, escalation_used, selected,
-        observations, round_needs) -- escalation_used is set only when the
-        decision itself is "escalate", so the caller can treat that branch
-        identically to the streak-triggered escalation path.
-        """
-        progress_text = (
-            "The current worker found new evidence in its last attempt."
-            if made_progress_last_time
-            else "The current worker's last attempt found nothing new."
-        )
-        action = self.reasoner.decide_local_action(
-            need=active_need,
-            evidence=evidence,
-            worker_progress=progress_text,
-            worker=last_worker,
-        )
-        if action not in ("continue", "handoff", "coalition", "escalate"):
-            action = "continue"
-
-        if action == "escalate":
-            escalation_used, selected, observations, round_needs = self._escalate_stuck_need(
-                question=question,
-                active_need=active_need,
-                seen_worker_ids=seen_worker_ids,
-                evidence=evidence,
-                search=search,
-                worker_config=worker_config,
-            )
-            return action, escalation_used, selected, observations, round_needs
-
-        if action == "continue":
-            selected = [last_worker]
-        elif action == "handoff":
-            other = [worker for worker in candidates if worker.id != last_worker.id]
-            selected = other[:1] or candidates[:1] or [last_worker]
-        else:  # "coalition"
-            other = [worker for worker in candidates if worker.id != last_worker.id]
-            partner = other[:1] or candidates[:1]
-            selected = [last_worker, *[worker for worker in partner if worker.id != last_worker.id]]
-            if not selected:
-                selected = [last_worker]
-
-        observations, round_needs = self._run_selected_workers(
-            selected, query, question, search, worker_config, evidence, seen_worker_ids
-        )
-        return action, "", selected, observations, round_needs
-
-    def _select_workers(
-        self,
-        question: str,
-        limit: int = 3,
-        seen_worker_ids: set[str] | None = None,
-    ) -> list[WorkerCard]:
-        return self._rank_workers(question, seen_worker_ids or set(), None)[:limit]
-
-    def _rank_workers(
-        self,
-        question: str,
-        seen_worker_ids: set[str],
-        need: UnresolvedNeed | None,
-    ) -> list[WorkerCard]:
-        return [worker for _, worker in self._rank_worker_scores(question, seen_worker_ids, need)]
-
-    def _dense_routing_scores(self, query_text: str) -> dict[str, float]:
-        """worker_id -> cosine similarity against the (cheap, eagerly-built
-        at `ant index --dense` time) worker-card index. Returns {} whenever
-        no card index exists or no embedder is available -- routing then
-        falls back to the lexical signals alone, exactly as before dense
-        retrieval existed.
-        """
-        if not self.index_path:
-            return {}
-        if not self._worker_card_index_loaded:
-            self._worker_card_index = EmbeddingIndex.load(
-                self.index_path / "dense", WORKER_CARDS_KEY
-            )
-            self._worker_card_index_loaded = True
-        index = self._worker_card_index
-        if index is None or not index.entries:
-            return {}
-        embedder = get_shared_embedder()
-        if embedder is None:
-            return {}
-        [query_vector] = embedder.embed([query_text])
-        hits = index.search(query_vector, limit=len(index.entries))
-        return {entry.path: score for score, entry in hits}
-
-    def _rank_worker_scores(
-        self,
-        question: str,
-        seen_worker_ids: set[str],
-        need: UnresolvedNeed | None,
-    ) -> list[tuple[WorkerRoutingScore, WorkerCard]]:
-        query_text = _need_query_text(need) if need else question
-        query_terms = _term_set(query_text)
-        suggested_terms = _term_set(" ".join(need.suggested_terms)) if need else set()
-        relevant_symbols = _relevant_symbols(query_text, need)
-        symbol_weights = _relevant_symbol_weights(relevant_symbols, self.workers)
-        implementation_intent = _asks_for_source_implementation_text(query_text)
-        dense_scores = self._dense_routing_scores(query_text)
-        scored: list[tuple[WorkerRoutingScore, WorkerCard]] = []
-        for worker in self.workers:
-            terms = _worker_terms(worker)
-            query_hits = sorted(
-                query_term for query_term in query_terms if _matches_term(query_term, terms)
-            )
-            suggested_term_hits = sorted(
-                term for term in suggested_terms if _matches_term(term, terms)
-            )
-            relevant_symbol_hits = sorted(
-                symbol for symbol in relevant_symbols if _matches_symbol(symbol, worker)
-            )
-            relevant_symbol_score = sum(symbol_weights[symbol] for symbol in relevant_symbol_hits)
-            score = len(query_hits) + len(suggested_term_hits) + relevant_symbol_score
-            routing_config = DEFAULT_SCORING_CONFIG.routing
-            source_worker_bonus = 0
-            if need and worker.id == need.source_worker_id:
-                local_overlap = len(suggested_term_hits) or len(query_hits)
-                source_worker_bonus = (
-                    routing_config.source_worker_local_bonus
-                    if need.scope == "local"
-                    else routing_config.source_worker_global_bonus
-                )
-                source_worker_bonus += min(local_overlap, routing_config.source_worker_overlap_cap)
-                score += source_worker_bonus
-            territory_hint_score = 0
-            test_path_penalty = 0
-            if need:
-                territory_hint_score = _territory_hint_score(worker, need.suggested_territories)
-                score += territory_hint_score
-            if implementation_intent:
-                test_path_penalty = _test_path_penalty(worker)
-                score -= test_path_penalty
-            seen_worker_penalty = 0
-            if worker.id in seen_worker_ids:
-                if need and worker.id == need.source_worker_id:
-                    seen_worker_penalty = (
-                        routing_config.seen_worker_local_penalty
-                        if need.scope == "local"
-                        else routing_config.seen_worker_global_penalty
-                    )
-                elif need is None:
-                    seen_worker_penalty = routing_config.seen_worker_no_need_penalty
-                score -= seen_worker_penalty
-            source_path_bonus = 0
-            if score > 0 or implementation_intent:
-                source_path_bonus = _source_path_bonus(worker)
-                score += source_path_bonus
-            memory_route_bonus = _memory_route_bonus(worker, query_terms, self.memory_routes)
-            score += memory_route_bonus
-            # Coarse semantic signal alongside the lexical ones above: a
-            # worker card whose responsibilities/terms are semantically
-            # close to the query, even with no shared vocabulary at all,
-            # still gets a real (if modest) push -- catches the case where
-            # every lexical signal here is zero purely because the query's
-            # wording happens not to overlap this worker's card.
-            dense_routing_bonus = round(
-                dense_scores.get(worker.id, 0.0) * routing_config.dense_routing_weight
-            )
-            score += dense_routing_bonus
-            scored.append(
-                (
-                    WorkerRoutingScore(
-                        worker_id=worker.id,
-                        territory_id=worker.territory_id,
-                        final_score=score,
-                        query_hits=query_hits,
-                        suggested_term_hits=suggested_term_hits,
-                        relevant_symbol_hits=relevant_symbol_hits,
-                        territory_hint_score=territory_hint_score,
-                        source_worker_bonus=source_worker_bonus,
-                        source_path_bonus=source_path_bonus,
-                        memory_route_bonus=memory_route_bonus,
-                        dense_routing_bonus=dense_routing_bonus,
-                        test_path_penalty=test_path_penalty,
-                        seen_worker_penalty=seen_worker_penalty,
-                    ),
-                    worker,
-                )
-            )
-        scored.sort(key=lambda item: item[0].final_score, reverse=True)
-        scored = _llm_reorder(self.reasoner, query_text, need, scored)
-        selected = [(score, worker) for score, worker in scored if score.final_score > 0]
-        fallback = list(self.workers)
-        return selected or [
-            (
-                WorkerRoutingScore(
-                    worker_id=worker.id,
-                    territory_id=worker.territory_id,
-                    final_score=0,
-                ),
-                worker,
-            )
-            for worker in fallback
-        ]
-
-    def _initial_workers(self, candidates: list[WorkerCard], question: str) -> list[WorkerCard]:
-        if len(candidates) < 2:
-            return candidates[:1]
-        first, second = candidates[:2]
-        first_score = self._worker_score(first, question)
-        second_score = self._worker_score(second, question)
-        genuinely_close = (
-            first_score > 0
-            and second_score
-            >= first_score * DEFAULT_SCORING_CONFIG.routing.initial_worker_closeness_ratio
-        )
-        complementary = first.territory_id != second.territory_id
-        return candidates[:2] if genuinely_close and complementary else candidates[:1]
-
-    @staticmethod
-    def _worker_score(worker: WorkerCard, question: str) -> int:
-        query_terms = {term.lower() for term in TOKEN_RE.findall(question) if len(term) > 2}
-        terms = set(worker.searchable_terms) | {worker.root.lower(), worker.name.lower()}
-        terms |= {
-            token.lower()
-            for file in worker.files
-            for token in TOKEN_RE.findall(file)
-            if len(token) > 2
-        }
-        return sum(1 for term in query_terms if _matches_term(term, terms))
-
     @staticmethod
     def _query_from_needs(question: str, needs: list[UnresolvedNeed]) -> str:
         # Keep the original question as a stable lexical anchor in every round's
@@ -770,41 +643,6 @@ class LocalCoordinator:
         return query or question
 
 
-def _select_for_active_need(
-    candidates: list[WorkerCard],
-    active_need: UnresolvedNeed,
-    seen_worker_ids: set[str],
-) -> list[WorkerCard]:
-    if active_need.scope != "cross_territory":
-        return candidates[:1]
-    # A cross_territory need means the source worker's own territory could
-    # not resolve this on its own -- the seen-worker penalty nudges scoring
-    # away from re-picking it but does not forbid it, and a still-relevant-
-    # looking card can out-score that penalty. Confirmed directly on two
-    # real seaborn traces: round 1 re-selected the exact same source worker
-    # for a need it had just flagged cross_territory, asked it the same
-    # question again, got nothing new, and coalition_formed never fired (it
-    # requires the round's pick to differ from source_worker_id) --
-    # silently skipping the joint cross-check this need type exists to
-    # trigger. Force genuine diversification instead of hoping the score
-    # avoids this on its own; only re-recruit a previously-seen worker if
-    # nothing else is left.
-    #
-    # Exclude every worker seen so far this task, not just
-    # active_need.source_worker_id: once a coalition cross-check runs, its
-    # own re-raised need carries a synthetic "coalition:a-b" source id that
-    # never string-matches any real WorkerCard.id, silently turning this
-    # exclusion into a no-op. Confirmed directly on a real yt-dlp trace:
-    # rounds 2-5 all re-picked the exact same worker (already proven unable
-    # to answer in round 1) because the active need's source was
-    # "coalition:worker-yt-dlp-utils", not "worker-yt-dlp-utils" -- five
-    # rounds spent re-asking one worker the same question with cosmetically
-    # reworded need text each time, producing 11 near-duplicate unresolved
-    # needs instead of ever trying a different territory.
-    other_candidates = [worker for worker in candidates if worker.id not in seen_worker_ids]
-    return other_candidates[:1] or candidates[:1]
-
-
 def _build_temporary_bridge(tried_workers: list[WorkerCard]) -> WorkerCard:
     """An ephemeral, in-task-only worker for _escalate_stuck_need's third
     tactic: the union of every territory already tried for a stuck need,
@@ -819,7 +657,7 @@ def _build_temporary_bridge(tried_workers: list[WorkerCard]) -> WorkerCard:
     ids = sorted(worker.id.removeprefix("worker-") for worker in tried_workers)
     bridge_id = f"worker-temp-bridge-{'-'.join(ids)}"[:96]
     names = " + ".join(worker.name for worker in tried_workers[:3])
-    return WorkerCard(
+    card = WorkerCard(
         id=bridge_id,
         territory_id="temp-bridge",
         name=f"{names} temporary bridge",
@@ -831,48 +669,246 @@ def _build_temporary_bridge(tried_workers: list[WorkerCard]) -> WorkerCard:
         searchable_terms=terms,
         files=files,
     )
+    # Zero-cost template only, never an LLM call: this worker is built and
+    # thrown away within a single task, never persisted, so it is not
+    # worth spending a routing_summary generation call on -- but it still
+    # needs a non-empty one, since the Orchestrator planning call reads
+    # only routing_summary, not the full card, and this worker becomes a
+    # candidate this same round.
+    return card.model_copy(update={"routing_summary": template_routing_summary(card)})
 
 
-def _llm_reorder(
+def _plan_round_with_cycle_validation(
     reasoner: WorkerReasoner,
-    query_text: str,
-    need: UnresolvedNeed | None,
-    scored: list[tuple[WorkerRoutingScore, WorkerCard]],
-) -> list[tuple[WorkerRoutingScore, WorkerCard]]:
-    """Let the reasoner make the actual recruitment call among the top
-    candidates by lexical+dense score, instead of that composite score
-    deciding outright. The composite score still bounds *which* workers are
-    even considered (cost control on a large evolved population) and is the
-    fallback order if the reasoner call degrades -- it just no longer picks
-    the winner by itself.
+    *,
+    question: str,
+    graph: NeedGraph,
+    resolution_results: dict[str, NeedResolution],
+    evidence: list[Evidence],
+    workers: list[WorkerCard],
+    memory_hints: dict[str, str],
+    frontier: FrontierResult,
+    observed_needs: list[UnresolvedNeed],
+    incomplete_parents: list[str],
+    cross_repo_experience: list[str],
+) -> RoundPlan:
+    """Calls reasoner.plan_round() and validates the graph its
+    graph_updates would produce -- merged onto the existing graph -- has
+    no new depends_on cycle (see graph_analyzer.find_cycles) before
+    accepting it. depends_on is entirely LLM-drawn, so a cycle here is
+    presumptively a planning mistake, not evidence the task's needs are
+    genuinely circular: rejected and retried once with the offending cycle
+    described back to the reasoner, rather than silently accepted into
+    state or auto-repaired by guessing which edge to drop. Accepts
+    whatever the retry returns even if still cyclic -- one retry only, so
+    a round has a bounded worst case; a persistently cyclic response still
+    surfaces defensively in the next round's frontier computation (see
+    compute_frontier).
     """
-    if not scored:
-        return scored
-    pool_size = DEFAULT_SCORING_CONFIG.routing.llm_routing_candidate_pool_size
-    pool = scored[:pool_size]
-    tail = scored[pool_size:]
-    # Surface the memory-route replay signal as text the reasoner can
-    # actually read, instead of only as an invisible number folded into the
-    # pool-ranking score it no longer decides the winner with.
-    memory_hints = {
-        score.worker_id: f"resolved a similar past need (route bonus +{score.memory_route_bonus})"
-        for score, _ in pool
-        if score.memory_route_bonus > 0
-    }
-    selected_ids = reasoner.select_workers(
-        query=query_text,
-        need=need,
-        candidates=[worker for _, worker in pool],
-        limit=len(pool),
+    plan = reasoner.plan_round(
+        question=question,
+        graph=graph,
+        resolution_results=resolution_results,
+        evidence=evidence,
+        workers=workers,
         memory_hints=memory_hints,
+        frontier=frontier,
+        observed_needs=observed_needs,
+        incomplete_parents=incomplete_parents,
+        cross_repo_experience=cross_repo_experience,
     )
-    if not selected_ids:
-        return scored
-    by_id = {worker.id: (score, worker) for score, worker in pool}
-    reordered = [by_id[worker_id] for worker_id in selected_ids if worker_id in by_id]
-    reordered_ids = {worker_id for worker_id in selected_ids if worker_id in by_id}
-    remaining = [item for item in pool if item[1].id not in reordered_ids]
-    return reordered + remaining + tail
+    cycles = find_cycles(_merge_graph_updates(graph, plan))
+    if not cycles:
+        return plan
+    cycle = cycles[0]
+    feedback = (
+        "Your graph_updates produced a dependency cycle: "
+        + " -> ".join([*cycle, cycle[0]])
+        + ". depends_on must describe a strict prerequisite order with no "
+        "cycles (a node must never, directly or transitively, depend on "
+        "itself) -- revise the edges so the graph is acyclic."
+    )
+    return reasoner.plan_round(
+        question=question,
+        graph=graph,
+        resolution_results=resolution_results,
+        evidence=evidence,
+        workers=workers,
+        memory_hints=memory_hints,
+        frontier=frontier,
+        observed_needs=observed_needs,
+        incomplete_parents=incomplete_parents,
+        cross_repo_experience=cross_repo_experience,
+        validation_feedback=feedback,
+    )
+
+
+def _merge_graph_updates(graph: NeedGraph, plan: RoundPlan) -> NeedGraph:
+    """Validation-only merge: used purely to check whether accepting
+    `plan.graph_updates` as-is would introduce a depends_on cycle (see
+    _plan_round_with_cycle_validation), not to actually advance coordinator
+    state -- that is _merge_plan_into_graph's job, which additionally
+    preserves each existing node's resolution/execution/progress instead
+    of blindly overwriting with the Orchestrator's (necessarily
+    default-valued) copy.
+    """
+    return graph.model_copy(update={"nodes": {**graph.nodes, **plan.graph_updates}})
+
+
+def _merge_plan_into_graph(graph: NeedGraph, plan: RoundPlan) -> NeedGraph:
+    """Applies plan.graph_updates onto `graph` for real: a brand-new
+    need_id is added as-is (fresh NeedNode defaults for
+    resolution/execution/progress are correct for something that never
+    existed before); an existing need_id only has its
+    need/depends_on/related_to/children/detail fields overwritten -- its
+    resolution/execution/progress/rounds_without_progress are preserved
+    untouched, since the Orchestrator never legitimately writes those
+    three dimensions (see NeedNode's docstring) and its own copy of an
+    existing node only ever carries their default values, not real ones.
+    """
+    nodes = dict(graph.nodes)
+    for need_id, update in plan.graph_updates.items():
+        existing = nodes.get(need_id)
+        if existing is None:
+            nodes[need_id] = update
+        else:
+            nodes[need_id] = existing.model_copy(
+                update={
+                    "need": update.need,
+                    "depends_on": update.depends_on,
+                    "related_to": update.related_to,
+                    "children": update.children,
+                    "detail": update.detail,
+                }
+            )
+    return graph.model_copy(update={"nodes": nodes})
+
+
+def _reconcile_stuck_episodes(recovery: RecoveryState, stuck_subgraphs: list[list[str]]) -> None:
+    """Updates RecoveryState.stuck_episodes/episode_by_need_id from this
+    round's freshly-detected stuck_subgraphs (pure topology, recomputed
+    every round by compute_frontier -- see FrontierResult), WITHOUT ever
+    inventing a new identity for a group that already has one.
+
+    For each detected group: if any of its members already belong to an
+    existing episode, that group is folded into that episode (the
+    EARLIEST-created one, by episode_id, if more than one existing episode
+    is being merged) -- episode_id itself never changes. Only a group with
+    no existing-episode member at all gets a brand-new episode, anchored
+    at its own smallest need_id (deterministic, but chosen exactly once,
+    at creation -- not recomputed on a later round the way the old
+    per-round "root" was).
+    """
+    for group in stuck_subgraphs:
+        existing_ids = {
+            recovery.episode_by_need_id[need_id]
+            for need_id in group
+            if need_id in recovery.episode_by_need_id
+        }
+        if not existing_ids:
+            episode_id = min(group)
+            episode = StuckEpisode(episode_id=episode_id, members=set(group))
+            recovery.stuck_episodes[episode_id] = episode
+            for need_id in group:
+                recovery.episode_by_need_id[need_id] = episode_id
+            continue
+
+        target_id = min(existing_ids)
+        target = recovery.stuck_episodes[target_id]
+        for other_id in existing_ids - {target_id}:
+            other = recovery.stuck_episodes.pop(other_id)
+            target.members |= other.members
+            # A streak only means something once merged nodes are treated
+            # as one problem -- keep whichever count is further along
+            # (closer to abandonment), not reset either side's history.
+            target.recovery_streak = max(target.recovery_streak, other.recovery_streak)
+            target.used_special_tactics |= other.used_special_tactics
+        target.members |= set(group)
+        for need_id in group:
+            recovery.episode_by_need_id[need_id] = target_id
+
+
+def _episode_for_need(recovery: RecoveryState, need_id: str) -> StuckEpisode | None:
+    episode_id = recovery.episode_by_need_id.get(need_id)
+    if episode_id is None:
+        return None
+    return recovery.stuck_episodes.get(episode_id)
+
+
+def _resolution_advanced(
+    need_id: str,
+    touched_this_round: set[str],
+    pre_resolution_status: dict[str, str],
+    resolution_results: dict[str, NeedResolution],
+) -> bool:
+    """True if `need_id` was actually touched this round and its
+    resolution rank strictly increased (unresolved->partial/resolved, or
+    partial->resolved) -- partial->partial, or a node untouched this
+    round, is never progress. Shared by the per-node stuck counter and a
+    stuck episode's recovery streak, which both need exactly this same
+    judgment.
+    """
+    if need_id not in touched_this_round:
+        return False
+    before = pre_resolution_status.get(need_id, "unresolved")
+    after = resolution_results[need_id].status
+    return _RESOLUTION_RANK[after] > _RESOLUTION_RANK[before]
+
+
+def _exclude_abandoned(frontier: FrontierResult, abandoned_node_ids: set[str]) -> FrontierResult:
+    """Filters a coordinator-given-up-on need_id out of every part of a
+    FrontierResult before it's shown to the next plan_round() call or used
+    for the round loop's own termination check -- compute_frontier() has
+    no knowledge of RecoveryState.abandoned_node_ids (deliberately, see
+    RecoveryState's docstring), so this is applied by the coordinator
+    itself on the analyzer's raw output.
+    """
+    if not abandoned_node_ids:
+        return frontier
+    return FrontierResult(
+        ready=[need_id for need_id in frontier.ready if need_id not in abandoned_node_ids],
+        blocked=[need_id for need_id in frontier.blocked if need_id not in abandoned_node_ids],
+        stuck_subgraphs=[
+            [need_id for need_id in group if need_id not in abandoned_node_ids]
+            for group in frontier.stuck_subgraphs
+            if any(need_id not in abandoned_node_ids for need_id in group)
+        ],
+    )
+
+
+def _with_source_worker_fallback(node: NeedNode, recovery: RecoveryState) -> UnresolvedNeed:
+    """Graph-node needs (node.detail) never get source_worker_id populated
+    by the Orchestrator -- _parse_graph_update has no notion of "which
+    worker" for a need it is authoring, only observe()-sourced needs in
+    the observed_needs buffer ever carried one. Backfill it here, from
+    whichever persistent worker(s) were actually tried on this need (see
+    RecoveryState.tried_workers_by_node), so record_task_memory's per-need
+    struggling-worker route (which requires a non-empty source_worker_id)
+    keeps working for graph-authored needs too, not just observed ones.
+    """
+    if node.detail.source_worker_id:
+        return node.detail
+    tried = sorted(recovery.tried_workers_by_node.get(node.need_id, set()))
+    if not tried:
+        return node.detail
+    return node.detail.model_copy(update={"source_worker_id": tried[0]})
+
+
+def _memory_hints_from_routes(routes: list[MemoryRoute]) -> dict[str, str]:
+    """Surfaces repo-local memory routes as text the Orchestrator can
+    actually read in its prompt, the same "text, not an invisible score"
+    principle _llm_reorder already applied to the old routing-score path.
+    One line per worker id, keeping whichever route scores highest when
+    more than one references the same worker.
+    """
+    best: dict[str, tuple[float, str]] = {}
+    for route in routes:
+        terms = ", ".join(route.need_terms[:6]) or "(no terms recorded)"
+        text = f"resolved a similar past need (terms: {terms}; weight={route.weight:.1f})"
+        for worker_id in route.worker_ids:
+            if worker_id not in best or route.weight > best[worker_id][0]:
+                best[worker_id] = (route.weight, text)
+    return {worker_id: text for worker_id, (_, text) in best.items()}
 
 
 def _select_evidence(
@@ -881,24 +917,36 @@ def _select_evidence(
     ranked_evidence: list[Evidence],
     search: LocalSearchTool,
 ) -> list[Evidence]:
-    """Same pool-then-LLM-decides pattern as _llm_reorder, applied to the
-    final evidence cut before synthesis: the score-ranked order still
-    bounds the candidate pool for prompt-size/cost control, but the
-    reasoner -- not a fixed top-N slice -- decides what actually reaches
-    the synthesizer. Per-worker collection deliberately does no equivalent
-    filtering of its own anymore (AutonomousWorker's evidence_limit is a
-    generous safety cap, not a relevance decision), so this single pass
-    over the fully pooled evidence is the one place spent on real judgment.
-    The same call also flags kept items whose quote is too narrow to answer
-    from; those get their full source region reopened here (Shared
-    Evidence State: "evidence compression is reversible") rather than only
-    at coalition cross-check time.
+    """The final evidence cut before synthesis: zero relevance-based
+    truncation -- every dedup'd piece of evidence gathered across every
+    round is shown to the reasoner, not a score-ranked top-N slice. Verified
+    empirically before removing the old pool cap (see git history): qibo/
+    seaborn traces never exceeded the old 40-item cap at all (zero effect
+    there), but sanic/yt-dlp traces did, and a sanic trace concretely lost
+    two evidence items mentioning a directly-relevant `THRESHOLD` timeout
+    setting to that cap before the reasoner ever got to see them -- exactly
+    the failure mode this removal exists to close, and one that only gets
+    more likely as a colony evolves toward more workers and wider per-round
+    searches. The ranked order is kept purely as presentation order (best
+    guesses first), not as a cut. Cost control instead comes from
+    compressing each item's own *representation* (see
+    OpenAIProvider.select_evidence's quote truncation), not from excluding
+    candidates -- same principle as WorkerCard.routing_summary showing
+    every worker to the Orchestrator every round.
+
+    Per-worker collection deliberately does no filtering pass of its own
+    (AutonomousWorker's evidence_limit is a generous safety cap, not a
+    relevance decision), so this single pass over the full accumulated
+    evidence is the one place spent on real judgment. The same call also
+    flags kept items whose quote is too narrow to answer from; those get
+    their full source region reopened here (Shared Evidence State:
+    "evidence compression is reversible") rather than only at coalition
+    cross-check time.
     """
     if not ranked_evidence:
         return []
-    pool_size = DEFAULT_SCORING_CONFIG.routing.llm_evidence_pool_size
     keep_limit = DEFAULT_SCORING_CONFIG.routing.llm_evidence_keep_limit
-    pool = ranked_evidence[:pool_size]
+    pool = ranked_evidence
     keep_ids, expand_ids = reasoner.select_evidence(
         question=question, evidence=pool, limit=keep_limit
     )
@@ -981,129 +1029,6 @@ def _relevant_symbols(text: str, need: UnresolvedNeed | None = None) -> set[str]
     return {symbol for symbol in symbols if len(symbol) > 2}
 
 
-def _matches_symbol(symbol: str, worker: WorkerCard) -> bool:
-    lowered = symbol.lower()
-    worker_terms = {term.lower() for term in worker.searchable_terms}
-    if symbol in worker.searchable_terms or lowered in worker_terms:
-        return True
-    for owned_symbol in worker.symbols:
-        names = {
-            owned_symbol.name,
-            owned_symbol.qualname,
-            *owned_symbol.bases,
-        }
-        if symbol in names or lowered in {name.lower() for name in names if name}:
-            return True
-    return any(lowered in file.replace("\\", "/").lower() for file in worker.files)
-
-
-def _relevant_symbol_weights(symbols: set[str], workers: list[WorkerCard]) -> dict[str, int]:
-    """Weight a relevant-symbol match inversely to how many workers it
-    matches, instead of a flat bonus per hit.
-
-    A symbol unique (or nearly so) to one worker -- a domain-specific
-    concept mentioned in exactly one README, say -- is a strong routing
-    signal and keeps close to full weight. A symbol that matches most of
-    the colony -- most often the repository's own package name, present in
-    literally every file path under a standard src/<pkg>/ layout via
-    `_matches_symbol`'s path-substring fallback -- carries almost no
-    discriminating power: it would otherwise inflate every such worker's
-    score by the same flat amount, systematically favoring whichever
-    workers also happen to pick up an unrelated bonus (like the source-path
-    bonus a src/ worker gets that an examples/ worker never does) purely
-    because their path contains the repo's own name, not because they are
-    actually relevant to the question. A fixed match-count cutoff would
-    need a different threshold per repository's directory layout; scaling
-    the weight continuously does not.
-    """
-    base_weight = DEFAULT_SCORING_CONFIG.routing.relevant_symbol_base_weight
-    weights: dict[str, int] = {}
-    for symbol in symbols:
-        match_count = sum(1 for worker in workers if _matches_symbol(symbol, worker))
-        weights[symbol] = max(1, round(base_weight / max(1, match_count)))
-    return weights
-
-
-def _worker_terms(worker: WorkerCard) -> set[str]:
-    terms = _term_set(" ".join([*worker.searchable_terms, worker.root, worker.name]))
-    terms |= _term_set(
-        " ".join(
-            [
-                term
-                for symbol in worker.symbols
-                for term in [symbol.name, symbol.qualname, symbol.kind, *symbol.bases]
-                if term
-            ]
-        )
-    )
-    terms |= {
-        token.lower()
-        for file in worker.files
-        for token in TOKEN_RE.findall(file)
-        if len(token) > 2
-    }
-    return terms
-
-
-def _memory_route_bonus(
-    worker: WorkerCard,
-    query_terms: set[str],
-    routes: list[MemoryRoute],
-) -> int:
-    """A route recorded for one question can get replayed for a completely
-    different one that happens to share a single generic word (e.g. both
-    mention "quantum" in a quantum-computing repo). Requiring the overlap to
-    cover a real fraction of the route's own vocabulary -- not just be
-    non-empty -- is what tells "this new question is basically the same
-    need as before" apart from "these two unrelated questions both used one
-    common word". A route recorded from a narrow, single-term need (ratio
-    1.0 on an exact rematch) still gets full credit; a route whose need
-    covered a dozen words and shares only one with this query does not.
-    """
-    config = DEFAULT_SCORING_CONFIG.routing
-    bonus = 0
-    for route in routes:
-        route_terms = {term.lower() for term in route.need_terms}
-        if worker.id not in route.worker_ids or not route_terms:
-            continue
-        overlap = query_terms & route_terms
-        if not overlap or len(overlap) / len(route_terms) < config.min_memory_route_overlap_ratio:
-            continue
-        candidate = round(route.weight * config.memory_route_weight_multiplier) + len(overlap)
-        bonus = max(bonus, min(config.memory_route_bonus_cap, candidate))
-    return bonus
-
-
-def _territory_hint_score(worker: WorkerCard, hints: list[str]) -> int:
-    if not hints:
-        return 0
-    worker_terms = _worker_terms(worker)
-    territory_terms = _term_set(" ".join([worker.territory_id, worker.root, worker.name]))
-    config = DEFAULT_SCORING_CONFIG.routing
-    score = 0
-    for hint in hints:
-        hint_terms = _term_set(hint)
-        if not hint_terms:
-            continue
-        overlap = sum(
-            1
-            for hint_term in hint_terms
-            if _matches_term(hint_term, territory_terms)
-            or _matches_term(hint_term, worker_terms)
-        )
-        if overlap == len(hint_terms):
-            score += config.territory_hint_full_match_bonus
-        elif overlap:
-            score += config.territory_hint_partial_base_bonus + (
-                overlap * config.territory_hint_partial_per_overlap_bonus
-            )
-    return score
-
-
-def _asks_for_source_implementation(need: UnresolvedNeed) -> bool:
-    return _asks_for_source_implementation_text(_need_query_text(need))
-
-
 def _asks_for_source_implementation_text(text: str) -> bool:
     text = text.lower()
     indicators = [
@@ -1122,32 +1047,6 @@ def _asks_for_source_implementation_text(text: str) -> bool:
         "module",
     ]
     return any(indicator in text for indicator in indicators)
-
-
-def _test_path_penalty(worker: WorkerCard) -> int:
-    config = DEFAULT_SCORING_CONFIG.routing
-    files = worker.files or [worker.root]
-    test_like = sum(
-        1
-        for file in files
-        if {"test", "tests"} & set(file.replace("\\", "/").lower().split("/"))
-    )
-    if not files:
-        return 0
-    if test_like / len(files) >= config.test_path_ratio_threshold:
-        return config.test_path_penalty
-    return 0
-
-
-def _source_path_bonus(worker: WorkerCard) -> int:
-    config = DEFAULT_SCORING_CONFIG.routing
-    files = worker.files or [worker.root]
-    source_like = sum(1 for file in files if has_source_part(file))
-    if not files:
-        return 0
-    if source_like / len(files) >= config.source_path_ratio_threshold:
-        return config.source_path_bonus
-    return 0
 
 
 def _rank_global_evidence(evidence: list[Evidence], question: str) -> list[Evidence]:
@@ -1282,7 +1181,7 @@ def _normalize_coverage_needs(
 
 def _absence_proofs(
     question: str,
-    rounds: list[RecruitmentRound],
+    rounds: list[PlanningRound],
     needs: list[UnresolvedNeed],
     workers: list[WorkerCard],
 ) -> list[AbsenceProof]:
@@ -1295,7 +1194,12 @@ def _absence_proofs(
     if not negative_needs:
         return []
     searched_workers = list(
-        dict.fromkeys(worker_id for round_ in rounds for worker_id in round_.selected_worker_ids)
+        dict.fromkeys(
+            worker_id
+            for round_ in rounds
+            for trace in round_.node_executions
+            for worker_id in trace.worker_ids
+        )
     )
     workers_by_id = {worker.id: worker for worker in workers}
     searched_paths = sorted(
@@ -1310,7 +1214,8 @@ def _absence_proofs(
         {
             action.tool
             for round_ in rounds
-            for observation in round_.observations
+            for trace in round_.node_executions
+            for observation in trace.observations
             for action in observation.actions
         }
     )
@@ -1545,16 +1450,29 @@ def _dedupe_evidence(evidence: list[Evidence]) -> list[Evidence]:
     return deduped
 
 
-def _last_coalition_workers(rounds: list[RecruitmentRound]) -> list[str]:
-    for round_ in reversed(rounds):
-        if round_.coalition_formed:
-            prior = [
-                worker_id
-                for earlier in rounds[: round_.round_index]
-                for worker_id in earlier.selected_worker_ids
-            ]
-            return list(dict.fromkeys([*prior, *round_.selected_worker_ids]))
-    return []
+def _last_coalition_workers(rounds: list[PlanningRound]) -> list[str]:
+    """Every distinct worker id used up through and including the last
+    node execution (in chronological round/execution order) that formed a
+    coalition -- same semantics as before, adapted to a round now
+    potentially fanning out to several node executions instead of always
+    exactly one.
+    """
+    all_worker_ids = [
+        worker_id
+        for round_ in rounds
+        for trace in round_.node_executions
+        for worker_id in trace.worker_ids
+    ]
+    last_coalition_index = None
+    running_index = 0
+    for round_ in rounds:
+        for trace in round_.node_executions:
+            if trace.coalition_formed:
+                last_coalition_index = running_index + len(trace.worker_ids) - 1
+            running_index += len(trace.worker_ids)
+    if last_coalition_index is None:
+        return []
+    return list(dict.fromkeys(all_worker_ids[: last_coalition_index + 1]))
 
 
 def _add_coalition_cross_checks(observations, prior_evidence: list[Evidence]) -> None:

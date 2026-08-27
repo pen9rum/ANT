@@ -7,7 +7,7 @@ from pathlib import Path
 
 from pydantic import BaseModel, Field
 
-from ant.domain import EvidenceState, RecruitmentRound, UnresolvedNeed
+from ant.domain import EvidenceState, PlanningRound, UnresolvedNeed
 from ant.retrieval.relevance import extract_terms
 
 
@@ -33,6 +33,15 @@ class CollaborationEpisode(BaseModel):
     strategy: str
     outcome: str
     evidence_gain: int
+    # Nodes this execution itself closed directly (0 or 1 -- see
+    # NodeExecutionTrace.need_reduction's docstring on why closure-derived
+    # parent resolutions are deliberately NOT folded in here: attributing
+    # a round-level closure to one specific collaboration would be
+    # arbitrary). Lets evolve_workers see "this strategy actually closes
+    # needs", not just "this strategy finds evidence" -- a strategy can
+    # gather plenty of evidence_gain while never actually resolving
+    # anything.
+    need_reduction: int = 0
 
 
 class EpisodeAggregate(BaseModel):
@@ -51,6 +60,7 @@ class EpisodeAggregate(BaseModel):
     occurrences: int
     successes: int
     total_evidence_gain: int
+    total_need_reduction: int = 0
 
 
 class MemoryRoute(BaseModel):
@@ -123,21 +133,26 @@ class ColonyMemoryStore:
             rows = connection.execute(
                 "select need, strategy, outcome, evidence_gain, payload from episodes"
             ).fetchall()
-        groups: dict[tuple[str, tuple[str, ...]], list[tuple[str, int, list[str]]]] = defaultdict(
-            list
+        groups: dict[tuple[str, tuple[str, ...]], list[tuple[str, int, int, list[str]]]] = (
+            defaultdict(list)
         )
         for need, strategy, outcome, evidence_gain, payload in rows:
-            workers = tuple(sorted(json.loads(payload).get("workers", [])))
+            payload_data = json.loads(payload)
+            workers = tuple(sorted(payload_data.get("workers", [])))
             if not workers:
                 continue
-            groups[(strategy, workers)].append((outcome, evidence_gain, extract_terms(need)[:6]))
+            need_reduction = int(payload_data.get("need_reduction", 0))
+            groups[(strategy, workers)].append(
+                (outcome, evidence_gain, need_reduction, extract_terms(need)[:6])
+            )
         aggregates: list[EpisodeAggregate] = []
         for (strategy, workers), items in groups.items():
             if len(items) < min_count:
                 continue
-            successes = sum(1 for outcome, _, _ in items if outcome == "progress")
-            total_gain = sum(gain for _, gain, _ in items)
-            need_terms = sorted({term for _, _, terms in items for term in terms})[:12]
+            successes = sum(1 for outcome, _, _, _ in items if outcome == "progress")
+            total_gain = sum(gain for _, gain, _, _ in items)
+            total_reduction = sum(reduction for _, _, reduction, _ in items)
+            need_terms = sorted({term for _, _, _, terms in items for term in terms})[:12]
             aggregates.append(
                 EpisodeAggregate(
                     strategy=strategy,
@@ -146,6 +161,7 @@ class ColonyMemoryStore:
                     occurrences=len(items),
                     successes=successes,
                     total_evidence_gain=total_gain,
+                    total_need_reduction=total_reduction,
                 )
             )
         aggregates.sort(key=lambda item: item.occurrences, reverse=True)
@@ -374,54 +390,66 @@ def record_task_memory(
     grounded evidence and no unresolved needs left.
     """
     # Dedupe by membership within this task before writing: a need that
-    # stayed stuck across several rounds forms a coalition with the exact
-    # same worker pair every one of those rounds (confirmed directly on a
-    # real yt-dlp trace -- 5 rounds stuck on one need inserted 5 identical
-    # coalition rows). recurring_coalitions() counts raw rows, so one buggy
-    # or merely slow task could masquerade as several independent instances
-    # of genuine recurring collaboration and misfire a birth. One row per
-    # unique membership per task keeps that count meaning what it says:
-    # how many separate TASKS this pairing recurred in.
+    # stayed stuck across several rounds can form a coalition with the
+    # exact same worker pair every one of those rounds (confirmed directly
+    # on a real yt-dlp trace, pre-graph-pipeline -- 5 rounds stuck on one
+    # need inserted 5 identical coalition rows). recurring_coalitions()
+    # counts raw rows, so one buggy or merely slow task could masquerade
+    # as several independent instances of genuine recurring collaboration
+    # and misfire a birth. One row per unique membership per task keeps
+    # that count meaning what it says: how many separate TASKS this
+    # pairing recurred in. A coalition's full membership is available
+    # directly from a single NodeExecutionTrace.worker_ids now (unlike the
+    # old RecruitmentRound-per-round shape, which only ever recruited one
+    # new worker per round and needed reconstructing membership from prior
+    # rounds -- see the removed _coalition_membership).
     seen_memberships: set[tuple[str, ...]] = set()
     for round_state in state.rounds:
-        if not round_state.coalition_formed:
-            continue
-        membership = tuple(_coalition_membership(state.rounds, round_state.round_index))
-        if membership in seen_memberships:
-            continue
-        seen_memberships.add(membership)
-        colony_memory.record_coalition(
-            CoalitionRecord(
-                worker_ids=list(membership),
-                question=question,
-                evidence_count=len(state.evidence),
-                unresolved_need_count=len(state.unresolved_needs),
+        for trace in round_state.node_executions:
+            if not trace.coalition_formed:
+                continue
+            membership = tuple(sorted(trace.worker_ids))
+            if not membership or membership in seen_memberships:
+                continue
+            seen_memberships.add(membership)
+            colony_memory.record_coalition(
+                CoalitionRecord(
+                    worker_ids=list(membership),
+                    question=question,
+                    evidence_count=len(state.evidence),
+                    unresolved_need_count=len(state.unresolved_needs),
+                )
             )
-        )
 
-    # One episode per need-driven round (round 0's initial recruitment
-    # isn't driven by any specific need, so it's excluded): what was
-    # needed, who was recruited, what strategy handled it, and whether it
-    # actually produced anything. Specifically preserves which escalation
-    # tactic fired, if any, so a future evolve_workers pass could mine
-    # "which temporary adaptation actually works for this kind of stuck
-    # need" -- not read anywhere yet, recorded so the signal exists.
+    # One episode per node execution: what was needed, who was recruited,
+    # what strategy handled it (a plain follow-up, a coalition, or which
+    # special tactic), whether it actually produced anything, and how many
+    # needs it directly closed. Closure-derived parent resolutions
+    # (PlanningRound.derived_resolved_nodes) are deliberately NOT recorded
+    # as episodes here -- a closure check isn't a collaboration (no
+    # strategy/workers to attribute it to), it's verification that a
+    # decomposition already covered its parent.
     for round_state in state.rounds:
-        if not round_state.input_need:
-            continue
-        evidence_gain = sum(len(obs.evidence) for obs in round_state.observations)
-        colony_memory.record_episode(
-            CollaborationEpisode(
-                need=round_state.input_need,
-                workers=round_state.selected_worker_ids,
-                strategy=(
-                    round_state.escalation_used
-                    or ("coalition" if round_state.coalition_formed else "normal")
-                ),
-                outcome="progress" if evidence_gain > 0 else "no_progress",
-                evidence_gain=evidence_gain,
+        for trace in round_state.node_executions:
+            if not trace.need:
+                continue
+            colony_memory.record_episode(
+                CollaborationEpisode(
+                    need=trace.need,
+                    workers=trace.worker_ids,
+                    strategy=(
+                        trace.special_tactic
+                        or ("coalition" if trace.coalition_formed else "normal")
+                    ),
+                    outcome=(
+                        "progress"
+                        if trace.evidence_gain > 0 or trace.need_reduction > 0
+                        else "no_progress"
+                    ),
+                    evidence_gain=trace.evidence_gain,
+                    need_reduction=trace.need_reduction,
+                )
             )
-        )
 
     worker_ids = _selected_route_workers(state.rounds)
     if not worker_ids:
@@ -462,42 +490,16 @@ def record_task_memory(
         )
 
 
-def _coalition_membership(rounds: list[RecruitmentRound], round_index: int) -> list[str]:
-    """A coalition-forming round only ever selects the ONE new worker being
-    recruited that round (`candidates[:1]` in the coordinator's round loop);
-    the workers it is joining forces WITH came from earlier rounds. Using
-    just `round.selected_worker_ids` therefore records a single-worker
-    "coalition" every time -- `evolve_workers`'s recurring-coalition birth
-    requires >=2 members, so no coalition could ever actually trigger
-    reorganization, no matter how many times the same real, multi-worker
-    group recurred. Reconstruct the full membership the same way
-    `coordinator.local._last_coalition_workers` does for answer synthesis:
-    every worker selected in this round plus every prior round of the task.
-
-    Sorted, not insertion-ordered: `recurring_coalitions()` groups by the
-    exact worker_ids string, and which worker gets recruited first vs.
-    second for the same real underlying pair can differ across tasks
-    depending on routing specifics. Without a canonical order, "A then B"
-    and "B then A" would count as two different patterns that individually
-    never reach the recurrence threshold, even though they are the same
-    coalition -- exactly the recurring-pattern detection this exists for.
-    """
-    prior = [
-        worker_id
-        for earlier in rounds[:round_index]
-        for worker_id in earlier.selected_worker_ids
-    ]
-    current = rounds[round_index].selected_worker_ids
-    return sorted(dict.fromkeys([*prior, *current]))
-
-
 def _task_fully_resolved(state: EvidenceState) -> bool:
     return state.has_evidence() and not state.unresolved_needs
 
 
-def _selected_route_workers(rounds) -> list[str]:
+def _selected_route_workers(rounds: list[PlanningRound]) -> list[str]:
     worker_ids = [
-        worker_id for round_state in rounds for worker_id in round_state.selected_worker_ids
+        worker_id
+        for round_state in rounds
+        for trace in round_state.node_executions
+        for worker_id in trace.worker_ids
     ]
     return list(dict.fromkeys(worker_ids))
 

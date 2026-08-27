@@ -1,7 +1,7 @@
 import os
 from pathlib import Path
 
-from ant.domain import AbsenceProof, Evidence, TokenUsage
+from ant.domain import AbsenceProof, Evidence, FrontierResult, NeedGraph, TokenUsage, WorkerCard
 from ant.providers import OpenAIProvider
 from ant.providers.openai_provider import (
     ResponseResult,
@@ -139,6 +139,75 @@ def test_generate_card_includes_typed_symbols(tmp_path: Path, monkeypatch) -> No
 
     symbols = {symbol.name: symbol for symbol in card.symbols}
     assert symbols["FALQON"].bases == ["QAOA"]
+
+
+def test_plan_round_parses_graph_updates_assignments_and_special_tactics() -> None:
+    provider = OpenAIProvider(model="gpt-4.1")
+    provider.responses_json = lambda prompt, max_output_tokens=512: type(  # type: ignore[method-assign]
+        "Result",
+        (),
+        {
+            "text": (
+                '{"graph_updates": ['
+                '{"need_id": "n2", "need": "locate timeout definition", '
+                '"depends_on": ["n1"], "need_type": "implementation_location", '
+                '"scope": "local"}'
+                '], "assignments": {"n1": ["worker-a", "worker-b"]}, '
+                '"special_tactics": {"n3": "temporary_bridge", "n4": "not_a_real_tactic"}}'
+            )
+        },
+    )()
+    workers = [
+        WorkerCard(id="worker-a", territory_id="a", name="a", root="a"),
+        WorkerCard(id="worker-b", territory_id="b", name="b", root="b"),
+    ]
+
+    plan = provider.plan_round(
+        question="q",
+        graph=NeedGraph(nodes={}),
+        resolution_results={},
+        evidence=[],
+        workers=workers,
+        memory_hints={},
+        frontier=FrontierResult(ready=["n1"], blocked=[], stuck_subgraphs=[]),
+        observed_needs=[],
+        incomplete_parents=[],
+        cross_repo_experience=[],
+    )
+
+    assert plan.graph_updates["n2"].need_id == "n2"
+    assert plan.graph_updates["n2"].depends_on == ["n1"]
+    assert plan.graph_updates["n2"].detail.need_type == "implementation_location"
+    assert plan.assignments == {"n1": ["worker-a", "worker-b"]}
+    # A worker id not among the supplied candidates is dropped, and a
+    # tactic string outside the two allowed values is dropped too --
+    # tolerating a malformed field without discarding the whole plan.
+    assert plan.special_tactics == {"n3": "temporary_bridge"}
+
+
+def test_plan_round_drops_an_assignment_to_a_worker_id_not_in_the_candidate_list() -> None:
+    provider = OpenAIProvider(model="gpt-4.1")
+    provider.responses_json = lambda prompt, max_output_tokens=512: type(  # type: ignore[method-assign]
+        "Result",
+        (),
+        {"text": '{"graph_updates": [], "assignments": {"n1": ["worker-ghost"]}, '
+                 '"special_tactics": {}}'},
+    )()
+
+    plan = provider.plan_round(
+        question="q",
+        graph=NeedGraph(nodes={}),
+        resolution_results={},
+        evidence=[],
+        workers=[WorkerCard(id="worker-a", territory_id="a", name="a", root="a")],
+        memory_hints={},
+        frontier=FrontierResult(ready=["n1"], blocked=[], stuck_subgraphs=[]),
+        observed_needs=[],
+        incomplete_parents=[],
+        cross_repo_experience=[],
+    )
+
+    assert plan.assignments == {}
 
 
 def test_completeness_notes_only_includes_exhaustive_proofs() -> None:

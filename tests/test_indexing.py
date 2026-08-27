@@ -2,6 +2,7 @@ from pathlib import Path
 
 from ant.environment import RepoEnvironment
 from ant.indexing import build_worker_cards, discover_territories
+from ant.indexing.cards import template_routing_summary
 
 
 def test_discovers_territories_and_worker_cards(tmp_path: Path) -> None:
@@ -16,6 +17,25 @@ def test_discovers_territories_and_worker_cards(tmp_path: Path) -> None:
     assert {territory.root for territory in territories} == {"", "src"}
     assert len(workers) == len(territories)
     assert any("authservice" in worker.searchable_terms for worker in workers)
+
+
+def test_build_worker_cards_fills_a_nonempty_routing_summary_with_no_llm(tmp_path: Path) -> None:
+    # build_worker_cards is the no-LLM path (used when `ant index` runs
+    # without --llm-cards) -- every card it produces must still carry a
+    # routing_summary, since the Orchestrator planning call reads only
+    # that field, not the full card, for every worker every round.
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "auth.py").write_text("class AuthService:\n    pass\n", encoding="utf-8")
+
+    repo = RepoEnvironment(tmp_path)
+    territories = discover_territories(repo)
+    workers = build_worker_cards(repo.root, territories)
+
+    for worker in workers:
+        assert worker.routing_summary
+        assert worker.routing_summary == template_routing_summary(
+            worker.model_copy(update={"routing_summary": ""})
+        )
 
 
 def test_flat_container_splits_by_immediate_subdirectory(tmp_path: Path) -> None:

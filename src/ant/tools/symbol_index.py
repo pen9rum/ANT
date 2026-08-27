@@ -73,7 +73,10 @@ def build_symbol_index(repo_root: Path, files: list[str]) -> SymbolIndex:
         path = repo_root / relative
         try:
             source = path.read_text(encoding="utf-8", errors="replace")
-            tree = ast.parse(source)
+            # filename=relative: ast.parse defaults to "<unknown>" otherwise, so a
+            # SyntaxWarning from an indexed repo's own source (e.g. an unescaped
+            # "\s" in a non-raw string) points nowhere useful to investigate.
+            tree = ast.parse(source, filename=relative)
         except (OSError, SyntaxError):
             continue
         visitor = _SymbolVisitor(relative, index)

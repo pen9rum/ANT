@@ -2,7 +2,17 @@ from __future__ import annotations
 
 import re
 
-from ant.domain import Evidence, NeedResolution, UnresolvedNeed, WorkerCard, WorkerObservation
+from ant.domain import (
+    Evidence,
+    FrontierResult,
+    NeedGraph,
+    NeedResolution,
+    PlanningRound,
+    RoundPlan,
+    UnresolvedNeed,
+    WorkerCard,
+    WorkerObservation,
+)
 
 TOKEN_RE = re.compile(r"[A-Za-z][A-Za-z0-9_]{2,}")
 
@@ -52,22 +62,6 @@ class MockLLMProvider:
         # against a real model). Returning candidates unchanged keeps every
         # existing test's assumptions about which lookups happen intact.
         return candidates
-
-    def select_workers(
-        self,
-        *,
-        query: str,
-        need: UnresolvedNeed | None,
-        candidates: list[WorkerCard],
-        limit: int,
-        memory_hints: dict[str, str],
-    ) -> list[str]:
-        # Identity pass-through, same rationale as select_lookups above:
-        # this mock exists so orchestration/routing tests can run without an
-        # API key, not to exercise LLM worker-selection judgment. Returning
-        # candidates in their given (already lexically/dense ranked) order
-        # keeps every existing routing test's assumptions intact.
-        return [worker.id for worker in candidates]
 
     def select_evidence(
         self,
@@ -156,18 +150,41 @@ class MockLLMProvider:
         # method existed.
         return NeedResolution(status="unresolved")
 
-    def decide_local_action(
+    def plan_round(
         self,
         *,
-        need: UnresolvedNeed,
+        question: str,
+        graph: NeedGraph,
+        resolution_results: dict[str, NeedResolution],
         evidence: list[Evidence],
-        worker_progress: str,
-        worker: WorkerCard,
+        workers: list[WorkerCard],
+        memory_hints: dict[str, str],
+        frontier: FrontierResult,
+        observed_needs: list[UnresolvedNeed],
+        incomplete_parents: list[str],
+        cross_repo_experience: list[str],
+        validation_feedback: str = "",
+    ) -> RoundPlan:
+        # Deterministic stand-in, same rationale as the rest of this mock:
+        # assign every ready-frontier node to the first available worker,
+        # no graph edits, no special tactics -- exists so orchestration can
+        # run without an API key, not to exercise the real planning
+        # judgment (that's OpenAIProvider's job).
+        if not workers:
+            return RoundPlan()
+        first_worker_id = workers[0].id
+        return RoundPlan(assignments={need_id: [first_worker_id] for need_id in frontier.ready})
+
+    def summarize_task_experience(
+        self,
+        *,
+        question: str,
+        rounds: list[PlanningRound],
+        unresolved_needs: list[UnresolvedNeed],
+        evidence_count: int,
     ) -> str:
-        # Always "continue": this mock exists so orchestration tests can
-        # run without an API key, not to exercise the real judgment (that's
-        # OpenAIProvider's job). Old behavior had no explicit decision at
-        # all -- the same worker kept getting re-selected purely because it
-        # usually still scored highest -- so "continue" reproduces that for
-        # every test that doesn't supply a real reasoner.
-        return "continue"
+        # Always "": this mock exists so orchestration tests can run
+        # without an API key, not to exercise the real summarization
+        # judgment (that's OpenAIProvider's job) -- an empty string means
+        # GlobalMemoryStore.record_experience skips recording anything.
+        return ""

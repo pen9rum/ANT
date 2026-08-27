@@ -10,7 +10,12 @@ from ant.coordinator import LocalCoordinator
 from ant.evaluation.datasets import EvalExample
 from ant.evaluation.judge import judge_answer
 from ant.evaluation.metrics import EvalScore
-from ant.memory import IndexStore
+from ant.memory import (
+    GlobalMemoryStore,
+    IndexStore,
+    record_global_experience_safe,
+    retrieve_cross_repo_experience_safe,
+)
 from ant.memory.colony import ColonyMemoryStore, record_task_memory
 from ant.providers import OpenAIProvider
 from ant.scoring_config import DEFAULT_SCORING_CONFIG
@@ -38,6 +43,7 @@ def run_batch(
     judge: str = "heuristic",
 ) -> list[BatchResult]:
     provider = OpenAIProvider() if synthesize == "openai" else None
+    global_memory = GlobalMemoryStore()
     out_path.parent.mkdir(parents=True, exist_ok=True)
     results: list[BatchResult] = []
     with out_path.open("w", encoding="utf-8") as handle:
@@ -69,6 +75,7 @@ def run_batch(
                     provider=provider,
                     max_rounds=max_rounds,
                     judge=judge,
+                    global_memory=global_memory,
                 )
             except Exception as exc:  # noqa: BLE001 - one bad example must not sink the batch
                 # A single malformed model response (or any other failure)
@@ -101,6 +108,7 @@ def _run_example(
     provider: OpenAIProvider | None,
     max_rounds: int,
     judge: str,
+    global_memory: GlobalMemoryStore,
 ) -> BatchResult:
     started_at = time.time()
     example_index = (
@@ -115,12 +123,20 @@ def _run_example(
     colony_memory = ColonyMemoryStore(example_index)
     workers = store.load_workers()
     memory_routes = colony_memory.matching_routes(example.question.split())
+    # Only when a real reasoner is in play (see cli.py's `ask` command for
+    # the same rationale): MockLLMProvider never uses cross_repo_experience
+    # or produces a summary worth recording, so skip the real embedding-
+    # model call entirely rather than pay for a result nothing will use.
+    cross_repo_experience = (
+        retrieve_cross_repo_experience_safe(global_memory, example.question) if provider else []
+    )
     coordinator = LocalCoordinator(
         example_repo,
         workers,
         synthesizer=provider,
         memory_routes=memory_routes,
         index_path=example_index,
+        cross_repo_experience=cross_repo_experience,
     )
     state = coordinator.ask(example.question, max_rounds=max_rounds)
     trace_id = store.save_trace(state)
@@ -140,6 +156,10 @@ def _run_example(
         is_high_quality=_is_high_quality_route(score),
         route_weight=_route_weight(score),
     )
+    if provider:
+        record_global_experience_safe(
+            global_memory, coordinator.reasoner, example.question, state, repo=example.repo
+        )
     return BatchResult(
         example_id=example.id,
         question=example.question,

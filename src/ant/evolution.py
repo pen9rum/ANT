@@ -7,13 +7,32 @@ from pathlib import Path
 from pydantic import BaseModel, Field
 
 from ant.domain import Territory, WorkerCard
-from ant.indexing.cards import build_worker_cards
+from ant.indexing.cards import build_worker_cards, template_routing_summary
 from ant.memory import ColonyMemoryStore, IndexStore
 from ant.memory.colony import MemoryRoute
 from ant.providers import EvolutionReasoner
 from ant.scoring_config import DEFAULT_SCORING_CONFIG
 
 TOKEN_RE = re.compile(r"[A-Za-z][A-Za-z0-9_]{2,}")
+
+
+def _with_routing_summary(card: WorkerCard, reasoner: EvolutionReasoner | None) -> WorkerCard:
+    """Generate/refresh routing_summary for a card that was just born,
+    specialized, or merged -- a real LLM call via the reasoner when one is
+    available, or the same zero-cost deterministic template used at
+    initial index time otherwise (see indexing.cards.template_routing_summary).
+    Every WorkerCard construction site in this module routes through this
+    rather than leaving routing_summary at its default "" -- an empty
+    routing_summary would make that worker effectively invisible in the
+    Orchestrator's per-round routing context, which reads only this field,
+    not the full card.
+    """
+    summary = (
+        reasoner.summarize_routing(card=card)
+        if reasoner is not None
+        else template_routing_summary(card)
+    )
+    return card.model_copy(update={"routing_summary": summary})
 
 
 class EvolutionEvent(BaseModel):
@@ -98,17 +117,20 @@ def evolve_workers(
             continue
         files = sorted({file for worker in source_workers for file in worker.files})
         terms = sorted({term for worker in source_workers for term in worker.searchable_terms})[:32]
-        bridge = WorkerCard(
-            id=bridge_id,
-            territory_id=bridge_id.removeprefix("worker-"),
-            name=" + ".join(worker.name for worker in source_workers[:3]) + " bridge",
-            root="",
-            responsibilities=[
-                "Cross-territory specialist born from recurring temporary coalition.",
-                f"Coalition recurred {count} times.",
-            ],
-            searchable_terms=terms,
-            files=files,
+        bridge = _with_routing_summary(
+            WorkerCard(
+                id=bridge_id,
+                territory_id=bridge_id.removeprefix("worker-"),
+                name=" + ".join(worker.name for worker in source_workers[:3]) + " bridge",
+                root="",
+                responsibilities=[
+                    "Cross-territory specialist born from recurring temporary coalition.",
+                    f"Coalition recurred {count} times.",
+                ],
+                searchable_terms=terms,
+                files=files,
+            ),
+            reasoner,
         )
         workers.append(bridge)
         worker_by_id[bridge.id] = bridge
@@ -250,17 +272,20 @@ def _apply_episode_actions(
             terms = sorted(
                 {term for worker in source_workers for term in worker.searchable_terms}
             )[:32]
-            bridge = WorkerCard(
-                id=bridge_id,
-                territory_id=bridge_id.removeprefix("worker-"),
-                name=" + ".join(worker.name for worker in source_workers[:3]) + " bridge",
-                root="",
-                responsibilities=[
-                    "Permanent bridge born from a recurring successful temporary adaptation.",
-                    reason,
-                ],
-                searchable_terms=terms,
-                files=files,
+            bridge = _with_routing_summary(
+                WorkerCard(
+                    id=bridge_id,
+                    territory_id=bridge_id.removeprefix("worker-"),
+                    name=" + ".join(worker.name for worker in source_workers[:3]) + " bridge",
+                    root="",
+                    responsibilities=[
+                        "Permanent bridge born from a recurring successful temporary adaptation.",
+                        reason,
+                    ],
+                    searchable_terms=terms,
+                    files=files,
+                ),
+                reasoner,
             )
             workers = [*workers, bridge]
             worker_by_id[bridge.id] = bridge
@@ -274,17 +299,20 @@ def _apply_episode_actions(
             )
         elif action == "merge" and len(source_workers) == 2:
             first, second = source_workers
-            merged_worker = WorkerCard(
-                id=f"worker-merge-{first.id.removeprefix('worker-')}"
-                f"-{second.id.removeprefix('worker-')}",
-                territory_id=f"merge-{first.territory_id}-{second.territory_id}",
-                name=f"{first.name} / {second.name} merged",
-                root=first.root or second.root,
-                responsibilities=[*first.responsibilities, *second.responsibilities, reason],
-                searchable_terms=sorted(
-                    set(first.searchable_terms) | set(second.searchable_terms)
+            merged_worker = _with_routing_summary(
+                WorkerCard(
+                    id=f"worker-merge-{first.id.removeprefix('worker-')}"
+                    f"-{second.id.removeprefix('worker-')}",
+                    territory_id=f"merge-{first.territory_id}-{second.territory_id}",
+                    name=f"{first.name} / {second.name} merged",
+                    root=first.root or second.root,
+                    responsibilities=[*first.responsibilities, *second.responsibilities, reason],
+                    searchable_terms=sorted(
+                        set(first.searchable_terms) | set(second.searchable_terms)
+                    ),
+                    files=sorted(set(first.files) | set(second.files)),
                 ),
-                files=sorted(set(first.files) | set(second.files)),
+                reasoner,
             )
             workers = [w for w in workers if w.id not in (first.id, second.id)]
             workers.append(merged_worker)
@@ -354,14 +382,22 @@ def _merge_overlapping_workers(
             merged.append(worker)
             continue
         consumed.update({worker.id, partner.id})
-        merged_worker = WorkerCard(
-            id=f"worker-merge-{worker.id.removeprefix('worker-')}-{partner.id.removeprefix('worker-')}",
-            territory_id=f"merge-{worker.territory_id}-{partner.territory_id}",
-            name=f"{worker.name} / {partner.name} merged",
-            root=worker.root or partner.root,
-            responsibilities=worker.responsibilities + partner.responsibilities,
-            searchable_terms=sorted(set(worker.searchable_terms) | set(partner.searchable_terms)),
-            files=sorted(worker_files | set(partner.files)),
+        merged_worker = _with_routing_summary(
+            WorkerCard(
+                id=(
+                    f"worker-merge-{worker.id.removeprefix('worker-')}"
+                    f"-{partner.id.removeprefix('worker-')}"
+                ),
+                territory_id=f"merge-{worker.territory_id}-{partner.territory_id}",
+                name=f"{worker.name} / {partner.name} merged",
+                root=worker.root or partner.root,
+                responsibilities=worker.responsibilities + partner.responsibilities,
+                searchable_terms=sorted(
+                    set(worker.searchable_terms) | set(partner.searchable_terms)
+                ),
+                files=sorted(worker_files | set(partner.files)),
+            ),
+            reasoner,
         )
         merged.append(merged_worker)
         events.append(
@@ -437,7 +473,7 @@ def _specialize_overloaded_workers(
             continue
 
         children = [
-            _child_worker(worker, group, files, group_counts.get(group, 0), repo_root)
+            _child_worker(worker, group, files, group_counts.get(group, 0), repo_root, reasoner)
             for group, files in sorted(groups.items())
         ]
         result.extend(children)
@@ -528,6 +564,7 @@ def _child_worker(
     files: list[str],
     route_count: int,
     repo_root: Path | None,
+    reasoner: EvolutionReasoner | None = None,
 ) -> WorkerCard:
     territory_id = _slug(group)
     provenance = (
@@ -545,7 +582,11 @@ def _child_worker(
         # call almost nothing to go on, degrading routing quality
         # specifically for the workers evolution just created.
         territory = Territory(id=territory_id, root=group, files=sorted(files), summary=provenance)
-        return build_worker_cards(repo_root, [territory])[0]
+        # build_worker_cards already fills routing_summary with the
+        # zero-cost template; re-derive via the reasoner when one is
+        # available so a specialized child's routing_summary gets the same
+        # LLM-quality treatment as its should_specialize judgment just did.
+        return _with_routing_summary(build_worker_cards(repo_root, [territory])[0], reasoner)
     # Fallback when no repo_root is supplied (existing tests, and any
     # caller that hasn't opted in): the original mechanical derivation from
     # already-indexed worker-card metadata only, no filesystem access.
@@ -556,15 +597,18 @@ def _child_worker(
         symbol.qualname for symbol in child_symbols if symbol.qualname
     }
     terms = sorted(inherited_terms | symbol_terms) or sorted(path_terms)
-    return WorkerCard(
-        id=f"worker-{territory_id}",
-        territory_id=territory_id,
-        name=f"{group or 'root'} worker",
-        root=group,
-        responsibilities=[provenance],
-        searchable_terms=terms[:32],
-        files=sorted(files),
-        symbols=child_symbols,
+    return _with_routing_summary(
+        WorkerCard(
+            id=f"worker-{territory_id}",
+            territory_id=territory_id,
+            name=f"{group or 'root'} worker",
+            root=group,
+            responsibilities=[provenance],
+            searchable_terms=terms[:32],
+            files=sorted(files),
+            symbols=child_symbols,
+        ),
+        reasoner,
     )
 
 

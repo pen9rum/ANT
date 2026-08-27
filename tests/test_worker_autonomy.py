@@ -333,6 +333,26 @@ class _DenylistReasoner:
     def decide_local_action(self, *, need, evidence, worker_progress, worker):
         raise AssertionError("this test does not exercise decide_local_action()")
 
+    def plan_round(
+        self,
+        *,
+        question,
+        graph,
+        resolution_results,
+        evidence,
+        workers,
+        memory_hints,
+        frontier,
+        observed_needs,
+        incomplete_parents,
+        cross_repo_experience,
+        validation_feedback="",
+    ):
+        raise AssertionError("this test does not exercise plan_round()")
+
+    def summarize_task_experience(self, *, question, rounds, unresolved_needs, evidence_count):
+        raise AssertionError("this test does not exercise summarize_task_experience()")
+
 
 def test_autonomous_worker_filters_candidate_symbols_through_a_supplied_reasoner(
     tmp_path: Path,
