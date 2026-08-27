@@ -143,6 +143,11 @@ def test_openai_judge_uses_official_sweqa_evaluator_model(monkeypatch) -> None:
 
             return Result()
 
+        def drain_usage(self):
+            from ant.domain import TokenUsage
+
+            return TokenUsage(input_tokens=10, output_tokens=5, total_tokens=15)
+
     monkeypatch.setattr("ant.evaluation.judge.OpenAIProvider", FakeProvider)
 
     score = judge_answer(
@@ -159,3 +164,8 @@ def test_openai_judge_uses_official_sweqa_evaluator_model(monkeypatch) -> None:
     assert captured["max_output_tokens"] == 1024
     assert isinstance(score, EvalScore)
     assert score.correctness == 6
+    # Regression test: the judge's own OpenAIProvider is local to
+    # judge_answer() and was never drained anywhere -- its cost simply
+    # vanished. score.usage must carry it out.
+    assert score.usage.input_tokens == 10
+    assert score.usage.output_tokens == 5

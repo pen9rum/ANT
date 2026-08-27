@@ -111,6 +111,12 @@ def judge_answer(
             "relevance": _score_int(data.get("relevance")),
             "clarity": _score_int(data.get("clarity")),
             "reasoning": _score_int(data.get("reasoning")),
+            # provider is local to this call and never drained anywhere
+            # else -- without this, its accumulated cost simply vanishes
+            # when the function returns, and every judge="openai" run's
+            # actual total spend has been under-reported by however much
+            # the judge itself cost, silently, the whole time.
+            "usage": provider.drain_usage(),
         }
     )
 

@@ -17,6 +17,12 @@ class EvalReport(BaseModel):
     avg_relevance: float
     avg_clarity: float
     avg_reasoning: float
+    # Run cost (BatchResult.usage: orchestrator/worker/synthesis) and judge
+    # cost (score.usage) are kept separate -- see BatchResult/EvalScore's
+    # own docstrings for why mixing a batch's main-run model with the
+    # hash-locked judge model into one figure would make both meaningless.
+    total_run_cost_usd: float
+    total_judge_cost_usd: float
 
 
 def build_report(results_path: Path, out_path: Path | None = None) -> EvalReport:
@@ -37,6 +43,12 @@ def build_report(results_path: Path, out_path: Path | None = None) -> EvalReport
         avg_relevance=_mean([row["score"].get("relevance", 0) for row in rows]),
         avg_clarity=_mean([row["score"].get("clarity", 0) for row in rows]),
         avg_reasoning=_mean([row["score"].get("reasoning", 0) for row in rows]),
+        total_run_cost_usd=round(
+            sum(row.get("usage", {}).get("estimated_cost_usd", 0.0) for row in rows), 6
+        ),
+        total_judge_cost_usd=round(
+            sum(row["score"].get("usage", {}).get("estimated_cost_usd", 0.0) for row in rows), 6
+        ),
     )
     if out_path:
         out_path.parent.mkdir(parents=True, exist_ok=True)

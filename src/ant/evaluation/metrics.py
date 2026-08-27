@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+
+from ant.domain import TokenUsage
 
 
 class EvalScore(BaseModel):
@@ -13,6 +15,13 @@ class EvalScore(BaseModel):
     relevance: int = 0
     clarity: int = 0
     reasoning: int = 0
+    # The judge call's own usage/cost (judge_answer, judge="openai") --
+    # deliberately separate from EvidenceState.usage/BatchResult.usage
+    # (the main run's orchestrator/worker/synthesis cost), since the judge
+    # runs on a different, hash-locked model (see
+    # OFFICIAL_SWE_QA_PRO_JUDGE_MODEL) and mixing the two would make either
+    # figure meaningless on its own. Zero for judge="heuristic".
+    usage: TokenUsage = Field(default_factory=TokenUsage)
 
 
 def evaluate_answer(

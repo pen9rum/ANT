@@ -7,6 +7,7 @@ from pathlib import Path
 from pydantic import BaseModel, Field
 
 from ant.coordinator import LocalCoordinator
+from ant.domain import TokenUsage
 from ant.evaluation.datasets import EvalExample
 from ant.evaluation.judge import judge_answer
 from ant.evaluation.metrics import EvalScore
@@ -30,6 +31,10 @@ class BatchResult(BaseModel):
     trace_id: int | None = None
     metadata: dict = Field(default_factory=dict)
     elapsed_seconds: float = 0.0
+    # The main run's orchestrator/worker/synthesis cost (state.usage) --
+    # separate from score.usage, which is the judge's own call. Zero when
+    # synthesize != "openai" (MockLLMProvider tracks no usage).
+    usage: TokenUsage = Field(default_factory=TokenUsage)
 
 
 def run_batch(
@@ -166,6 +171,7 @@ def _run_example(
         prediction=prediction,
         score=score,
         trace_id=trace_id,
+        usage=state.usage,
         elapsed_seconds=round(time.time() - started_at, 2),
         metadata={"repo": example.repo},
     )
