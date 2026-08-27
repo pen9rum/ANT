@@ -10,6 +10,7 @@ class EvalReport(BaseModel):
     count: int
     exact_match_rate: float
     contains_answer_rate: float
+    avg_f1: float
     avg_evidence_count: float
     avg_unresolved_need_count: float
     avg_correctness: float
@@ -36,6 +37,7 @@ def build_report(results_path: Path, out_path: Path | None = None) -> EvalReport
         count=count,
         exact_match_rate=_mean([row["score"]["exact_match"] for row in rows]),
         contains_answer_rate=_mean([row["score"]["contains_answer"] for row in rows]),
+        avg_f1=_mean([row["score"].get("f1", 0.0) for row in rows]),
         avg_evidence_count=_mean([row["score"]["evidence_count"] for row in rows]),
         avg_unresolved_need_count=_mean([row["score"]["unresolved_need_count"] for row in rows]),
         avg_correctness=_mean([row["score"].get("correctness", 0) for row in rows]),
