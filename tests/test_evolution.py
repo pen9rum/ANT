@@ -721,6 +721,121 @@ def test_recurring_coalition_birth_skips_a_near_duplicate_of_an_existing_bridge(
     assert stored_worker_ids == {"worker-a", "worker-b", "worker-bridge-a-b"}
 
 
+class _RedundantWithWorkerCReasoner(_AlwaysVetoReasoner):
+    """should_merge says yes specifically for worker-c -- proves the
+    semantic-redundancy check is doing real LLM-judged work, not just
+    vetoing everything the way _AlwaysVetoReasoner's own should_merge
+    (always False) would."""
+
+    def should_merge(self, *, worker_a_id, worker_a_summary, worker_b_id, worker_b_summary):
+        return worker_b_id == "worker-c"
+
+
+def test_recurring_coalition_birth_skips_a_worker_semantically_redundant_with_existing(
+    tmp_path: Path,
+) -> None:
+    # Regression test for a real bug found on a live qibo run: even after
+    # the file-overlap near-duplicate check above, a birthed bridge's
+    # routing_summary could still read as the same specialty as an
+    # existing sibling worker's despite a genuinely distinct file set
+    # (confirmed: "Models and abstractions spanning qibo core modules" vs
+    # "src/qibo/models algorithms and circuit helpers") -- the Orchestrator
+    # then keeps selecting both instead of one, inflating coalitions
+    # without adding real coverage. worker-c here shares only one file
+    # with the candidate (overlap ratio 1/3, well under the 0.9 file-
+    # overlap threshold), so only the semantic check -- not
+    # _overlaps_existing_worker -- can catch this.
+    index_path = tmp_path / ".ant"
+    workers = [
+        WorkerCard(id="worker-a", territory_id="a", name="a", root="a", files=["a.py"]),
+        WorkerCard(id="worker-b", territory_id="b", name="b", root="b", files=["b.py"]),
+        WorkerCard(
+            id="worker-c", territory_id="c", name="c", root="c", files=["b.py", "c.py"]
+        ),
+    ]
+    territories = [
+        Territory(id=worker.territory_id, root=worker.root, files=worker.files)
+        for worker in workers
+    ]
+    IndexStore(index_path).save(territories, workers)
+    memory = ColonyMemoryStore(index_path)
+    for question in ("q1", "q2"):
+        memory.record_coalition(
+            CoalitionRecord(
+                worker_ids=["worker-a", "worker-b"],
+                question=question,
+                evidence_count=2,
+                unresolved_need_count=0,
+            )
+        )
+
+    result = evolve_workers(
+        index_path,
+        reasoner=_RedundantWithWorkerCReasoner(),
+        min_coalition_count=2,
+        merge_overlap=0.9,
+    )
+
+    assert not [event for event in result.events if event.kind == "birth"]
+    stored_worker_ids = {worker.id for worker in IndexStore(index_path).load_workers()}
+    assert stored_worker_ids == {"worker-a", "worker-b", "worker-c"}
+
+
+class _BirthBridgeButRedundantReasoner(_AlwaysVetoReasoner):
+    def decide_episode_action(
+        self, *, strategy, need_terms, occurrences, successes, total_evidence_gain, workers
+    ):
+        return "birth_bridge"
+
+    def should_merge(self, *, worker_a_id, worker_a_summary, worker_b_id, worker_b_summary):
+        return worker_b_id == "worker-c"
+
+
+def test_episode_birth_bridge_downgrades_to_strengthen_route_when_semantically_redundant(
+    tmp_path: Path,
+) -> None:
+    index_path = tmp_path / ".ant"
+    workers = [
+        WorkerCard(id="worker-a", territory_id="a", name="a", root="a", files=["a.py"]),
+        WorkerCard(id="worker-b", territory_id="b", name="b", root="b", files=["b.py"]),
+        WorkerCard(
+            id="worker-c", territory_id="c", name="c", root="c", files=["b.py", "c.py"]
+        ),
+    ]
+    territories = [
+        Territory(id=worker.territory_id, root=worker.root, files=worker.files)
+        for worker in workers
+    ]
+    IndexStore(index_path).save(territories, workers)
+    memory = ColonyMemoryStore(index_path)
+    for need in ("task one", "task two"):
+        memory.record_episode(
+            CollaborationEpisode(
+                need=need,
+                workers=["worker-a", "worker-b"],
+                strategy="temporary_bridge",
+                outcome="progress",
+                evidence_gain=3,
+            )
+        )
+
+    result = evolve_workers(
+        index_path,
+        reasoner=_BirthBridgeButRedundantReasoner(),
+        min_coalition_count=99,
+        retire_empty=False,
+        merge_overlap=0.99,
+        min_episode_count=2,
+    )
+
+    assert not [event for event in result.events if event.kind == "birth"]
+    strengthen_events = [event for event in result.events if event.kind == "strengthen_route"]
+    assert len(strengthen_events) == 1
+    assert strengthen_events[0].worker_id == "worker-c"
+    stored_worker_ids = {worker.id for worker in IndexStore(index_path).load_workers()}
+    assert stored_worker_ids == {"worker-a", "worker-b", "worker-c"}
+
+
 def test_evolve_workers_leaves_episodes_alone_when_reasoner_says_no_change(
     tmp_path: Path,
 ) -> None:

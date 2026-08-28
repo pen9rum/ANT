@@ -125,6 +125,7 @@ def evolve_workers(
             # that already work fine split apart.
             continue
         files = sorted({file for worker in source_workers for file in worker.files})
+        terms = sorted({term for worker in source_workers for term in worker.searchable_terms})[:32]
         # A source that is itself already a bridge/merge (e.g. birthing
         # "gates+models" bridge together with "models") makes this new
         # worker's file set a near-duplicate of that existing worker's --
@@ -135,7 +136,24 @@ def evolve_workers(
         # catches this regardless of which source carried the redundancy.
         if _overlaps_existing_worker(files, workers, merge_overlap):
             continue
-        terms = sorted({term for worker in source_workers for term in worker.searchable_terms})[:32]
+        # File sets can be genuinely distinct while the two workers still
+        # cover the same *specialty* -- a birthed bridge's routing_summary
+        # can read as near-synonymous with an existing sibling worker's
+        # (confirmed on a real qibo run: "Models and abstractions spanning
+        # qibo core modules" vs "src/qibo/models algorithms and circuit
+        # helpers"), so the Orchestrator keeps selecting both instead of
+        # one -- inflating coalitions/worker_calls without adding real
+        # coverage. Same underlying question should_merge already answers
+        # for two *existing* overlapping workers, asked here before this
+        # candidate is even born.
+        if _is_redundant_with_existing(
+            f"Combines {', '.join(worker.id for worker in source_workers)}; "
+            f"key terms: {', '.join(terms[:12])}",
+            files,
+            workers,
+            reasoner,
+        ):
+            continue
         bridge = _with_routing_summary(
             WorkerCard(
                 id=bridge_id,
@@ -312,6 +330,38 @@ def _apply_episode_actions(
             terms = sorted(
                 {term for worker in source_workers for term in worker.searchable_terms}
             )[:32]
+            redundant_with = _is_redundant_with_existing(
+                f"Combines {', '.join(aggregate.workers)}; key terms: {', '.join(terms[:12])}",
+                files,
+                workers,
+                reasoner,
+            )
+            if redundant_with is not None:
+                # Same treatment as the single-source-worker downgrade
+                # above: this recurring pattern is real signal, just
+                # misassigned to "birth a clone" instead of "reinforce the
+                # worker that already covers this specialty" -- reinforces
+                # the specific *existing* worker found redundant, not
+                # aggregate.workers (the sources that would have been
+                # combined into the now-skipped clone).
+                memory.save_route(
+                    MemoryRoute(
+                        need_terms=aggregate.need_terms,
+                        worker_ids=[redundant_with],
+                        weight=5.0,
+                        is_high_quality=True,
+                    )
+                )
+                events.append(
+                    EvolutionEvent(
+                        kind="strengthen_route",
+                        worker_id=redundant_with,
+                        reason=f"{reason} Redundant in specialty with existing "
+                        f"worker {redundant_with}; reinforced instead of birthing a clone.",
+                        source_worker_ids=aggregate.workers,
+                    )
+                )
+                continue
             bridge = _with_routing_summary(
                 WorkerCard(
                     id=bridge_id,
@@ -557,6 +607,45 @@ def _overlaps_existing_worker(
         if len(candidate & worker_files) / len(union) >= threshold:
             return True
     return False
+
+
+def _is_redundant_with_existing(
+    candidate_description: str,
+    candidate_files: list[str],
+    workers: list[WorkerCard],
+    reasoner: EvolutionReasoner | None,
+) -> str | None:
+    """Returns the existing worker's id this birth candidate duplicates in
+    *specialty* (per reasoner.should_merge -- the same question already
+    asked for two existing overlapping workers, just asked here before
+    this candidate is even born), or None. _overlaps_existing_worker above
+    catches file-set duplication; this catches the case that slipped past
+    it on a real qibo run: a candidate with a genuinely distinct file set
+    whose routing_summary still reads as the same specialty as an existing
+    sibling worker's, so the Orchestrator keeps selecting both. Only asks
+    about workers that share at least one file with the candidate -- a
+    cheap structural prefilter before spending an LLM call, same shape as
+    every other file-overlap gate in this module. No reasoner means no
+    LLM-judged veto is possible (same rule the structural-only gates
+    already follow), so this returns None.
+    """
+    if reasoner is None:
+        return None
+    candidate_files_set = set(candidate_files)
+    for worker in workers:
+        if not (candidate_files_set & set(worker.files)):
+            continue
+        worker_summary = (
+            worker.routing_summary or "; ".join(worker.responsibilities[:2]) or worker.name
+        )
+        if reasoner.should_merge(
+            worker_a_id="<candidate>",
+            worker_a_summary=candidate_description,
+            worker_b_id=worker.id,
+            worker_b_summary=worker_summary,
+        ):
+            return worker.id
+    return None
 
 
 def _is_worker_healthy(
