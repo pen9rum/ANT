@@ -1198,6 +1198,91 @@ def test_final_evidence_pool_is_deduped_even_without_any_inheritance_evidence(
     )
 
 
+def test_closure_check_survives_a_partial_verdict_creating_a_gap_node(tmp_path: Path) -> None:
+    # Regression test: a "partial" closure verdict inserts a new gap node
+    # straight into graph.nodes (local.py's closure-check block) while
+    # that same block is iterating graph.nodes.values() -- this used to
+    # raise "RuntimeError: dictionary changed size during iteration",
+    # confirmed live on a real retry_from_trajectory run against seaborn
+    # (a parent whose only child resolved this round, closure check
+    # returned partial). A single leaf resolving into a parent whose
+    # closure check comes back partial is enough to reproduce it -- the
+    # crash happens on the iterator's very next() call after the
+    # in-progress iteration mutates the dict, regardless of how many
+    # other nodes are also present.
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "mod.py").write_text(
+        "def target_function():\n    pass\n", encoding="utf-8"
+    )
+    worker = WorkerCard(
+        id="worker-src",
+        territory_id="src",
+        name="src",
+        root="src",
+        searchable_terms=["target_function"],
+        files=["src/mod.py"],
+    )
+    seeded_graph = NeedGraph(
+        nodes={
+            "root": NeedNode(
+                need_id="root",
+                need="root question",
+                children=["leaf"],
+                detail=UnresolvedNeed(description="root question"),
+            ),
+            "leaf": NeedNode(
+                need_id="leaf",
+                need="Where is target_function defined?",
+                detail=UnresolvedNeed(description="Where is target_function defined?"),
+            ),
+        }
+    )
+
+    class _ResolvesLeafThenPartialsRootReasoner(_PassthroughLookupsReasoner):
+        def observe(self, *, question, worker_id, territory_id, evidence):
+            return WorkerObservation(worker_id=worker_id, territory_id=territory_id)
+
+        def check_need_resolution(self, *, need, new_evidence, question):
+            if need.description == "root question":
+                return NeedResolution(
+                    status="partial",
+                    refined_need=UnresolvedNeed(description="a refined follow-up need"),
+                )
+            return NeedResolution(status="resolved" if new_evidence else "unresolved")
+
+        def plan_round(
+            self,
+            *,
+            question,
+            graph,
+            resolution_results,
+            evidence,
+            workers,
+            memory_hints,
+            frontier,
+            observed_needs,
+            incomplete_parents,
+            cross_repo_experience,
+            validation_feedback="",
+            repair_guidance="",
+        ):
+            return RoundPlan(assignments={need_id: [workers[0].id] for need_id in frontier.ready})
+
+    state = LocalCoordinator(
+        tmp_path, [worker], reasoner=_ResolvesLeafThenPartialsRootReasoner()
+    ).ask(
+        "root question",
+        max_rounds=1,
+        initial_graph=seeded_graph,
+    )
+
+    assert state.rounds, "expected round 0 to actually run and hit the closure check"
+    assert "root" in state.final_need_graph
+    assert any(
+        need_id.startswith("root-gap-") for need_id in state.final_need_graph
+    ), "expected the partial verdict to have created a gap node"
+
+
 def test_ask_with_seeded_initial_state_only_works_the_unresolved_part(tmp_path: Path) -> None:
     # LocalCoordinator.ask()'s new initial_graph/initial_evidence params
     # (added for retry_from_trajectory) must be genuinely usable standalone

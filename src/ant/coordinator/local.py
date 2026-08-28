@@ -527,7 +527,16 @@ class LocalCoordinator:
             # assignable, so without this it could sit forever with no
             # path forward once its (incomplete) children were all done.
             new_incomplete_parents: list[str] = []
-            for node in graph.nodes.values():
+            # list(...) snapshot: a "partial" verdict below adds a new gap
+            # node straight into graph.nodes mid-loop (line ~554), which
+            # would otherwise raise "dictionary changed size during
+            # iteration" -- confirmed live on a real retry_from_trajectory
+            # run. The snapshot is correct, not just crash-avoidance: a
+            # gap node created this pass is freshly unresolved with no
+            # children of its own, so it has nothing for this same
+            # closure-check pass to evaluate anyway -- it's picked up on
+            # its own merits in a later round once it might have children.
+            for node in list(graph.nodes.values()):
                 if node.need_id in recovery.abandoned_node_ids:
                     continue
                 if (
