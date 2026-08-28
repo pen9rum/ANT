@@ -1136,14 +1136,38 @@ def _compound_parts(term: str) -> set[str]:
     return {part for part in term.split("_") if len(part) > 2}
 
 
+# check_need_resolution's refined_need.missing/description are free text
+# the LLM is explicitly asked to write more specifically each round, with
+# no length control -- confirmed on a real qibo trace: round over round
+# this grew to 800+ characters of accumulated prose (a full "here's what
+# we now know, here's what's still unclear" paragraph, once even a
+# stringified list of sub-questions) becoming the literal search()/
+# dense_search() query text. Unweighted BM25 term-overlap scoring is
+# diluted, not sharpened, by hundreds of words of narrative -- the
+# meaningful signal (suggested_terms, relevant_symbols, a handful of the
+# actual gap) gets buried in it. Capped here, at the point this text
+# becomes a search query, not upstream: the full text is still what
+# plan_round's prompt shows the Orchestrator (see _node_prompt_line),
+# where verbose reasoning is exactly what's wanted.
+_QUERY_SNIPPET_MAX_CHARS = 200
+
+
+def _query_snippet(text: str) -> str:
+    text = text.strip()
+    if len(text) <= _QUERY_SNIPPET_MAX_CHARS:
+        return text
+    truncated = text[:_QUERY_SNIPPET_MAX_CHARS]
+    return truncated.rsplit(" ", 1)[0] if " " in truncated else truncated
+
+
 def _need_query_text(need: UnresolvedNeed | None) -> str:
     if need is None:
         return ""
     return " ".join(
         part
         for part in [
-            need.missing,
-            need.description,
+            _query_snippet(need.missing),
+            _query_snippet(need.description),
             "" if need.need_type == "unknown" else need.need_type,
             " ".join(need.relevant_symbols),
             " ".join(need.suggested_terms),

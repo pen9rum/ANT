@@ -73,6 +73,33 @@ def test_query_from_needs_keeps_the_original_question_as_a_stable_anchor() -> No
     assert "Seed handling implementation." in query
 
 
+def test_query_from_needs_caps_a_verbose_missing_and_description_field() -> None:
+    # Regression test: check_need_resolution's refined_need.missing/
+    # description are free text the LLM is asked to write more
+    # specifically each round, with no length control -- confirmed on a
+    # real qibo trace, this became an 800+ character narrative paragraph
+    # (once even a stringified list of sub-questions) as the literal
+    # search()/dense_search() query text, round over round, diluting
+    # unweighted BM25 term-overlap scoring instead of sharpening it.
+    long_missing = (
+        "We now know FALQON is a subclass of QAOA, but it is still unclear which "
+        "methods, if any, FALQON or any other QAOA subclasses override or extend. "
+        "There is also still no information about other possible subclasses of QAOA "
+        "or their method specializations, and this paragraph keeps going well past "
+        "two hundred characters on purpose to prove the cap actually bites."
+    )
+    assert len(long_missing) > 200
+    need = UnresolvedNeed(description="short description", missing=long_missing)
+
+    query = LocalCoordinator._query_from_needs("question", [need])
+
+    assert long_missing not in query
+    assert "short description" in query
+    # The missing text's own contribution is capped well below its
+    # original length -- not just "somewhat shorter", genuinely bounded.
+    assert len(query) < len(long_missing)
+
+
 def test_routing_matcher_avoids_arbitrary_substrings() -> None:
     assert not _matches_term("into", {"quantum_info"})
     assert not _matches_term("fusedgate", {"gate"})
