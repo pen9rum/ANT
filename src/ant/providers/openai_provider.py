@@ -661,6 +661,21 @@ class OpenAIProvider:
         # empirically that a score-ranked cap discards real evidence on
         # wide-scope questions), each individually truncated for prompt
         # size instead.
+        #
+        # worker_lines also shows a handful of each worker's own
+        # searchable_terms, not just routing_summary. Confirmed missing on
+        # a real qibo trace: a worker's searchable_terms contained "bloch",
+        # "sphere", "paint_world_map" -- an exact lexical hit for a
+        # question about Bloch sphere visualization -- but its
+        # routing_summary (an LLM-compressed natural-language sentence)
+        # read as "clarifies classifier concepts, usage examples, and test
+        # or algorithm gaps", with zero surface overlap with the question.
+        # The Orchestrator never assigned that worker directly across 5 of
+        # 6 rounds; only global_fallback's repo-wide search (a last-resort
+        # recovery tactic, not normal routing) found it, on the final
+        # round. routing_summary's own compression is exactly what drops
+        # the literal terms an Orchestrator's own lexical judgment could
+        # otherwise catch.
         graph_lines = [_node_prompt_line(node) for node in graph.nodes.values()]
         resolution_lines = [
             f"[{need_id}] status={resolution.status}"
@@ -678,6 +693,11 @@ class OpenAIProvider:
         ]
         worker_lines = [
             f"- {worker.id}: {worker.routing_summary or '(no routing summary)'}"
+            + (
+                f"\n  terms: {', '.join(worker.searchable_terms[:12])}"
+                if worker.searchable_terms
+                else ""
+            )
             + (f"\n  memory: {memory_hints[worker.id]}" if worker.id in memory_hints else "")
             for worker in workers
         ]

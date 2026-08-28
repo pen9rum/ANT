@@ -185,6 +185,50 @@ def test_plan_round_parses_graph_updates_assignments_and_special_tactics() -> No
     assert plan.special_tactics == {"n3": "temporary_bridge"}
 
 
+def test_plan_round_shows_worker_searchable_terms_not_just_routing_summary() -> None:
+    # Regression test for a real qibo trace: a worker's searchable_terms
+    # contained exact lexical hits for the question ("bloch", "sphere",
+    # "paint_world_map") that its own LLM-compressed routing_summary
+    # dropped entirely -- the Orchestrator never assigned that worker
+    # directly for 5 of 6 rounds because it had no way to see those terms.
+    provider = OpenAIProvider(model="gpt-4.1")
+    captured: dict[str, str] = {}
+
+    def fake_responses_json(prompt: str, max_output_tokens: int = 512):
+        captured["prompt"] = prompt
+        return type("Result", (), {"text": "{}"})()
+
+    provider.responses_json = fake_responses_json  # type: ignore[method-assign]
+    workers = [
+        WorkerCard(
+            id="worker-examples",
+            territory_id="examples",
+            name="examples",
+            root="examples",
+            routing_summary="clarifies classifier concepts, usage examples, and test or "
+            "algorithm gaps",
+            searchable_terms=["classify", "bloch", "sphere", "paint_world_map"],
+        )
+    ]
+
+    provider.plan_round(
+        question="How does Qibo render Bloch sphere visualizations?",
+        graph=NeedGraph(nodes={}),
+        resolution_results={},
+        evidence=[],
+        workers=workers,
+        memory_hints={},
+        frontier=FrontierResult(ready=[], blocked=[], stuck_subgraphs=[]),
+        observed_needs=[],
+        incomplete_parents=[],
+        cross_repo_experience=[],
+    )
+
+    assert "bloch" in captured["prompt"]
+    assert "sphere" in captured["prompt"]
+    assert "paint_world_map" in captured["prompt"]
+
+
 def test_plan_round_drops_an_assignment_to_a_worker_id_not_in_the_candidate_list() -> None:
     provider = OpenAIProvider(model="gpt-4.1")
     provider.responses_json = lambda prompt, max_output_tokens=512: type(  # type: ignore[method-assign]
