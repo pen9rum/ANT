@@ -7,6 +7,7 @@ from pathlib import Path
 import typer
 
 from ant.coordinator import LocalCoordinator
+from ant.domain import EvidenceState
 from ant.environment import RepoEnvironment
 from ant.evaluation import (
     build_report,
@@ -247,6 +248,41 @@ def evolve(
         min_episode_count=min_episode_count,
     )
     typer.echo(result.model_dump_json(indent=2))
+
+
+@app.command()
+def retry(
+    trace_path: Path,
+    repo: Path = Path("."),
+    index_path: Path = INDEX_OPTION,
+    max_rounds: int = MAX_ROUNDS_OPTION,
+    synthesize: str = SYNTHESIZE_OPTION,
+) -> None:
+    """Task-conditioned ("fast") retry of one finished task, from its own
+    trajectory -- not colony reorganization. `trace_path` is a saved
+    EvidenceState JSON (e.g. `ant ask ... > trace.json`). Repairs an
+    ephemeral, task-local copy of the prior attempt's Need Graph from what
+    it actually tried and found (never a reference answer or judge score)
+    and retries the same question. Unlike `ask`, deliberately never calls
+    record_task_memory/record_global_experience_safe/store.save_trace --
+    nothing about invoking this touches persistent colony/global memory,
+    even by omission-prone accident.
+    """
+    prior_state = EvidenceState.model_validate_json(trace_path.read_text(encoding="utf-8"))
+    if synthesize != "openai":
+        raise typer.BadParameter(
+            "retry requires --synthesize openai: FastEvolutionReasoner.propose_repair "
+            "has no heuristic/mock fallback."
+        )
+    workers = IndexStore(index_path).load_workers()
+    provider = OpenAIProvider()
+    coordinator = LocalCoordinator(
+        repo.resolve(), workers, synthesizer=provider, index_path=index_path
+    )
+    state = coordinator.retry_from_trajectory(
+        prior_state, fast_reasoner=provider, max_rounds=max_rounds
+    )
+    typer.echo(json.dumps(state.model_dump(), indent=2))
 
 
 @app.command()

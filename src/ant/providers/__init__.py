@@ -2,6 +2,7 @@ from ant.providers.base import (
     AnswerSynthesizer,
     CardGenerator,
     EvolutionReasoner,
+    FastEvolutionReasoner,
     UsageReporter,
     WorkerReasoner,
 )
@@ -12,6 +13,7 @@ __all__ = [
     "AnswerSynthesizer",
     "CardGenerator",
     "EvolutionReasoner",
+    "FastEvolutionReasoner",
     "MockLLMProvider",
     "OpenAIProvider",
     "OpenAISettings",

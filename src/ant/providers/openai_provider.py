@@ -21,7 +21,10 @@ from ant.domain import (
     NeedResolution,
     NodeExecutionTrace,
     PlanningRound,
+    RepairAction,
+    RepairPlan,
     RoundPlan,
+    TaskTrajectoryPackage,
     TokenUsage,
     UnresolvedNeed,
     WorkerCard,
@@ -646,6 +649,7 @@ class OpenAIProvider:
         incomplete_parents: list[str],
         cross_repo_experience: list[str],
         validation_feedback: str = "",
+        repair_guidance: str = "",
     ) -> RoundPlan:
         # The single per-round Orchestrator call: replaces select_workers/
         # decide_local_action and the hand-coded escalation ladder
@@ -693,6 +697,7 @@ class OpenAIProvider:
             if validation_feedback
             else ""
         )
+        repair_block = f"\n{repair_guidance}\n" if repair_guidance else ""
         prompt = (
             "You are the Orchestrator for one round of a codebase-QA "
             "task's Need Graph. You decide exactly three things, and "
@@ -729,6 +734,7 @@ class OpenAIProvider:
             "add more children under it via graph_updates (or otherwise "
             "revise it), it is not directly assignable.\n"
             f"{feedback_block}"
+            f"{repair_block}"
             f"Question: {question}\n"
             f"Current graph:\n{chr(10).join(graph_lines) or '(empty)'}\n"
             f"This round's resolution results:\n"
@@ -761,6 +767,88 @@ class OpenAIProvider:
         result = self.responses_json(prompt, max_output_tokens=2048)
         data = _loads_json_object(result.text)
         return _parse_round_plan(data, graph=graph, workers=workers)
+
+    def propose_repair(self, *, package: TaskTrajectoryPackage) -> RepairPlan:
+        # Task-conditioned ("fast") evolution's one reasoning call --
+        # judges a single finished task's own trajectory, never a
+        # reference answer or judge score (package carries neither). See
+        # FastEvolutionReasoner's docstring for how this differs from
+        # EvolutionReasoner.decide_episode_action (that one only acts on
+        # patterns aggregated across many tasks and mutates the persistent
+        # colony; this is ephemeral and task-scoped).
+        node_lines = []
+        for node in package.stuck_nodes:
+            node_lines.append(
+                f"[{node.need_id}] {node.need} (resolution={node.resolution}"
+                + (", ABANDONED" if node.is_abandoned else "")
+                + (f", stuck_episode={node.stuck_episode_id}" if node.stuck_episode_id else "")
+                + ")\n"
+                f"  depends_on={node.depends_on} children={node.children}\n"
+                f"  missing: {node.missing or '(unspecified)'}\n"
+                f"  suggested_terms: {', '.join(node.suggested_terms) or '(none)'}\n"
+                f"  suggested_territories: {', '.join(node.suggested_territories) or '(none)'}\n"
+                f"  tried workers: {', '.join(node.tried_worker_ids) or '(none)'}\n"
+                f"  tried special tactics: {', '.join(node.tried_special_tactics) or '(none)'}\n"
+                f"  no-progress executions: {node.no_progress_execution_count}\n"
+                f"  evidence already gathered: "
+                + ("; ".join(node.evidence_claims[:8]) or "(none)")
+            )
+        decomposition_lines = []
+        for round_index, delta in enumerate(package.graph_decomposition_log):
+            if not (
+                delta.created_nodes
+                or delta.dependency_changes
+                or delta.created_children
+                or delta.closure_results
+            ):
+                continue
+            decomposition_lines.append(
+                f"round {round_index}: created={delta.created_nodes} "
+                f"dependency_changes={delta.dependency_changes} "
+                f"new_children={delta.created_children} closed={delta.closure_results}"
+            )
+        prompt = (
+            "A prior attempt at answering this codebase question got "
+            "stuck or was abandoned on some of its sub-needs. Propose an "
+            "ephemeral, task-local repair plan for a SECOND attempt at "
+            "this exact question -- this is not colony reorganization, "
+            "nothing you propose is persistent or applies to any other "
+            "question.\n"
+            "The candidate answer produced by the prior attempt is given "
+            "below as CONTEXT ONLY -- it is not a correct-answer key, "
+            "there is no reference answer or score available to you, and "
+            "you must not judge whether it was right. Reason only from "
+            "what the trajectory below shows was tried and what it "
+            "actually found.\n"
+            f"Question: {package.question}\n"
+            f"Prior attempt's answer (context only, not supervision): "
+            f"{package.prior_answer or '(none produced)'}\n"
+            f"Stuck/unresolved/abandoned needs:\n"
+            f"{chr(10).join(node_lines) or '(none -- nothing was stuck)'}\n"
+            f"How the graph was decomposed across rounds:\n"
+            f"{chr(10).join(decomposition_lines) or '(no structural changes)'}\n"
+            "Return JSON with key actions: a list of objects, each with "
+            "kind (one of reuse_assignment, replace_assignment, "
+            "merge_needs, redecompose, change_dependency, "
+            "form_local_bridge, force_global_search), need_id (which "
+            "stuck need this targets), and as applicable: worker_ids "
+            "(list of worker ids -- for replace_assignment, suggest a "
+            "DIFFERENT worker than 'tried workers' already tried and "
+            "failed; for reuse_assignment/form_local_bridge, which "
+            "worker(s)), merge_with (list of other need_ids to treat as "
+            "the same underlying gap, for merge_needs), new_depends_on "
+            "(list of need_ids, for change_dependency -- only if the "
+            "current dependency is genuinely wrong, e.g. blocking on "
+            "something already resolved elsewhere or an unnecessary "
+            "edge), and rationale (one sentence, referencing what the "
+            "trajectory actually showed). Return an empty actions list if "
+            "carrying forward the prior state and retrying as-is is "
+            "already the right call -- do not invent an action just to "
+            "have one."
+        )
+        result = self.responses_json(prompt, max_output_tokens=1536)
+        data = _loads_json_object(result.text)
+        return _parse_repair_plan(data)
 
     def summarize_task_experience(
         self,
@@ -1261,6 +1349,62 @@ def _parse_round_plan(
         special_tactics=special_tactics,
         resolved_observed_need_indices=resolved_observed_need_indices,
     )
+
+
+_REPAIR_ACTION_KINDS = {
+    "reuse_assignment",
+    "replace_assignment",
+    "merge_needs",
+    "redecompose",
+    "change_dependency",
+    "form_local_bridge",
+    "force_global_search",
+}
+
+
+def _parse_repair_plan(data: dict) -> RepairPlan:
+    """Same tolerant-parsing shape as _parse_round_plan: an individual
+    malformed action is dropped, not the whole plan. A completely
+    malformed/empty response degrades to RepairPlan(actions=[]) -- a valid
+    "just retry with carried-forward state" verdict, not an error (see
+    propose_repair's docstring)."""
+    actions: list[RepairAction] = []
+    raw_actions = data.get("actions")
+    if not isinstance(raw_actions, list):
+        return RepairPlan(actions=actions)
+    for raw_action in raw_actions:
+        if not isinstance(raw_action, dict):
+            continue
+        kind = raw_action.get("kind")
+        need_id = raw_action.get("need_id")
+        if kind not in _REPAIR_ACTION_KINDS or not isinstance(need_id, str) or not need_id:
+            continue
+        raw_worker_ids = raw_action.get("worker_ids")
+        raw_merge_with = raw_action.get("merge_with")
+        raw_new_depends_on = raw_action.get("new_depends_on")
+        actions.append(
+            RepairAction(
+                kind=kind,
+                need_id=need_id,
+                worker_ids=(
+                    [item for item in raw_worker_ids if isinstance(item, str)]
+                    if isinstance(raw_worker_ids, list)
+                    else []
+                ),
+                merge_with=(
+                    [item for item in raw_merge_with if isinstance(item, str)]
+                    if isinstance(raw_merge_with, list)
+                    else []
+                ),
+                new_depends_on=(
+                    [item for item in raw_new_depends_on if isinstance(item, str)]
+                    if isinstance(raw_new_depends_on, list)
+                    else None
+                ),
+                rationale=str(raw_action.get("rationale") or ""),
+            )
+        )
+    return RepairPlan(actions=actions)
 
 
 def _parse_graph_update(raw_node: object) -> NeedNode | None:

@@ -17,6 +17,8 @@ from ant.domain import (
     NeedGraph,
     NeedNode,
     NeedResolution,
+    RepairAction,
+    RepairPlan,
     RoundPlan,
     UnresolvedNeed,
     WorkerCard,
@@ -163,6 +165,7 @@ def test_cross_repo_experience_reaches_plan_round(tmp_path: Path) -> None:
             incomplete_parents,
             cross_repo_experience,
             validation_feedback="",
+            repair_guidance="",
         ):
             received.append(cross_repo_experience)
             return RoundPlan()
@@ -255,6 +258,7 @@ class _PassthroughLookupsReasoner:
         incomplete_parents,
         cross_repo_experience,
         validation_feedback="",
+        repair_guidance="",
     ):
         # TODO(Phase 7): every scenario reasoner below this class exercises
         # the old routing/escalation-specific ask() mechanics, which the
@@ -714,6 +718,7 @@ def test_plan_round_accepts_an_acyclic_plan_without_retrying() -> None:
             incomplete_parents,
             cross_repo_experience,
             validation_feedback="",
+            repair_guidance="",
         ):
             calls.append(validation_feedback)
             return RoundPlan(assignments={"n1": ["worker-a"]})
@@ -760,6 +765,7 @@ def test_plan_round_rejects_a_cyclic_plan_and_retries_with_the_cycle_described()
             incomplete_parents,
             cross_repo_experience,
             validation_feedback="",
+            repair_guidance="",
         ):
             calls.append(validation_feedback)
             if not validation_feedback:
@@ -828,6 +834,7 @@ def test_plan_round_accepts_the_retry_even_if_it_is_still_cyclic() -> None:
             incomplete_parents,
             cross_repo_experience,
             validation_feedback="",
+            repair_guidance="",
         ):
             calls.append(validation_feedback)
             return RoundPlan(
@@ -893,6 +900,7 @@ class _AlwaysStuckAndAlwaysProposesBridgeReasoner(_PassthroughLookupsReasoner):
         incomplete_parents,
         cross_repo_experience,
         validation_feedback="",
+        repair_guidance="",
     ):
         assignments = {need_id: [workers[0].id] for need_id in frontier.ready}
         special_tactics = {
@@ -1009,6 +1017,7 @@ class _DecomposesRootIntoTwoChildrenReasoner(_PassthroughLookupsReasoner):
         incomplete_parents,
         cross_repo_experience,
         validation_feedback="",
+        repair_guidance="",
     ):
         self._round += 1
         if self._round == 1:
@@ -1103,6 +1112,7 @@ class _AssignsSameWorkerToTwoIndependentNeedsReasoner(_PassthroughLookupsReasone
         incomplete_parents,
         cross_repo_experience,
         validation_feedback="",
+        repair_guidance="",
     ):
         worker_id = workers[0].id
         if not self._added_aux_need:
@@ -1159,3 +1169,224 @@ def test_final_evidence_pool_is_deduped_even_without_any_inheritance_evidence(
     assert len(keys) == len(set(keys)), (
         f"duplicate (path, lines, quote) evidence reached synthesis: {keys}"
     )
+
+
+def test_ask_with_seeded_initial_state_only_works_the_unresolved_part(tmp_path: Path) -> None:
+    # LocalCoordinator.ask()'s new initial_graph/initial_evidence params
+    # (added for retry_from_trajectory) must be genuinely usable standalone
+    # too: seeding an already-resolved leaf alongside an unresolved one
+    # dependent on it should never re-assign the resolved one (nothing to
+    # do -- it's not in the ready frontier), and the seeded evidence must
+    # survive to the final state untouched.
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "mod.py").write_text(
+        "def target_function():\n    pass\n", encoding="utf-8"
+    )
+    worker = WorkerCard(
+        id="worker-src",
+        territory_id="src",
+        name="src",
+        root="src",
+        searchable_terms=["target_function"],
+        files=["src/mod.py"],
+    )
+    seeded_evidence = [
+        Evidence(
+            path="root.py", line_start=1, line_end=1, quote="x", reason="from prior attempt"
+        )
+    ]
+    seeded_graph = NeedGraph(
+        nodes={
+            "root": NeedNode(
+                need_id="root",
+                need="root question",
+                resolution="resolved",
+                detail=UnresolvedNeed(description="root question"),
+            ),
+            "child": NeedNode(
+                need_id="child",
+                need="Where is target_function defined?",
+                depends_on=["root"],
+                detail=UnresolvedNeed(description="Where is target_function defined?"),
+            ),
+        }
+    )
+    assigned_need_ids: list[str] = []
+
+    class _RecordsAssignmentsReasoner(_PassthroughLookupsReasoner):
+        def observe(self, *, question, worker_id, territory_id, evidence):
+            return WorkerObservation(worker_id=worker_id, territory_id=territory_id)
+
+        def check_need_resolution(self, *, need, new_evidence, question):
+            return NeedResolution(status="resolved" if new_evidence else "unresolved")
+
+        def plan_round(
+            self,
+            *,
+            question,
+            graph,
+            resolution_results,
+            evidence,
+            workers,
+            memory_hints,
+            frontier,
+            observed_needs,
+            incomplete_parents,
+            cross_repo_experience,
+            validation_feedback="",
+            repair_guidance="",
+        ):
+            assigned_need_ids.extend(frontier.ready)
+            return RoundPlan(assignments={need_id: [workers[0].id] for need_id in frontier.ready})
+
+    state = LocalCoordinator(tmp_path, [worker], reasoner=_RecordsAssignmentsReasoner()).ask(
+        "root question",
+        max_rounds=2,
+        initial_graph=seeded_graph,
+        initial_evidence=seeded_evidence,
+    )
+
+    assert "root" not in assigned_need_ids
+    assert "child" in assigned_need_ids
+    assert any(item.reason == "from prior attempt" for item in state.evidence)
+
+
+class _AlwaysUnresolvedSingleWorkerReasoner(_PassthroughLookupsReasoner):
+    """Produces a real, reproducible abandonment: assigns the only worker
+    it knows about to whatever's ready/stuck every round, but never
+    accepts any evidence as resolving anything -- same shape as
+    _AlwaysStuckAndAlwaysProposesBridgeReasoner but without proposing
+    special tactics, so root is abandoned purely by incomplete-parent-style
+    non-progress (simpler prior trajectory to retry from)."""
+
+    def observe(self, *, question, worker_id, territory_id, evidence):
+        return WorkerObservation(worker_id=worker_id, territory_id=territory_id)
+
+    def check_need_resolution(self, *, need, new_evidence, question):
+        return NeedResolution(status="unresolved")
+
+    def plan_round(
+        self,
+        *,
+        question,
+        graph,
+        resolution_results,
+        evidence,
+        workers,
+        memory_hints,
+        frontier,
+        observed_needs,
+        incomplete_parents,
+        cross_repo_experience,
+        validation_feedback="",
+        repair_guidance="",
+    ):
+        assignments = {need_id: [workers[0].id] for need_id in frontier.ready}
+        special_tactics = {
+            need_id: "temporary_bridge"
+            for group in frontier.stuck_subgraphs
+            for need_id in group
+        }
+        return RoundPlan(assignments=assignments, special_tactics=special_tactics)
+
+
+class _SuggestsReplacementWorkerReasoner:
+    """Stub FastEvolutionReasoner: always proposes replacing whichever
+    node is stuck with worker-fixed, regardless of package content -- this
+    test only needs to prove the plan reaches and is applied by
+    retry_from_trajectory, not exercise real repair judgment (that's
+    OpenAIProvider.propose_repair's job)."""
+
+    def propose_repair(self, *, package):
+        stuck_id = package.stuck_nodes[0].need_id if package.stuck_nodes else "root"
+        return RepairPlan(
+            actions=[
+                RepairAction(
+                    kind="replace_assignment",
+                    need_id=stuck_id,
+                    worker_ids=["worker-fixed"],
+                    rationale="tried workers failed; try a different one",
+                )
+            ]
+        )
+
+
+class _ResolvesOnlyWhenGuidanceMentionsFixedWorkerReasoner(_PassthroughLookupsReasoner):
+    """The retry's own WorkerReasoner: only accepts real evidence as
+    resolving a need (unlike the original attempt's always-unresolved
+    reasoner), and only routes to worker-fixed when repair_guidance
+    actually mentions it -- proves retry_from_trajectory's repair_guidance
+    plumbing genuinely reaches plan_round(), not just that a retry
+    happens to succeed for some unrelated reason."""
+
+    def observe(self, *, question, worker_id, territory_id, evidence):
+        return WorkerObservation(worker_id=worker_id, territory_id=territory_id)
+
+    def check_need_resolution(self, *, need, new_evidence, question):
+        return NeedResolution(status="resolved" if new_evidence else "unresolved")
+
+    def plan_round(
+        self,
+        *,
+        question,
+        graph,
+        resolution_results,
+        evidence,
+        workers,
+        memory_hints,
+        frontier,
+        observed_needs,
+        incomplete_parents,
+        cross_repo_experience,
+        validation_feedback="",
+        repair_guidance="",
+    ):
+        assignments = {}
+        for need_id in frontier.ready:
+            if "worker-fixed" in repair_guidance:
+                assignments[need_id] = ["worker-fixed"]
+            else:
+                assignments[need_id] = [workers[0].id]
+        return RoundPlan(assignments=assignments)
+
+
+def test_retry_from_trajectory_resolves_a_need_the_original_attempt_abandoned(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "broken.py").write_text("def unrelated():\n    pass\n", encoding="utf-8")
+    (tmp_path / "src" / "fixed.py").write_text(
+        "def target_function():\n    pass\n", encoding="utf-8"
+    )
+    worker_broken = WorkerCard(
+        id="worker-broken", territory_id="broken", name="broken", root="src",
+        files=["src/broken.py"],
+    )
+    worker_fixed = WorkerCard(
+        id="worker-fixed",
+        territory_id="fixed",
+        name="fixed",
+        root="src",
+        searchable_terms=["target_function"],
+        files=["src/fixed.py"],
+    )
+    question = "Where is target_function defined?"
+
+    original = LocalCoordinator(
+        tmp_path, [worker_broken], reasoner=_AlwaysUnresolvedSingleWorkerReasoner()
+    ).ask(question, max_rounds=10)
+
+    assert "root" in original.final_recovery_state.abandoned_node_ids, (
+        "test setup assumption: the original attempt must actually abandon root"
+    )
+
+    retried = LocalCoordinator(
+        tmp_path,
+        [worker_broken, worker_fixed],
+        reasoner=_ResolvesOnlyWhenGuidanceMentionsFixedWorkerReasoner(),
+    ).retry_from_trajectory(
+        original, fast_reasoner=_SuggestsReplacementWorkerReasoner(), max_rounds=3
+    )
+
+    assert retried.final_need_graph["root"].resolution == "resolved"
+    assert "root" not in retried.final_recovery_state.abandoned_node_ids

@@ -9,7 +9,9 @@ from ant.domain import (
     NeedGraph,
     NeedResolution,
     PlanningRound,
+    RepairPlan,
     RoundPlan,
+    TaskTrajectoryPackage,
     UnresolvedNeed,
     WorkerCard,
     WorkerObservation,
@@ -102,6 +104,7 @@ class WorkerReasoner(Protocol):
         incomplete_parents: list[str],
         cross_repo_experience: list[str],
         validation_feedback: str = "",
+        repair_guidance: str = "",
     ) -> RoundPlan:
         """The single per-round Orchestrator planning call: replaces
         select_workers/decide_local_action and the hand-coded escalation
@@ -154,6 +157,15 @@ class WorkerReasoner(Protocol):
         presumptively a planning mistake -- see
         ant.coordinator.graph_analyzer.find_cycles -- not evidence the
         underlying needs are genuinely circular).
+
+        `repair_guidance` is "" on every ordinary ask() call; only
+        LocalCoordinator.retry_from_trajectory (task-conditioned/"fast"
+        evolution) sets it, to the advisory portion of a RepairPlan
+        rendered as text (see ant.coordinator.repair). It is a suggestion
+        from a repair analysis of this exact question's own prior failed
+        attempt, not an instruction this call is required to follow --
+        same status as cross_repo_experience, just task-scoped instead of
+        cross-repo.
         """
         ...
 
@@ -236,6 +248,34 @@ class EvolutionReasoner(Protocol):
         EvolutionReasoner, not a separate CardGenerator -- one concrete
         provider implements both protocols; this method is just declared
         on whichever protocol each call site already has in hand.
+        """
+        ...
+
+
+class FastEvolutionReasoner(Protocol):
+    """Task-conditioned ("fast") evolution: judges a single finished
+    task's own trajectory (see ant.coordinator.repair.
+    assemble_trajectory_package) and proposes an *ephemeral*,
+    task-local repair -- the opposite timescale from EvolutionReasoner
+    above, which only ever acts on patterns aggregated across many
+    finished tasks and mutates the persistent colony. Nothing this
+    protocol's caller does writes to IndexStore/ColonyMemoryStore/
+    GlobalMemoryStore; a RepairPlan only ever seeds one more
+    LocalCoordinator.ask() call for the *same* question.
+    """
+
+    def propose_repair(self, *, package: TaskTrajectoryPackage) -> RepairPlan:
+        """Reasons only from `package` -- the prior attempt's own
+        trajectory (stuck nodes, what was tried and failed, evidence
+        gathered vs. missing, how the graph was decomposed). Never given a
+        reference answer or judge score; `package.prior_answer` is context
+        only, not a correctness signal. Returns a RepairPlan whose actions
+        are one of: reuse_assignment, replace_assignment, merge_needs,
+        redecompose, change_dependency, form_local_bridge,
+        force_global_search (see RepairAction's docstring and
+        LocalCoordinator.retry_from_trajectory for how each is applied).
+        An empty RepairPlan (no actions) is a valid "just retry with
+        carried-forward state, no extra guidance" verdict, not an error.
         """
         ...
 

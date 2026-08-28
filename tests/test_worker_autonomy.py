@@ -347,6 +347,7 @@ class _DenylistReasoner:
         incomplete_parents,
         cross_repo_experience,
         validation_feedback="",
+        repair_guidance="",
     ):
         raise AssertionError("this test does not exercise plan_round()")
 

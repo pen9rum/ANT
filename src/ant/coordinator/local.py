@@ -6,6 +6,12 @@ from pathlib import Path
 from typing import cast
 
 from ant.coordinator.graph_analyzer import compute_frontier, find_cycles
+from ant.coordinator.repair import (
+    assemble_trajectory_package,
+    build_retry_starting_state,
+    render_repair_guidance,
+    resolve_repair_plan,
+)
 from ant.domain import (
     AbsenceProof,
     Evidence,
@@ -28,7 +34,13 @@ from ant.domain import (
 )
 from ant.indexing.cards import template_routing_summary
 from ant.memory import MemoryRoute
-from ant.providers import AnswerSynthesizer, MockLLMProvider, UsageReporter, WorkerReasoner
+from ant.providers import (
+    AnswerSynthesizer,
+    FastEvolutionReasoner,
+    MockLLMProvider,
+    UsageReporter,
+    WorkerReasoner,
+)
 from ant.retrieval import STOP_WORDS, TOKEN_RE, extract_terms, is_stem_match, score_evidence
 from ant.scoring_config import DEFAULT_SCORING_CONFIG
 from ant.tools import LocalSearchTool
@@ -186,23 +198,46 @@ class LocalCoordinator:
         # reaching for either memory store directly.
         self.cross_repo_experience = cross_repo_experience or []
 
-    def ask(self, question: str, max_rounds: int = 6) -> EvidenceState:
+    def ask(
+        self,
+        question: str,
+        max_rounds: int = 6,
+        initial_graph: NeedGraph | None = None,
+        initial_evidence: list[Evidence] | None = None,
+        initial_recovery: RecoveryState | None = None,
+        repair_guidance: str = "",
+    ) -> EvidenceState:
         # max_rounds is a blunt outer safety ceiling only -- the real
         # per-node/per-subgraph stopping logic is the Dependency Graph
         # Analyzer (ready/blocked/stuck) plus RecoveryState's bounded
         # recovery-attempt streaks below, not a fixed round count.
-        evidence: list[Evidence] = []
+        #
+        # initial_graph/initial_evidence/initial_recovery/repair_guidance
+        # all default to the values that reproduce today's exact bootstrap
+        # (fresh root node, empty evidence, fresh RecoveryState, no
+        # guidance) -- every existing caller is unaffected. They exist for
+        # LocalCoordinator.retry_from_trajectory (task-conditioned/"fast"
+        # evolution, see ant.coordinator.repair): seeding a repaired graph
+        # and the prior attempt's evidence pool means a retry only has to
+        # make incremental progress on what was stuck, not re-discover
+        # everything the first attempt already found.
+        evidence: list[Evidence] = list(initial_evidence) if initial_evidence is not None else []
         seen_worker_ids: set[str] = set()
         search = LocalSearchTool(self.repo_root, index_path=self.index_path)
         worker_config = WorkerRunConfig(max_tool_calls=11)
         worker_by_id = {worker.id: worker for worker in self.workers}
         memory_hints = _memory_hints_from_routes(self.memory_routes)
-        recovery = RecoveryState()
+        recovery = initial_recovery if initial_recovery is not None else RecoveryState()
         observed_needs: list[UnresolvedNeed] = []
         incomplete_parents: list[str] = []
 
-        root = NeedNode(need_id="root", need=question, detail=UnresolvedNeed(description=question))
-        graph = NeedGraph(nodes={"root": root})
+        if initial_graph is not None:
+            graph = initial_graph
+        else:
+            root = NeedNode(
+                need_id="root", need=question, detail=UnresolvedNeed(description=question)
+            )
+            graph = NeedGraph(nodes={"root": root})
         resolution_results: dict[str, NeedResolution] = {}
         frontier = _exclude_abandoned(compute_frontier(graph), recovery.abandoned_node_ids)
         _reconcile_stuck_episodes(recovery, frontier.stuck_subgraphs)
@@ -236,6 +271,7 @@ class LocalCoordinator:
                 observed_needs=observed_needs,
                 incomplete_parents=incomplete_parents,
                 cross_repo_experience=self.cross_repo_experience,
+                repair_guidance=repair_guidance,
             )
             graph = _merge_plan_into_graph(graph, plan)
             observed_needs = [
@@ -639,6 +675,46 @@ class LocalCoordinator:
             final_recovery_state=_recovery_snapshot(recovery),
         )
 
+    def retry_from_trajectory(
+        self,
+        prior_state: EvidenceState,
+        fast_reasoner: FastEvolutionReasoner,
+        max_rounds: int = 6,
+    ) -> EvidenceState:
+        """Task-conditioned ("fast") evolution: repairs `prior_state`'s own
+        Need Graph from its own trajectory and retries the same question.
+        Entirely ephemeral -- this method (and everything it calls) never
+        writes to IndexStore/ColonyMemoryStore/GlobalMemoryStore. Nothing
+        here reads a reference answer or judge score, only what
+        `prior_state` already recorded about its own attempt. Nothing else
+        calls this method; it is opt-in, never part of ask()'s own flow.
+        """
+        package = assemble_trajectory_package(prior_state)
+        plan = fast_reasoner.propose_repair(package=package)
+        seed = resolve_repair_plan(plan)
+        initial_graph, initial_evidence = build_retry_starting_state(prior_state, seed)
+
+        prior_tried_workers = prior_state.final_recovery_state.tried_workers_by_node
+        initial_recovery = RecoveryState(
+            tried_workers_by_node={
+                need_id: set(worker_ids) for need_id, worker_ids in prior_tried_workers.items()
+            },
+            abandoned_node_ids={
+                need_id
+                for need_id in prior_state.final_recovery_state.abandoned_node_ids
+                if need_id not in seed.targeted_need_ids
+            },
+        )
+
+        return self.ask(
+            prior_state.question,
+            max_rounds=max_rounds,
+            initial_graph=initial_graph,
+            initial_evidence=initial_evidence,
+            initial_recovery=initial_recovery,
+            repair_guidance=render_repair_guidance(package, seed),
+        )
+
     def _run_selected_workers(
         self,
         selected: list[WorkerCard],
@@ -752,6 +828,7 @@ def _plan_round_with_cycle_validation(
     observed_needs: list[UnresolvedNeed],
     incomplete_parents: list[str],
     cross_repo_experience: list[str],
+    repair_guidance: str = "",
 ) -> RoundPlan:
     """Calls reasoner.plan_round() and validates the graph its
     graph_updates would produce -- merged onto the existing graph -- has
@@ -777,6 +854,7 @@ def _plan_round_with_cycle_validation(
         observed_needs=observed_needs,
         incomplete_parents=incomplete_parents,
         cross_repo_experience=cross_repo_experience,
+        repair_guidance=repair_guidance,
     )
     cycles = find_cycles(_merge_graph_updates(graph, plan))
     if not cycles:
@@ -801,6 +879,7 @@ def _plan_round_with_cycle_validation(
         incomplete_parents=incomplete_parents,
         cross_repo_experience=cross_repo_experience,
         validation_feedback=feedback,
+        repair_guidance=repair_guidance,
     )
 
 

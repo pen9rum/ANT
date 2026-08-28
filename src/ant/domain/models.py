@@ -401,3 +401,65 @@ class AbsenceProof(BaseModel):
 
 def as_posix(path: Path) -> str:
     return path.as_posix()
+
+
+class StuckNodeSummary(BaseModel):
+    """One unresolved/partial need from a finished task's trajectory,
+    condensed for a FastEvolutionReasoner -- everything it needs to judge
+    "what should a retry of this specific task do differently", derived
+    entirely from EvidenceState.final_need_graph/final_recovery_state/
+    rounds (see assemble_trajectory_package). Deliberately excludes the
+    reference answer/judge score -- fast-mode repair reasons only from the
+    task's own trajectory, never supervision.
+    """
+
+    need_id: str
+    need: str
+    resolution: str
+    depends_on: list[str] = Field(default_factory=list)
+    children: list[str] = Field(default_factory=list)
+    missing: str = ""
+    suggested_terms: list[str] = Field(default_factory=list)
+    suggested_territories: list[str] = Field(default_factory=list)
+    tried_worker_ids: list[str] = Field(default_factory=list)
+    tried_special_tactics: list[str] = Field(default_factory=list)
+    no_progress_execution_count: int = 0
+    evidence_claims: list[str] = Field(default_factory=list)
+    is_abandoned: bool = False
+    stuck_episode_id: str = ""
+
+
+class TaskTrajectoryPackage(BaseModel):
+    """The input to FastEvolutionReasoner.propose_repair(): a compact,
+    purpose-built summary of one finished task's own trajectory, not the
+    raw EvidenceState -- see assemble_trajectory_package. `prior_answer`
+    is included as context (a retry may want to know what was already
+    concluded) but is explicitly not a correctness signal; nothing here is
+    the reference answer or a judge score."""
+
+    question: str
+    prior_answer: str = ""
+    stuck_nodes: list[StuckNodeSummary] = Field(default_factory=list)
+    graph_decomposition_log: list[GraphDelta] = Field(default_factory=list)
+
+
+class RepairAction(BaseModel):
+    """One instruction in a RepairPlan. `kind` is one of:
+    reuse_assignment | replace_assignment | merge_needs | redecompose |
+    change_dependency | form_local_bridge | force_global_search --
+    see LocalCoordinator.retry_from_trajectory for how each is applied
+    (change_dependency/redecompose mechanically edit the retry's starting
+    graph/recovery state; the rest become advisory repair_guidance text
+    for the Orchestrator, not forced assignments).
+    """
+
+    kind: str
+    need_id: str
+    worker_ids: list[str] = Field(default_factory=list)
+    merge_with: list[str] = Field(default_factory=list)
+    new_depends_on: list[str] | None = None
+    rationale: str = ""
+
+
+class RepairPlan(BaseModel):
+    actions: list[RepairAction] = Field(default_factory=list)

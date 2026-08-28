@@ -164,6 +164,7 @@ class MockLLMProvider:
         incomplete_parents: list[str],
         cross_repo_experience: list[str],
         validation_feedback: str = "",
+        repair_guidance: str = "",
     ) -> RoundPlan:
         # Deterministic stand-in, same rationale as the rest of this mock:
         # assign every ready-frontier node to the first available worker,

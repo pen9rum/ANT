@@ -1,0 +1,245 @@
+from ant.coordinator.repair import (
+    assemble_trajectory_package,
+    build_retry_starting_state,
+    render_repair_guidance,
+    resolve_repair_plan,
+)
+from ant.domain import (
+    Evidence,
+    EvidenceState,
+    GraphDelta,
+    NeedNode,
+    NodeExecutionTrace,
+    PlanningRound,
+    RecoverySnapshot,
+    RepairAction,
+    RepairPlan,
+    StuckEpisodeSnapshot,
+    UnresolvedNeed,
+    WorkerObservation,
+)
+
+
+def _synthetic_state() -> EvidenceState:
+    nodes = {
+        "root": NeedNode(
+            need_id="root",
+            need="root question",
+            resolution="resolved",
+            children=["stuck-need", "blocked-need"],
+            detail=UnresolvedNeed(description="root question"),
+        ),
+        "stuck-need": NeedNode(
+            need_id="stuck-need",
+            need="the stuck part",
+            resolution="unresolved",
+            detail=UnresolvedNeed(
+                description="the stuck part",
+                missing="the actual implementation location",
+                suggested_terms=["foo"],
+                suggested_territories=["src-foo"],
+            ),
+        ),
+        "blocked-need": NeedNode(
+            need_id="blocked-need",
+            need="depends on the stuck part",
+            resolution="unresolved",
+            depends_on=["stuck-need"],
+            detail=UnresolvedNeed(description="depends on the stuck part"),
+        ),
+    }
+    rounds = [
+        PlanningRound(
+            round_index=0,
+            node_executions=[
+                NodeExecutionTrace(
+                    need_id="stuck-need",
+                    need="the stuck part",
+                    worker_ids=["worker-a"],
+                    resolution="unresolved",
+                    evidence_gain=0,
+                    need_reduction=0,
+                    observations=[
+                        WorkerObservation(
+                            worker_id="worker-a",
+                            territory_id="foo",
+                            evidence=[
+                                Evidence(
+                                    path="a.py",
+                                    line_start=1,
+                                    line_end=2,
+                                    quote="def f(): pass",
+                                    reason="looked relevant",
+                                    claim="found nothing useful",
+                                )
+                            ],
+                        )
+                    ],
+                )
+            ],
+            graph_delta=GraphDelta(created_nodes=["stuck-need", "blocked-need"]),
+        ),
+        PlanningRound(
+            round_index=1,
+            node_executions=[
+                NodeExecutionTrace(
+                    need_id="stuck-need",
+                    need="the stuck part",
+                    worker_ids=[],
+                    resolution="unresolved",
+                    special_tactic="temporary_bridge",
+                    evidence_gain=0,
+                    need_reduction=0,
+                )
+            ],
+            graph_delta=GraphDelta(),
+        ),
+    ]
+    return EvidenceState(
+        question="root question",
+        answer="a tentative partial answer",
+        rounds=rounds,
+        final_need_graph=nodes,
+        final_recovery_state=RecoverySnapshot(
+            stuck_episodes=[
+                StuckEpisodeSnapshot(
+                    episode_id="ep1",
+                    members=["stuck-need"],
+                    recovery_streak=3,
+                    used_special_tactics=["temporary_bridge"],
+                )
+            ],
+            abandoned_node_ids=["stuck-need"],
+            tried_workers_by_node={"stuck-need": ["worker-a", "worker-b"]},
+        ),
+    )
+
+
+def test_assemble_trajectory_package_excludes_resolved_nodes() -> None:
+    package = assemble_trajectory_package(_synthetic_state())
+    need_ids = {node.need_id for node in package.stuck_nodes}
+    assert need_ids == {"stuck-need", "blocked-need"}
+    assert package.question == "root question"
+    assert package.prior_answer == "a tentative partial answer"
+
+
+def test_assemble_trajectory_package_populates_stuck_node_detail() -> None:
+    package = assemble_trajectory_package(_synthetic_state())
+    stuck = next(node for node in package.stuck_nodes if node.need_id == "stuck-need")
+
+    assert stuck.tried_worker_ids == ["worker-a", "worker-b"]
+    assert stuck.tried_special_tactics == ["temporary_bridge"]
+    # Both of stuck-need's two executions had evidence_gain=0 and
+    # need_reduction=0 -- neither counts as progress.
+    assert stuck.no_progress_execution_count == 2
+    assert stuck.is_abandoned is True
+    assert stuck.stuck_episode_id == "ep1"
+    assert stuck.missing == "the actual implementation location"
+    assert stuck.suggested_terms == ["foo"]
+    assert "found nothing useful" in stuck.evidence_claims
+
+
+def test_assemble_trajectory_package_leaves_an_unstuck_dependent_node_alone() -> None:
+    package = assemble_trajectory_package(_synthetic_state())
+    blocked = next(node for node in package.stuck_nodes if node.need_id == "blocked-need")
+
+    assert blocked.depends_on == ["stuck-need"]
+    assert blocked.is_abandoned is False
+    assert blocked.stuck_episode_id == ""
+    assert blocked.tried_worker_ids == []
+
+
+def test_assemble_trajectory_package_carries_the_full_decomposition_log() -> None:
+    package = assemble_trajectory_package(_synthetic_state())
+    assert len(package.graph_decomposition_log) == 2
+    assert package.graph_decomposition_log[0].created_nodes == ["stuck-need", "blocked-need"]
+
+
+def test_resolve_repair_plan_splits_structural_from_advisory_actions() -> None:
+    plan = RepairPlan(
+        actions=[
+            RepairAction(
+                kind="change_dependency", need_id="blocked-need", new_depends_on=[]
+            ),
+            RepairAction(kind="redecompose", need_id="stuck-need"),
+            RepairAction(
+                kind="replace_assignment",
+                need_id="stuck-need",
+                worker_ids=["worker-c"],
+                rationale="worker-a/worker-b both failed",
+            ),
+        ]
+    )
+
+    seed = resolve_repair_plan(plan)
+
+    assert seed.dependency_changes == {"blocked-need": []}
+    assert seed.redecompose_node_ids == {"stuck-need"}
+    assert seed.targeted_need_ids == {"blocked-need", "stuck-need"}
+    assert len(seed.guidance_lines) == 1
+    assert "replace_assignment" in seed.guidance_lines[0]
+    assert "worker-c" in seed.guidance_lines[0]
+
+
+def test_render_repair_guidance_is_empty_when_nothing_advisory_was_proposed() -> None:
+    plan = RepairPlan(
+        actions=[RepairAction(kind="change_dependency", need_id="blocked-need", new_depends_on=[])]
+    )
+    seed = resolve_repair_plan(plan)
+    package = assemble_trajectory_package(_synthetic_state())
+
+    assert render_repair_guidance(package, seed) == ""
+
+
+def test_render_repair_guidance_includes_the_advisory_lines() -> None:
+    plan = RepairPlan(
+        actions=[
+            RepairAction(
+                kind="replace_assignment", need_id="stuck-need", worker_ids=["worker-c"]
+            )
+        ]
+    )
+    seed = resolve_repair_plan(plan)
+    package = assemble_trajectory_package(_synthetic_state())
+
+    guidance = render_repair_guidance(package, seed)
+    assert "replace_assignment" in guidance
+    assert "worker-c" in guidance
+
+
+def test_build_retry_starting_state_carries_forward_resolved_nodes_and_evidence() -> None:
+    state = _synthetic_state()
+    state = state.model_copy(
+        update={
+            "evidence": [
+                Evidence(
+                    path="root.py", line_start=1, line_end=1, quote="x", reason="root evidence"
+                )
+            ]
+        }
+    )
+    plan = RepairPlan(
+        actions=[RepairAction(kind="change_dependency", need_id="blocked-need", new_depends_on=[])]
+    )
+    seed = resolve_repair_plan(plan)
+
+    graph, evidence = build_retry_starting_state(state, seed)
+
+    assert set(graph.nodes) == {"root", "stuck-need", "blocked-need"}
+    assert graph.nodes["root"].resolution == "resolved"
+    assert graph.nodes["blocked-need"].depends_on == []
+    assert len(evidence) == 1
+    assert evidence[0].reason == "root evidence"
+
+
+def test_build_retry_starting_state_resets_progress_for_redecompose_targets() -> None:
+    state = _synthetic_state()
+    state.final_need_graph["stuck-need"].progress = "stuck"
+    state.final_need_graph["stuck-need"].rounds_without_progress = 3
+    plan = RepairPlan(actions=[RepairAction(kind="redecompose", need_id="stuck-need")])
+    seed = resolve_repair_plan(plan)
+
+    graph, _ = build_retry_starting_state(state, seed)
+
+    assert graph.nodes["stuck-need"].progress == "not_stuck"
+    assert graph.nodes["stuck-need"].rounds_without_progress == 0
