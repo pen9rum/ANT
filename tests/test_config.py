@@ -40,3 +40,28 @@ def test_load_dotenv_override_true_still_clobbers_when_explicitly_requested(
     load_dotenv(path=env_path, override=True)
 
     assert os.environ["ANT_MODEL"] == "gpt-4.1"
+
+
+def test_load_dotenv_returns_every_parsed_value_regardless_of_override(
+    tmp_path: Path, monkeypatch
+) -> None:
+    # OpenAIProvider needs the raw parsed values, not just their
+    # os.environ side effects -- OPENAI_API_KEY/OPENAI_ORG_ID/
+    # OPENAI_PROJECT_ID are a matched set that must be sourced from .env
+    # together when .env defines them, which os.environ alone can't
+    # express once a caller's ambient environment already has one of the
+    # three set to something else.
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-already-set")
+    env_path = tmp_path / ".env"
+    env_path.write_text(
+        "OPENAI_API_KEY=sk-from-dotenv\nOPENAI_ORG_ID=org-from-dotenv\n",
+        encoding="utf-8",
+    )
+
+    values = load_dotenv(path=env_path)
+
+    assert values == {
+        "OPENAI_API_KEY": "sk-from-dotenv",
+        "OPENAI_ORG_ID": "org-from-dotenv",
+    }
+    assert os.environ["OPENAI_API_KEY"] == "sk-already-set"

@@ -42,6 +42,42 @@ def test_openai_provider_loads_org_and_project_from_dotenv(
     assert os.environ["OPENAI_API_KEY"] == "sk-test"
 
 
+def test_openai_provider_prefers_dotenvs_own_credential_trio_over_a_stale_os_env_key(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    # Regression test: load_dotenv() defaulting to override=False (fixed
+    # elsewhere) is not sufficient on its own -- if OPENAI_API_KEY happens
+    # to already be set at the OS level (e.g. a stale value from some
+    # unrelated earlier context) while OPENAI_ORG_ID/OPENAI_PROJECT_ID are
+    # not, override=False alone would source the key from the OS and the
+    # org/project from .env, pairing a key with an organization it doesn't
+    # belong to -- confirmed live to fail every request with OpenAI's 401
+    # "mismatched_organization". OPENAI_API_KEY/OPENAI_ORG_ID/
+    # OPENAI_PROJECT_ID must come from .env together, atomically, whenever
+    # .env defines them.
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-stale-os-level-key")
+    monkeypatch.delenv("OPENAI_ORG_ID", raising=False)
+    monkeypatch.delenv("OPENAI_PROJECT_ID", raising=False)
+    (tmp_path / ".env").write_text(
+        "\n".join(
+            [
+                "OPENAI_API_KEY=sk-dotenvs-own-key",
+                "OPENAI_ORG_ID=org-dotenv",
+                "OPENAI_PROJECT_ID=proj_dotenv",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    provider = OpenAIProvider()
+
+    assert provider.settings.api_key == "sk-dotenvs-own-key"
+    assert provider.settings.organization == "org-dotenv"
+    assert provider.settings.project == "proj_dotenv"
+
+
 def test_extract_output_text_from_responses_payload() -> None:
     assert (
         _extract_output_text(

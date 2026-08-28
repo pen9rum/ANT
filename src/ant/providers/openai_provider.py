@@ -80,13 +80,26 @@ class OpenAIProvider:
     """Thin wrapper so orchestration code does not depend directly on the SDK."""
 
     def __init__(self, model: str | None = None, reasoning_effort: str | None = None) -> None:
-        load_dotenv()
+        env_values = load_dotenv()
+        # OPENAI_API_KEY/OPENAI_ORG_ID/OPENAI_PROJECT_ID are a matched set
+        # that must come from the same source together -- prefer .env's
+        # own values for all three when .env defines them, rather than
+        # os.getenv (which, now that load_dotenv defaults to override=
+        # False, could source one of the three from .env and another from
+        # an unrelated, stale OS-level env var). Confirmed directly: a
+        # stale OS-level OPENAI_API_KEY paired with .env's own
+        # OPENAI_ORG_ID -- a key and an organization that don't belong
+        # together -- failed every request with 401
+        # "mismatched_organization" (see load_dotenv's docstring).
+        # ANT_MODEL is deliberately NOT part of this trio: a caller setting
+        # os.environ["ANT_MODEL"] before construction is a real, intended
+        # override this project's scripts rely on, not a stale leftover.
         self.settings = OpenAISettings(
-            api_key=os.getenv("OPENAI_API_KEY", ""),
+            api_key=env_values.get("OPENAI_API_KEY") or os.getenv("OPENAI_API_KEY", ""),
             model=model or os.getenv("ANT_MODEL", "gpt-5.4-nano"),
             reasoning_effort=reasoning_effort,
-            organization=os.getenv("OPENAI_ORG_ID"),
-            project=os.getenv("OPENAI_PROJECT_ID"),
+            organization=env_values.get("OPENAI_ORG_ID") or os.getenv("OPENAI_ORG_ID"),
+            project=env_values.get("OPENAI_PROJECT_ID") or os.getenv("OPENAI_PROJECT_ID"),
         )
         self.model = self.settings.model
         self.reasoning_effort = self.settings.reasoning_effort
