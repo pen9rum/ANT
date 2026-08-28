@@ -1278,6 +1278,122 @@ def test_ask_with_seeded_initial_state_only_works_the_unresolved_part(tmp_path: 
     assert any(item.reason == "from prior attempt" for item in state.evidence)
 
 
+def test_ask_forces_the_given_assignment_at_round_0_only(tmp_path: Path) -> None:
+    # forced_first_round_assignments (added for retry_from_trajectory's
+    # execution-policy repair actions -- reuse_assignment/
+    # replace_assignment/form_local_bridge) must override whatever the
+    # Orchestrator itself proposes at round 0, and must NOT keep
+    # overriding on later rounds -- the Orchestrator regains ordinary
+    # freedom from round 1 onward.
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "a.py").write_text("def a():\n    pass\n", encoding="utf-8")
+    (tmp_path / "src" / "b.py").write_text("def b():\n    pass\n", encoding="utf-8")
+    worker_a = WorkerCard(
+        id="worker-a", territory_id="a", name="a", root="src", files=["src/a.py"]
+    )
+    worker_b = WorkerCard(
+        id="worker-b", territory_id="b", name="b", root="src", files=["src/b.py"]
+    )
+
+    class _AlwaysPicksWorkerAAndNeverResolvesReasoner(_PassthroughLookupsReasoner):
+        def observe(self, *, question, worker_id, territory_id, evidence):
+            return WorkerObservation(worker_id=worker_id, territory_id=territory_id)
+
+        def check_need_resolution(self, *, need, new_evidence, question):
+            return NeedResolution(status="unresolved")
+
+        def plan_round(
+            self,
+            *,
+            question,
+            graph,
+            resolution_results,
+            evidence,
+            workers,
+            memory_hints,
+            frontier,
+            observed_needs,
+            incomplete_parents,
+            cross_repo_experience,
+            validation_feedback="",
+            repair_guidance="",
+        ):
+            return RoundPlan(assignments={need_id: ["worker-a"] for need_id in frontier.ready})
+
+    state = LocalCoordinator(
+        tmp_path, [worker_a, worker_b], reasoner=_AlwaysPicksWorkerAAndNeverResolvesReasoner()
+    ).ask(
+        "question",
+        max_rounds=2,
+        forced_first_round_assignments={"root": ["worker-b"]},
+    )
+
+    assert state.rounds[0].node_executions[0].worker_ids == ["worker-b"]
+    assert state.rounds[1].node_executions[0].worker_ids == ["worker-a"]
+
+
+def test_ask_forces_a_global_search_at_round_0_with_no_stuck_episode_needed(
+    tmp_path: Path,
+) -> None:
+    # forced_first_round_global_search_ids (force_global_search's forced
+    # execution) must run even though the ordinary special_tactics
+    # executor path requires a RecoveryState stuck episode to exist for
+    # that need_id (_episode_for_need) -- a freshly-repaired retry node
+    # has no such episode (its progress/abandonment was just reset),
+    # so the forced path must not depend on one.
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "findme.py").write_text(
+        "def target_function():\n    pass\n", encoding="utf-8"
+    )
+    worker = WorkerCard(
+        id="worker-src",
+        territory_id="src",
+        name="src",
+        root="src",
+        searchable_terms=["target_function"],
+        files=["src/findme.py"],
+    )
+
+    class _NeverAssignsAnythingReasoner(_PassthroughLookupsReasoner):
+        def observe(self, *, question, worker_id, territory_id, evidence):
+            return WorkerObservation(worker_id=worker_id, territory_id=territory_id)
+
+        def check_need_resolution(self, *, need, new_evidence, question):
+            return NeedResolution(status="resolved" if new_evidence else "unresolved")
+
+        def plan_round(
+            self,
+            *,
+            question,
+            graph,
+            resolution_results,
+            evidence,
+            workers,
+            memory_hints,
+            frontier,
+            observed_needs,
+            incomplete_parents,
+            cross_repo_experience,
+            validation_feedback="",
+            repair_guidance="",
+        ):
+            return RoundPlan()
+
+    state = LocalCoordinator(
+        tmp_path, [worker], reasoner=_NeverAssignsAnythingReasoner()
+    ).ask(
+        "Where is target_function defined?",
+        max_rounds=1,
+        forced_first_round_global_search_ids={"root"},
+    )
+
+    assert state.rounds[0].node_executions
+    execution = state.rounds[0].node_executions[0]
+    assert execution.special_tactic == "global_fallback"
+    assert execution.resolution == "resolved"
+    assert state.final_need_graph["root"].resolution == "resolved"
+
+
 class _AlwaysUnresolvedSingleWorkerReasoner(_PassthroughLookupsReasoner):
     """Produces a real, reproducible abandonment: assigns the only worker
     it knows about to whatever's ready/stuck every round, but never
@@ -1338,13 +1454,16 @@ class _SuggestsReplacementWorkerReasoner:
         )
 
 
-class _ResolvesOnlyWhenGuidanceMentionsFixedWorkerReasoner(_PassthroughLookupsReasoner):
-    """The retry's own WorkerReasoner: only accepts real evidence as
-    resolving a need (unlike the original attempt's always-unresolved
-    reasoner), and only routes to worker-fixed when repair_guidance
-    actually mentions it -- proves retry_from_trajectory's repair_guidance
-    plumbing genuinely reaches plan_round(), not just that a retry
-    happens to succeed for some unrelated reason."""
+class _AlwaysPrefersBrokenWorkerReasoner(_PassthroughLookupsReasoner):
+    """The retry's own WorkerReasoner: accepts real evidence as resolving a
+    need (unlike the original attempt's always-unresolved reasoner), but
+    -- deliberately, unconditionally -- keeps preferring worker-broken
+    (the exact worker that already failed), ignoring repair_guidance
+    entirely. Proves retry_from_trajectory's replace_assignment repair is
+    FORCED to execute once at round 0 regardless of what the Orchestrator
+    itself would have chosen, not merely a suggestion it might or might
+    not follow -- if root still resolves here, it's only because the
+    forced assignment overrode this reasoner's own (bad) round-0 choice."""
 
     def observe(self, *, question, worker_id, territory_id, evidence):
         return WorkerObservation(worker_id=worker_id, territory_id=territory_id)
@@ -1368,13 +1487,7 @@ class _ResolvesOnlyWhenGuidanceMentionsFixedWorkerReasoner(_PassthroughLookupsRe
         validation_feedback="",
         repair_guidance="",
     ):
-        assignments = {}
-        for need_id in frontier.ready:
-            if "worker-fixed" in repair_guidance:
-                assignments[need_id] = ["worker-fixed"]
-            else:
-                assignments[need_id] = [workers[0].id]
-        return RoundPlan(assignments=assignments)
+        return RoundPlan(assignments={need_id: ["worker-broken"] for need_id in frontier.ready})
 
 
 def test_retry_from_trajectory_resolves_a_need_the_original_attempt_abandoned(
@@ -1410,10 +1523,15 @@ def test_retry_from_trajectory_resolves_a_need_the_original_attempt_abandoned(
     retried = LocalCoordinator(
         tmp_path,
         [worker_broken, worker_fixed],
-        reasoner=_ResolvesOnlyWhenGuidanceMentionsFixedWorkerReasoner(),
+        reasoner=_AlwaysPrefersBrokenWorkerReasoner(),
     ).retry_from_trajectory(
         original, fast_reasoner=_SuggestsReplacementWorkerReasoner(), max_rounds=3
     )
 
     assert retried.final_need_graph["root"].resolution == "resolved"
     assert "root" not in retried.final_recovery_state.abandoned_node_ids
+    # The repair plan's replace_assignment must have actually run at round
+    # 0 -- worker-fixed, not worker-broken (what this retry's own
+    # Orchestrator reasoner always prefers) -- proving the fast-repair
+    # action was forced, not merely offered as text.
+    assert retried.rounds[0].node_executions[0].worker_ids == ["worker-fixed"]

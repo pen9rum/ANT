@@ -206,21 +206,29 @@ class LocalCoordinator:
         initial_evidence: list[Evidence] | None = None,
         initial_recovery: RecoveryState | None = None,
         repair_guidance: str = "",
+        forced_first_round_assignments: dict[str, list[str]] | None = None,
+        forced_first_round_global_search_ids: set[str] | None = None,
     ) -> EvidenceState:
         # max_rounds is a blunt outer safety ceiling only -- the real
         # per-node/per-subgraph stopping logic is the Dependency Graph
         # Analyzer (ready/blocked/stuck) plus RecoveryState's bounded
         # recovery-attempt streaks below, not a fixed round count.
         #
-        # initial_graph/initial_evidence/initial_recovery/repair_guidance
-        # all default to the values that reproduce today's exact bootstrap
-        # (fresh root node, empty evidence, fresh RecoveryState, no
-        # guidance) -- every existing caller is unaffected. They exist for
+        # initial_graph/initial_evidence/initial_recovery/repair_guidance/
+        # forced_first_round_* all default to the values that reproduce
+        # today's exact bootstrap (fresh root node, empty evidence, fresh
+        # RecoveryState, no guidance, nothing forced) -- every existing
+        # caller is unaffected. They exist for
         # LocalCoordinator.retry_from_trajectory (task-conditioned/"fast"
         # evolution, see ant.coordinator.repair): seeding a repaired graph
         # and the prior attempt's evidence pool means a retry only has to
         # make incremental progress on what was stuck, not re-discover
         # everything the first attempt already found.
+        # forced_first_round_assignments/forced_first_round_global_search_ids
+        # are honored ONLY at round_index == 0 (see below), which is the
+        # entire enforcement mechanism -- a repair plan's execution-policy
+        # actions run exactly once, deterministically, before the
+        # Orchestrator regains its ordinary per-round freedom.
         evidence: list[Evidence] = list(initial_evidence) if initial_evidence is not None else []
         seen_worker_ids: set[str] = set()
         search = LocalSearchTool(self.repo_root, index_path=self.index_path)
@@ -273,6 +281,18 @@ class LocalCoordinator:
                 cross_repo_experience=self.cross_repo_experience,
                 repair_guidance=repair_guidance,
             )
+            if round_index == 0 and forced_first_round_assignments:
+                # Overrides whatever the Orchestrator itself proposed for
+                # these need_ids this round -- a forced repair action must
+                # actually run, not just be available for the Orchestrator
+                # to ignore (see RepairSeed's docstring). Reusing the
+                # ordinary plan.assignments slot means the forced
+                # assignment gets the exact same execution treatment as
+                # any other -- coalition detection, evidence dedup,
+                # resolution check, tried_workers_by_node tracking -- for
+                # free, no parallel code path to keep in sync.
+                for need_id, worker_ids in forced_first_round_assignments.items():
+                    plan.assignments[need_id] = list(worker_ids)
             graph = _merge_plan_into_graph(graph, plan)
             observed_needs = [
                 need
@@ -353,6 +373,55 @@ class LocalCoordinator:
                         observations=observations,
                     )
                 )
+
+            if round_index == 0 and forced_first_round_global_search_ids:
+                # force_global_search's forced execution: a broad,
+                # unrestricted-territory search, same shape as the
+                # existing "global_fallback" special tactic below but
+                # triggered directly rather than through that tactic's
+                # episode/used_special_tactics machinery -- this only ever
+                # runs once, at round 0, by construction (nothing re-adds
+                # to forced_first_round_global_search_ids on a later
+                # round), so it needs no separate anti-repeat bookkeeping
+                # of its own.
+                for need_id in forced_first_round_global_search_ids:
+                    node = graph.nodes.get(need_id)
+                    if node is None:
+                        continue
+                    all_files = sorted(
+                        {file for worker in self.workers for file in worker.files}
+                    )
+                    hits = search.search(
+                        self._query_from_needs(question, [node.detail]), all_files, limit=8
+                    )
+                    new_evidence = [
+                        item for item in hits if _evidence_key(item) not in pre_round_evidence_keys
+                    ]
+                    evidence.extend(new_evidence)
+                    resolution = self.reasoner.check_need_resolution(
+                        need=node.detail, new_evidence=new_evidence, question=question
+                    )
+                    resolution_results[need_id] = resolution
+                    node.resolution = resolution.status
+                    node_executions.append(
+                        NodeExecutionTrace(
+                            need_id=need_id,
+                            need=node.need,
+                            coalition_formed=False,
+                            resolution=resolution.status,
+                            special_tactic="global_fallback",
+                            evidence_gain=len(new_evidence),
+                            need_reduction=int(resolution.status == "resolved"),
+                            observations=[
+                                WorkerObservation(
+                                    worker_id="global-fallback",
+                                    territory_id="global",
+                                    evidence=hits,
+                                    stop_reason="global_fallback",
+                                )
+                            ],
+                        )
+                    )
 
             for need_id, tactic in plan.special_tactics.items():
                 episode = _episode_for_need(recovery, need_id)
@@ -713,6 +782,8 @@ class LocalCoordinator:
             initial_evidence=initial_evidence,
             initial_recovery=initial_recovery,
             repair_guidance=render_repair_guidance(package, seed),
+            forced_first_round_assignments=seed.forced_assignments or None,
+            forced_first_round_global_search_ids=seed.forced_global_search_ids or None,
         )
 
     def _run_selected_workers(

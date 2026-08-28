@@ -155,7 +155,7 @@ def test_assemble_trajectory_package_carries_the_full_decomposition_log() -> Non
     assert package.graph_decomposition_log[0].created_nodes == ["stuck-need", "blocked-need"]
 
 
-def test_resolve_repair_plan_splits_structural_from_advisory_actions() -> None:
+def test_resolve_repair_plan_splits_structural_from_forced_execution_actions() -> None:
     plan = RepairPlan(
         actions=[
             RepairAction(
@@ -175,10 +175,52 @@ def test_resolve_repair_plan_splits_structural_from_advisory_actions() -> None:
 
     assert seed.dependency_changes == {"blocked-need": []}
     assert seed.redecompose_node_ids == {"stuck-need"}
+    assert seed.forced_assignments == {"stuck-need": ["worker-c"]}
     assert seed.targeted_need_ids == {"blocked-need", "stuck-need"}
+    # change_dependency/redecompose are pure graph edits -- no narration
+    # needed, the graph itself shows the Orchestrator what changed. Only
+    # the forced-execution action gets a guidance line.
     assert len(seed.guidance_lines) == 1
     assert "replace_assignment" in seed.guidance_lines[0]
     assert "worker-c" in seed.guidance_lines[0]
+
+
+def test_resolve_repair_plan_treats_merge_needs_as_structural_not_forced_execution() -> None:
+    plan = RepairPlan(
+        actions=[
+            RepairAction(
+                kind="merge_needs",
+                need_id="stuck-need",
+                merge_with=["blocked-need"],
+                rationale="same underlying gap",
+            )
+        ]
+    )
+
+    seed = resolve_repair_plan(plan)
+
+    assert seed.merges == {"stuck-need": ["blocked-need"]}
+    assert seed.forced_assignments == {}
+    assert seed.guidance_lines == []
+
+
+def test_resolve_repair_plan_collects_force_global_search_ids() -> None:
+    plan = RepairPlan(actions=[RepairAction(kind="force_global_search", need_id="stuck-need")])
+
+    seed = resolve_repair_plan(plan)
+
+    assert seed.forced_global_search_ids == {"stuck-need"}
+    assert len(seed.guidance_lines) == 1
+    assert "force_global_search" in seed.guidance_lines[0]
+
+
+def test_resolve_repair_plan_drops_a_malformed_action_without_worker_ids() -> None:
+    plan = RepairPlan(actions=[RepairAction(kind="replace_assignment", need_id="stuck-need")])
+
+    seed = resolve_repair_plan(plan)
+
+    assert seed.forced_assignments == {}
+    assert seed.guidance_lines == []
 
 
 def test_render_repair_guidance_is_empty_when_nothing_advisory_was_proposed() -> None:
@@ -230,6 +272,40 @@ def test_build_retry_starting_state_carries_forward_resolved_nodes_and_evidence(
     assert graph.nodes["blocked-need"].depends_on == []
     assert len(evidence) == 1
     assert evidence[0].reason == "root evidence"
+
+
+def test_build_retry_starting_state_applies_merge_needs_and_redirects_dependents() -> None:
+    state = _synthetic_state()
+    plan = RepairPlan(
+        actions=[
+            RepairAction(kind="merge_needs", need_id="stuck-need", merge_with=["blocked-need"])
+        ]
+    )
+    seed = resolve_repair_plan(plan)
+
+    graph, _ = build_retry_starting_state(state, seed)
+
+    # blocked-need is folded into stuck-need and removed entirely.
+    assert set(graph.nodes) == {"root", "stuck-need"}
+    # root's children referenced blocked-need -- redirected to stuck-need,
+    # deduplicated against the stuck-need entry already there.
+    assert graph.nodes["root"].children == ["stuck-need"]
+
+
+def test_build_retry_starting_state_ignores_a_merge_naming_a_nonexistent_primary() -> None:
+    state = _synthetic_state()
+    plan = RepairPlan(
+        actions=[
+            RepairAction(
+                kind="merge_needs", need_id="does-not-exist", merge_with=["blocked-need"]
+            )
+        ]
+    )
+    seed = resolve_repair_plan(plan)
+
+    graph, _ = build_retry_starting_state(state, seed)
+
+    assert set(graph.nodes) == {"root", "stuck-need", "blocked-need"}
 
 
 def test_build_retry_starting_state_resets_progress_for_redecompose_targets() -> None:

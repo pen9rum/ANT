@@ -17,6 +17,7 @@ from ant.domain import (
     Evidence,
     EvidenceState,
     NeedGraph,
+    NeedNode,
     RepairPlan,
     StuckNodeSummary,
     TaskTrajectoryPackage,
@@ -91,32 +92,70 @@ def assemble_trajectory_package(state: EvidenceState) -> TaskTrajectoryPackage:
 @dataclass
 class RepairSeed:
     """What a RepairPlan resolves into for LocalCoordinator.ask()'s new
-    initial_graph/initial_recovery/repair_guidance parameters, plus which
-    need_ids a repair plan actually targeted -- meant to be applied to a
-    fresh copy of the prior graph/RecoveryState by the caller
-    (LocalCoordinator.retry_from_trajectory), not mutated here, so this
-    stays a pure transformation from (prior state, repair plan) to
+    initial_graph/initial_recovery/repair_guidance/forced_first_round_*
+    parameters, plus which need_ids a repair plan actually targeted --
+    meant to be applied to a fresh copy of the prior graph/RecoveryState by
+    the caller (LocalCoordinator.retry_from_trajectory), not mutated here,
+    so this stays a pure transformation from (prior state, repair plan) to
     instructions.
+
+    Every action kind resolves into exactly one of two treatments -- there
+    is no longer a third "hope the Orchestrator listens" bucket:
+    - Hard structural repairs (change_dependency, redecompose, merge_needs)
+      are unambiguous graph edits, applied directly to the retry's starting
+      graph before round 0 even begins.
+    - Execution-policy repairs (reuse_assignment, replace_assignment,
+      form_local_bridge, force_global_search) are forced to actually run
+      once, at the retry's round 0 (see LocalCoordinator.ask's
+      forced_first_round_assignments/forced_first_round_global_search_ids),
+      before the Orchestrator regains ordinary freedom to route as it sees
+      fit from round 1 onward. This was a deliberate correction: leaving
+      these as advisory-only text made it impossible to tell, from a
+      retry's outcome, whether a repair plan was bad or simply never
+      followed -- forcing the execution makes the effect of the repair
+      itself observable and testable, independent of whether the
+      Orchestrator would have chosen the same thing on its own.
     """
 
     dependency_changes: dict[str, list[str]] = field(default_factory=dict)
     redecompose_node_ids: set[str] = field(default_factory=set)
+    # primary need_id -> need_ids to fold into it (see _apply_merges).
+    merges: dict[str, list[str]] = field(default_factory=dict)
+    # need_id -> worker ids to force-assign at the retry's round 0 --
+    # reuse_assignment/replace_assignment/form_local_bridge all resolve
+    # here (a coalition is just >1 worker id in the same slot, no separate
+    # representation needed).
+    forced_assignments: dict[str, list[str]] = field(default_factory=dict)
+    # need_ids to force a broad, unrestricted-territory search on at the
+    # retry's round 0 -- force_global_search. Only ever forced once, at
+    # round 0, by construction (nothing re-adds to this set on later
+    # rounds), which is itself the "at most once per repaired need"
+    # session-local guard: without it, a temporary_bridge/global_fallback
+    # style tactic could spin identically every round for no new evidence,
+    # the exact failure mode the RecoveryState streak machinery already
+    # exists to prevent.
+    forced_global_search_ids: set[str] = field(default_factory=set)
+    # Informational only, for repair_guidance text: documents what the
+    # execution-policy actions above already did, so the Orchestrator has
+    # that context from round 1 onward (e.g. not to blindly re-request the
+    # same worker a forced replace_assignment already tried). Hard
+    # structural repairs don't get a line here -- the graph edit itself is
+    # what the Orchestrator sees, no separate narration needed.
     guidance_lines: list[str] = field(default_factory=list)
     # Every need_id any action targeted, regardless of kind -- a repair
-    # plan proposing *anything* for a need_id (not just redecompose) means
-    # "give this another shot", so retry_from_trajectory un-abandons all of
-    # these, not just the ones with a structural redecompose action.
+    # plan proposing *anything* for a need_id means "give this another
+    # shot", so retry_from_trajectory un-abandons all of these, not just
+    # the ones with a structural redecompose action.
     targeted_need_ids: set[str] = field(default_factory=set)
 
 
 def resolve_repair_plan(plan: RepairPlan) -> RepairSeed:
     """Splits a RepairPlan's actions into the two treatments described in
-    the fast-evolution design: change_dependency/redecompose are
-    unambiguous structural edits, applied mechanically; everything else
-    (reuse_assignment, replace_assignment, merge_needs, form_local_bridge,
-    force_global_search) becomes advisory text for the Orchestrator to
-    weigh each round, not a forced round-0 assignment -- a suggestion that
-    doesn't pan out on retry either should be overridable.
+    RepairSeed's docstring: change_dependency/redecompose/merge_needs are
+    unambiguous structural edits, applied mechanically; the remaining four
+    kinds (reuse_assignment, replace_assignment, form_local_bridge,
+    force_global_search) are forced to execute once at the retry's round 0
+    rather than left as text the Orchestrator might ignore.
     """
     seed = RepairSeed()
     for action in plan.actions:
@@ -127,28 +166,90 @@ def resolve_repair_plan(plan: RepairPlan) -> RepairSeed:
         if action.kind == "redecompose":
             seed.redecompose_node_ids.add(action.need_id)
             continue
-        line = f"- {action.kind} on {action.need_id!r}"
-        if action.worker_ids:
-            line += f" (workers: {', '.join(action.worker_ids)})"
-        if action.merge_with:
-            line += f" (merge with: {', '.join(action.merge_with)})"
-        if action.rationale:
-            line += f": {action.rationale}"
-        seed.guidance_lines.append(line)
+        if action.kind == "merge_needs" and action.merge_with:
+            seed.merges.setdefault(action.need_id, []).extend(action.merge_with)
+            continue
+        if (
+            action.kind in ("reuse_assignment", "replace_assignment", "form_local_bridge")
+            and action.worker_ids
+        ):
+            seed.forced_assignments[action.need_id] = list(action.worker_ids)
+            line = (
+                f"- {action.kind} was force-executed on {action.need_id!r} this retry's "
+                f"round 0 with worker(s) {', '.join(action.worker_ids)} (already ran once)"
+            )
+            if action.rationale:
+                line += f": {action.rationale}"
+            seed.guidance_lines.append(line)
+            continue
+        if action.kind == "force_global_search":
+            seed.forced_global_search_ids.add(action.need_id)
+            line = (
+                f"- force_global_search was force-executed on {action.need_id!r} this "
+                "retry's round 0 (already ran once)"
+            )
+            if action.rationale:
+                line += f": {action.rationale}"
+            seed.guidance_lines.append(line)
+            continue
+        # Malformed/incomplete action for its kind (e.g. replace_assignment
+        # with no worker_ids) -- ignored rather than failing the whole
+        # plan, same degrade-gracefully posture as propose_repair's own
+        # empty-actions fallback.
     return seed
 
 
 def render_repair_guidance(package: TaskTrajectoryPackage, seed: RepairSeed) -> str:
-    """Human-readable guidance text threaded into every plan_round() call
-    of the retry -- advisory only, never mechanically enforced (see
-    RepairSeed's own docstring)."""
+    """Human-readable context threaded into every plan_round() call of the
+    retry -- purely informational (see RepairSeed's own docstring): every
+    action already had its effect applied before round 0 (a mechanical
+    graph edit or a forced one-time execution), this is not a request for
+    the Orchestrator to still act on.
+    """
     if not seed.guidance_lines:
         return ""
     header = (
-        "A prior attempt on this exact question got stuck; a repair analysis of "
-        "that attempt's own trajectory suggests:\n"
+        "A prior attempt on this exact question got stuck; before this retry began, "
+        "a repair analysis of that attempt's own trajectory already took the "
+        "following actions:\n"
     )
     return header + "\n".join(seed.guidance_lines)
+
+
+def _apply_merges(
+    nodes: dict[str, NeedNode], merges: dict[str, list[str]]
+) -> dict[str, NeedNode]:
+    """Folds each merge_with id into its primary need_id: any node
+    referencing a merged-away id in depends_on/children is redirected to
+    the primary instead (deduplicated), then the merged-away node is
+    dropped from the graph entirely. A self-loop redirection could
+    introduce (a node ending up depending on/parenting itself) is filtered
+    out. A primary id that doesn't exist, or a merge target that's already
+    gone (e.g. named by two different merge_needs actions in the same
+    plan), is skipped rather than raising -- same tolerant-of-a-single-bad-
+    action posture as resolve_repair_plan.
+    """
+    nodes = dict(nodes)
+    for primary_id, merge_with in merges.items():
+        if primary_id not in nodes:
+            continue
+        merged_away = {
+            other_id for other_id in merge_with if other_id in nodes and other_id != primary_id
+        }
+        if not merged_away:
+            continue
+        for need_id, node in list(nodes.items()):
+            new_depends_on = [d if d not in merged_away else primary_id for d in node.depends_on]
+            new_depends_on = [d for d in dict.fromkeys(new_depends_on) if d != need_id]
+            new_children = [c if c not in merged_away else primary_id for c in node.children]
+            new_children = [c for c in dict.fromkeys(new_children) if c != need_id]
+            if new_depends_on != node.depends_on or new_children != node.children:
+                nodes[need_id] = node.model_copy(
+                    update={"depends_on": new_depends_on, "children": new_children}
+                )
+        for other_id in merged_away:
+            nodes.pop(other_id, None)
+    return nodes
 
 
 def build_retry_starting_state(
@@ -156,26 +257,28 @@ def build_retry_starting_state(
 ) -> tuple[NeedGraph, list[Evidence]]:
     """Builds the retry's starting graph (prior_state.final_need_graph,
     carrying forward resolved nodes too so dependents' chains stay
-    consistent, with change_dependency seed edits applied) and starting
-    evidence pool (the prior attempt's full evidence, so the retry only
-    has to make incremental progress on what was stuck, not re-discover
-    everything). RecoveryState seeding (tried_workers_by_node carried
-    forward, abandoned nodes cleared for targeted needs) is the caller's
-    job (LocalCoordinator.retry_from_trajectory) since RecoveryState is
-    coordinator-local, not a domain type this module depends on.
+    consistent, with merge_needs/change_dependency seed edits applied) and
+    starting evidence pool (the prior attempt's full evidence, so the
+    retry only has to make incremental progress on what was stuck, not
+    re-discover everything). RecoveryState seeding (tried_workers_by_node
+    carried forward, abandoned nodes cleared for targeted needs) and the
+    forced_assignments/forced_global_search_ids execution itself are the
+    caller's job (LocalCoordinator.retry_from_trajectory /
+    LocalCoordinator.ask) since RecoveryState is coordinator-local and
+    forcing an execution needs the coordinator's search/worker machinery,
+    neither of which this module depends on.
 
     Every targeted need_id (not just redecompose ones) gets its
-    progress/rounds_without_progress reset to fresh, not only
-    redecompose_node_ids: a stale progress="stuck" carried over from the
-    prior attempt would keep the node out of the retry's own ready
-    frontier (compute_frontier routes a still-"stuck" node to
-    stuck_subgraphs, not ready) regardless of which worker a
-    reuse_assignment/replace_assignment action suggests -- any action
-    targeting a need_id means "give this another shot", the same
+    progress/rounds_without_progress reset to fresh: a stale
+    progress="stuck" carried over from the prior attempt would keep the
+    node out of the retry's own ready frontier (compute_frontier routes a
+    still-"stuck" node to stuck_subgraphs, not ready) regardless of which
+    worker a reuse_assignment/replace_assignment action forces -- any
+    action targeting a need_id means "give this another shot", the same
     reasoning already applied to abandoned_node_ids in
     retry_from_trajectory.
     """
-    nodes = dict(prior_state.final_need_graph)
+    nodes = _apply_merges(dict(prior_state.final_need_graph), seed.merges)
     for need_id, new_depends_on in seed.dependency_changes.items():
         if need_id in nodes:
             nodes[need_id] = nodes[need_id].model_copy(update={"depends_on": new_depends_on})

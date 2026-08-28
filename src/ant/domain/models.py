@@ -447,10 +447,14 @@ class RepairAction(BaseModel):
     """One instruction in a RepairPlan. `kind` is one of:
     reuse_assignment | replace_assignment | merge_needs | redecompose |
     change_dependency | form_local_bridge | force_global_search --
-    see LocalCoordinator.retry_from_trajectory for how each is applied
-    (change_dependency/redecompose mechanically edit the retry's starting
-    graph/recovery state; the rest become advisory repair_guidance text
-    for the Orchestrator, not forced assignments).
+    see LocalCoordinator.retry_from_trajectory / ant.coordinator.repair for
+    how each is applied. Every kind now has a real, observable effect on
+    the retry, not just a hope the Orchestrator follows a suggestion:
+    change_dependency/redecompose/merge_needs mechanically edit the
+    retry's starting graph before round 0 begins; reuse_assignment/
+    replace_assignment/form_local_bridge/force_global_search are forced to
+    actually execute once at the retry's round 0, after which the
+    Orchestrator regains ordinary freedom to route as it sees fit.
     """
 
     kind: str
