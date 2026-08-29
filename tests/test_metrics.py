@@ -49,6 +49,37 @@ def test_f1_is_0_when_expected_is_empty() -> None:
     assert score.f1 == 0.0
 
 
+def test_f1_treats_punctuation_attached_words_as_the_same_token() -> None:
+    # Regression test: a plain .split() on normalized text used to leave
+    # trailing punctuation glued to words ("module," / "implemented."),
+    # so "module" in the prediction and "module," in the reference never
+    # matched even though they're the same word. Two full-sentence
+    # paragraphs differing only in punctuation should score close to 1.0.
+    score = evaluate_answer(
+        prediction="Qibo does not implement a centralized module, but rendering works.",
+        expected="Qibo does not implement a centralized module but rendering works",
+        evidence_count=0,
+        unresolved_need_count=0,
+    )
+    assert score.f1 == 1.0
+
+
+def test_build_reference_idf_does_not_fragment_document_frequency_on_punctuation() -> None:
+    # The same word appearing with different trailing punctuation across
+    # references must count as one term for document-frequency purposes,
+    # not several near-unique ones.
+    idf = build_reference_idf(
+        [
+            "quantum circuit basics.",
+            "quantum, gate decomposition",
+            "quantum bloch sphere",
+        ]
+    )
+    assert "quantum" in idf
+    assert "quantum," not in idf
+    assert "quantum." not in idf
+
+
 def test_build_reference_idf_weights_a_rare_term_higher_than_a_common_one() -> None:
     # "quantum" appears in every reference in this corpus (generic domain
     # word for a quantum-computing question set); "bloch" appears in only

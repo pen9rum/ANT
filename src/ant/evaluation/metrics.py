@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import math
+import re
 from collections import Counter
 from collections.abc import Iterable, Mapping
 
 from pydantic import BaseModel, Field
 
 from ant.domain import TokenUsage
+
+_F1_TOKEN_RE = re.compile(r"[a-z0-9]+")
 
 
 class EvalScore(BaseModel):
@@ -69,6 +72,20 @@ def _normalize(text: str) -> str:
     return " ".join(text.lower().split())
 
 
+def _f1_tokens(normalized_text: str) -> list[str]:
+    # A plain .split() on _normalize()'s output leaves trailing/attached
+    # punctuation glued to words ("module," / "implemented." / "qibo's"),
+    # so the same word in two different sentence positions counts as two
+    # different tokens -- confirmed this was silently fragmenting document
+    # frequency counts for build_reference_idf specifically (the term that
+    # matters most there is exactly "how many references mention this
+    # word," which punctuation-splitting corrupts), and to a lesser extent
+    # plain overlap counting too. _normalize's own output is untouched --
+    # exact_match/contains_answer are legitimately string-level, where
+    # punctuation is part of "exact."
+    return _F1_TOKEN_RE.findall(normalized_text)
+
+
 def build_reference_idf(references: Iterable[str]) -> dict[str, float]:
     """Smoothed IDF table (sklearn's convention: ln((N+1)/(df+1)) + 1, so
     every weight stays positive and a term appearing in every reference
@@ -92,7 +109,7 @@ def build_reference_idf(references: Iterable[str]) -> dict[str, float]:
         return {}
     document_frequency: Counter[str] = Counter()
     for reference in references:
-        document_frequency.update(set(_normalize(reference).split()))
+        document_frequency.update(set(_f1_tokens(_normalize(reference))))
     return {
         term: math.log((doc_count + 1) / (freq + 1)) + 1
         for term, freq in document_frequency.items()
@@ -106,8 +123,8 @@ def _f1_score(
 ) -> float:
     if not normalized_expected:
         return 0.0
-    pred_tokens = normalized_prediction.split()
-    gold_tokens = normalized_expected.split()
+    pred_tokens = _f1_tokens(normalized_prediction)
+    gold_tokens = _f1_tokens(normalized_expected)
     if not pred_tokens:
         return 0.0
     common = Counter(pred_tokens) & Counter(gold_tokens)
