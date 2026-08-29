@@ -12,6 +12,7 @@ from ant.coordinator.repair import (
     render_repair_guidance,
     resolve_repair_plan,
 )
+from ant.coordinator.worker_retrieval import build_worker_index, rank_workers
 from ant.domain import (
     AbsenceProof,
     Evidence,
@@ -33,7 +34,7 @@ from ant.domain import (
     WorkerObservation,
 )
 from ant.indexing.cards import template_routing_summary
-from ant.memory import MemoryRoute
+from ant.memory import IndexStore, MemoryRoute
 from ant.providers import (
     AnswerSynthesizer,
     FastEvolutionReasoner,
@@ -42,6 +43,7 @@ from ant.providers import (
     WorkerReasoner,
 )
 from ant.retrieval import STOP_WORDS, TOKEN_RE, extract_terms, is_stem_match, score_evidence
+from ant.retrieval.dense import WORKER_CARDS_KEY
 from ant.scoring_config import DEFAULT_SCORING_CONFIG
 from ant.tools import LocalSearchTool
 from ant.tools.path_prior import has_low_value_part, has_source_part
@@ -235,6 +237,14 @@ class LocalCoordinator:
         worker_config = WorkerRunConfig(max_tool_calls=11)
         worker_by_id = {worker.id: worker for worker in self.workers}
         memory_hints = _memory_hints_from_routes(self.memory_routes)
+        # Built once per ask() call, reused every round (self.workers never
+        # changes mid-task) -- see WorkerIndex's own docstring.
+        worker_index = build_worker_index(self.workers)
+        worker_card_embedding_index = (
+            IndexStore(self.index_path).load_embedding_index(WORKER_CARDS_KEY)
+            if self.index_path is not None
+            else None
+        )
         recovery = initial_recovery if initial_recovery is not None else RecoveryState()
         observed_needs: list[UnresolvedNeed] = []
         incomplete_parents: list[str] = []
@@ -273,6 +283,30 @@ class LocalCoordinator:
                 for need_id in group
                 if recovery.tried_workers_by_node.get(need_id)
             }
+            # Retrieval-ranked worker candidates for this round's own
+            # frontier -- ready nodes (about to actually be assigned) plus
+            # stuck-subgraph members (candidates for reassignment/recovery
+            # this round). Blocked nodes are deliberately excluded: they
+            # aren't assignable this round, so their query text would only
+            # dilute this round's relevance signal with off-topic terms.
+            relevance_query_needs = [
+                graph.nodes[need_id].detail
+                for need_id in {
+                    *frontier.ready,
+                    *(need_id for group in frontier.stuck_subgraphs for need_id in group),
+                }
+                if need_id in graph.nodes
+            ]
+            worker_relevance_rank = (
+                rank_workers(
+                    self._query_from_needs(question, relevance_query_needs),
+                    self.workers,
+                    worker_index,
+                    worker_card_embedding_index,
+                )
+                if relevance_query_needs
+                else {}
+            )
             plan = _plan_round_with_cycle_validation(
                 self.reasoner,
                 question=question,
@@ -287,6 +321,7 @@ class LocalCoordinator:
                 cross_repo_experience=self.cross_repo_experience,
                 repair_guidance=repair_guidance,
                 stuck_tried_workers=stuck_tried_workers,
+                worker_relevance_rank=worker_relevance_rank,
             )
             _enforce_no_repeat_stuck_assignment(plan, stuck_tried_workers)
             if round_index == 0 and forced_first_round_assignments:
@@ -929,6 +964,7 @@ def _plan_round_with_cycle_validation(
     cross_repo_experience: list[str],
     repair_guidance: str = "",
     stuck_tried_workers: dict[str, list[str]] | None = None,
+    worker_relevance_rank: dict[str, int] | None = None,
 ) -> RoundPlan:
     """Calls reasoner.plan_round() and validates the graph its
     graph_updates would produce -- merged onto the existing graph -- has
@@ -956,6 +992,7 @@ def _plan_round_with_cycle_validation(
         cross_repo_experience=cross_repo_experience,
         repair_guidance=repair_guidance,
         stuck_tried_workers=stuck_tried_workers,
+        worker_relevance_rank=worker_relevance_rank,
     )
     cycles = find_cycles(_merge_graph_updates(graph, plan))
     if not cycles:
@@ -982,6 +1019,7 @@ def _plan_round_with_cycle_validation(
         validation_feedback=feedback,
         repair_guidance=repair_guidance,
         stuck_tried_workers=stuck_tried_workers,
+        worker_relevance_rank=worker_relevance_rank,
     )
 
 

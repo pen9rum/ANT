@@ -166,6 +166,7 @@ class MockLLMProvider:
         validation_feedback: str = "",
         repair_guidance: str = "",
         stuck_tried_workers: dict[str, list[str]] | None = None,
+        worker_relevance_rank: dict[str, int] | None = None,
     ) -> RoundPlan:
         # Deterministic stand-in, same rationale as the rest of this mock:
         # assign every ready-frontier node to the first available worker,

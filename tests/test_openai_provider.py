@@ -265,6 +265,86 @@ def test_plan_round_shows_worker_searchable_terms_not_just_routing_summary() -> 
     assert "paint_world_map" in captured["prompt"]
 
 
+def test_plan_round_reorders_and_annotates_workers_by_relevance_rank() -> None:
+    # worker_relevance_rank comes from ant.coordinator.worker_retrieval's
+    # retrieval-based ranking (BM25 + exact-symbol + dense over
+    # WorkerCard.symbols) -- when the coordinator supplies one, the prompt
+    # should surface it as a rank annotation and put the best match first,
+    # WITHOUT dropping any worker from the list (see rank_workers' own
+    # docstring: never exclusionary, only reordering/annotation).
+    provider = OpenAIProvider(model="gpt-4.1")
+    captured: dict[str, str] = {}
+
+    def fake_responses_json(prompt: str, max_output_tokens: int = 512):
+        captured["prompt"] = prompt
+        return type("Result", (), {"text": "{}"})()
+
+    provider.responses_json = fake_responses_json  # type: ignore[method-assign]
+    workers = [
+        WorkerCard(id="worker-a", territory_id="a", name="a", root="a"),
+        WorkerCard(id="worker-b", territory_id="b", name="b", root="b"),
+        WorkerCard(id="worker-c", territory_id="c", name="c", root="c"),
+    ]
+
+    provider.plan_round(
+        question="q",
+        graph=NeedGraph(nodes={}),
+        resolution_results={},
+        evidence=[],
+        workers=workers,
+        memory_hints={},
+        frontier=FrontierResult(ready=[], blocked=[], stuck_subgraphs=[]),
+        observed_needs=[],
+        incomplete_parents=[],
+        cross_repo_experience=[],
+        worker_relevance_rank={"worker-c": 1, "worker-a": 2},
+    )
+
+    prompt = captured["prompt"]
+    # Every worker still listed -- worker-b has no rank entry (no
+    # retrieval signal) but must not be excluded.
+    assert "worker-a" in prompt
+    assert "worker-b" in prompt
+    assert "worker-c" in prompt
+    assert "(retrieval rank 1/3)" in prompt
+    assert "(retrieval rank 2/3)" in prompt
+    # Best match first: worker-c's line precedes worker-a's, which
+    # precedes worker-b's (unranked, falls back to original order last).
+    assert prompt.index("worker-c") < prompt.index("worker-a") < prompt.index("worker-b")
+
+
+def test_plan_round_keeps_original_worker_order_when_no_relevance_rank_given() -> None:
+    provider = OpenAIProvider(model="gpt-4.1")
+    captured: dict[str, str] = {}
+
+    def fake_responses_json(prompt: str, max_output_tokens: int = 512):
+        captured["prompt"] = prompt
+        return type("Result", (), {"text": "{}"})()
+
+    provider.responses_json = fake_responses_json  # type: ignore[method-assign]
+    workers = [
+        WorkerCard(id="worker-z", territory_id="z", name="z", root="z"),
+        WorkerCard(id="worker-a", territory_id="a", name="a", root="a"),
+    ]
+
+    provider.plan_round(
+        question="q",
+        graph=NeedGraph(nodes={}),
+        resolution_results={},
+        evidence=[],
+        workers=workers,
+        memory_hints={},
+        frontier=FrontierResult(ready=[], blocked=[], stuck_subgraphs=[]),
+        observed_needs=[],
+        incomplete_parents=[],
+        cross_repo_experience=[],
+    )
+
+    prompt = captured["prompt"]
+    assert "retrieval rank" not in prompt
+    assert prompt.index("worker-z") < prompt.index("worker-a")
+
+
 def test_plan_round_drops_an_assignment_to_a_worker_id_not_in_the_candidate_list() -> None:
     provider = OpenAIProvider(model="gpt-4.1")
     provider.responses_json = lambda prompt, max_output_tokens=512: type(  # type: ignore[method-assign]

@@ -4,7 +4,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from ant.domain import Evidence, WorkerCard
+from ant.domain import CodeSymbol, Evidence, WorkerCard
 from ant.retrieval import dense as dense_module
 from ant.retrieval.dense import (
     DenseEmbedder,
@@ -12,6 +12,7 @@ from ant.retrieval.dense import (
     EmbeddingIndex,
     build_and_cache_in_background,
     build_embedding_index,
+    build_worker_card_index,
     warm_dense_cache,
 )
 from ant.retrieval.relevance import extract_terms, score_evidence
@@ -49,6 +50,47 @@ def _fake_index() -> EmbeddingIndex:
     ]
     vectors = np.array([[1.0, 0.0], [0.0, 1.0]], dtype=np.float32)
     return EmbeddingIndex(entries=entries, vectors=vectors)
+
+
+class _RecordingEmbedder(DenseEmbedder):
+    """Same network-free rationale as _FakeEmbedder, but also records every
+    text it was asked to embed, so a test can inspect what actually went
+    into the corpus."""
+
+    def __init__(self) -> None:
+        self.embedded_texts: list[str] = []
+
+    def embed(self, texts: list[str]) -> list[list[float]]:
+        self.embedded_texts.extend(texts)
+        return [[1.0, 0.0] for _ in texts]
+
+
+def test_build_worker_card_index_embeds_symbol_names_not_just_searchable_terms() -> None:
+    # Regression test: confirmed on a real qibo worker card that a defining
+    # method (`draw`) never appeared in searchable_terms at all
+    # (indexing.cards._top_terms's round-robin sampling exhausts on class
+    # names before function names), so a query naming it had nothing to
+    # match against in this embedding even though the symbol is right
+    # there on WorkerCard.symbols. The embed text must include symbols'
+    # own names/qualnames, not just searchable_terms.
+    worker = WorkerCard(
+        id="worker-models",
+        territory_id="models",
+        name="models worker",
+        root="src/models",
+        searchable_terms=["StateEvolution", "Grover"],  # deliberately no "draw"
+        symbols=[
+            CodeSymbol(
+                name="draw", kind="def", path="circuit.py", line=10, qualname="Circuit.draw"
+            ),
+        ],
+    )
+    embedder = _RecordingEmbedder()
+
+    build_worker_card_index([worker], embedder)
+
+    assert embedder.embedded_texts
+    assert "draw" in embedder.embedded_texts[0]
 
 
 def test_embedding_index_search_ranks_by_cosine_similarity() -> None:

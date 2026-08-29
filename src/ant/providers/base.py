@@ -106,6 +106,7 @@ class WorkerReasoner(Protocol):
         validation_feedback: str = "",
         repair_guidance: str = "",
         stuck_tried_workers: dict[str, list[str]] | None = None,
+        worker_relevance_rank: dict[str, int] | None = None,
     ) -> RoundPlan:
         """The single per-round Orchestrator planning call: replaces
         select_workers/decide_local_action and the hand-coded escalation
@@ -181,6 +182,15 @@ class WorkerReasoner(Protocol):
         mechanically after the call returns, overriding an assignment that
         names *only* already-tried workers for a still-stuck need with a
         forced global_fallback rather than executing the repeat.
+
+        `worker_relevance_rank` maps a worker id to its rank (1 = best) by
+        ant.coordinator.worker_retrieval.rank_workers against this round's
+        frontier -- lexical/exact-symbol/dense retrieval over WorkerCard.symbols,
+        never a relevance-based exclusion (a worker with no entry here
+        simply has no retrieval signal, not a bad one). Advisory context
+        only, same status as memory_hints/cross_repo_experience: this call
+        is not required to follow it, and `workers` here still lists every
+        worker regardless of rank.
         """
         ...
 

@@ -520,6 +520,7 @@ class _DenylistReasoner:
         validation_feedback="",
         repair_guidance="",
         stuck_tried_workers=None,
+        worker_relevance_rank=None,
     ):
         raise AssertionError("this test does not exercise plan_round()")
 

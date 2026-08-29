@@ -675,6 +675,7 @@ class OpenAIProvider:
         validation_feedback: str = "",
         repair_guidance: str = "",
         stuck_tried_workers: dict[str, list[str]] | None = None,
+        worker_relevance_rank: dict[str, int] | None = None,
     ) -> RoundPlan:
         # The single per-round Orchestrator call: replaces select_workers/
         # decide_local_action and the hand-coded escalation ladder
@@ -716,15 +717,36 @@ class OpenAIProvider:
             f"(worker={item.worker_id or 'unknown'})\n{item.quote[:600]}"
             for index, item in enumerate(evidence)
         ]
+        worker_relevance_rank = worker_relevance_rank or {}
+        # Ranked workers first (best retrieval match first), unranked ones
+        # keep their original relative order after -- every worker is still
+        # listed, nothing excluded, only reordered/annotated. See
+        # ant.coordinator.worker_retrieval.rank_workers: this rank comes
+        # from BM25 + exact-symbol + dense retrieval over WorkerCard.symbols
+        # (the AST's real, non-truncated definition list), not the lossy
+        # round-robin-truncated searchable_terms this prompt used to rely
+        # on alone -- confirmed on a real qibo worker that a defining class
+        # (FALQON) sat at position 15 of a 48-term list, past the [:12]
+        # slice below, invisible to every prior version of this prompt.
+        ordered_workers = sorted(
+            workers,
+            key=lambda worker: worker_relevance_rank.get(worker.id, len(workers) + 1),
+        )
         worker_lines = [
-            f"- {worker.id}: {worker.routing_summary or '(no routing summary)'}"
+            f"- {worker.id}"
+            + (
+                f" (retrieval rank {worker_relevance_rank[worker.id]}/{len(workers)})"
+                if worker.id in worker_relevance_rank
+                else ""
+            )
+            + f": {worker.routing_summary or '(no routing summary)'}"
             + (
                 f"\n  terms: {', '.join(worker.searchable_terms[:12])}"
                 if worker.searchable_terms
                 else ""
             )
             + (f"\n  memory: {memory_hints[worker.id]}" if worker.id in memory_hints else "")
-            for worker in workers
+            for worker in ordered_workers
         ]
         stuck_tried_workers = stuck_tried_workers or {}
         stuck_lines = [

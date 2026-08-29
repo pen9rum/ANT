@@ -442,16 +442,28 @@ def warm_dense_cache(
 
 def build_worker_card_index(workers: list[WorkerCard], embedder: DenseEmbedder) -> EmbeddingIndex:
     """One embedding per worker card (its name/responsibilities/searchable
-    terms), not per code chunk -- a repo with thousands of symbols still only
-    has as many workers as it has territories (dozens, not thousands), so
-    this is cheap enough to build eagerly at `ant index` time and use as a
-    semantic routing signal, unlike full chunk-level embedding.
+    terms/symbols), not per code chunk -- a repo with thousands of symbols
+    still only has as many workers as it has territories (dozens, not
+    thousands), so this is cheap enough to build eagerly at `ant index`
+    time and use as a semantic routing signal, unlike full chunk-level
+    embedding.
+
+    Includes `worker.symbols`' own names/qualnames, not just
+    searchable_terms: confirmed directly on a real worker card that a
+    defining method (`draw`) never appeared in searchable_terms at all
+    (indexing.cards._top_terms's round-robin sampling exhausts on class
+    names before function names), so a query naming it had nothing to
+    match against in this embedding even though the symbol is right there
+    on the card. `symbols` is the AST's complete, non-truncated list.
     """
     entries: list[EmbeddingEntry] = []
     texts: list[str] = []
     for worker in workers:
+        symbol_names = [
+            name for symbol in worker.symbols for name in (symbol.name, symbol.qualname)
+        ]
         text = " ".join(
-            [worker.name, *worker.responsibilities, *worker.searchable_terms]
+            [worker.name, *worker.responsibilities, *worker.searchable_terms, *symbol_names]
         ).strip()
         if not text:
             continue
