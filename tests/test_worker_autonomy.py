@@ -348,6 +348,7 @@ class _DenylistReasoner:
         cross_repo_experience,
         validation_feedback="",
         repair_guidance="",
+        stuck_tried_workers=None,
     ):
         raise AssertionError("this test does not exercise plan_round()")
 

@@ -193,6 +193,7 @@ def test_cross_repo_experience_reaches_plan_round(tmp_path: Path) -> None:
             cross_repo_experience,
             validation_feedback="",
             repair_guidance="",
+            stuck_tried_workers=None,
         ):
             received.append(cross_repo_experience)
             return RoundPlan()
@@ -286,6 +287,7 @@ class _PassthroughLookupsReasoner:
         cross_repo_experience,
         validation_feedback="",
         repair_guidance="",
+        stuck_tried_workers=None,
     ):
         # TODO(Phase 7): every scenario reasoner below this class exercises
         # the old routing/escalation-specific ask() mechanics, which the
@@ -746,6 +748,7 @@ def test_plan_round_accepts_an_acyclic_plan_without_retrying() -> None:
             cross_repo_experience,
             validation_feedback="",
             repair_guidance="",
+            stuck_tried_workers=None,
         ):
             calls.append(validation_feedback)
             return RoundPlan(assignments={"n1": ["worker-a"]})
@@ -793,6 +796,7 @@ def test_plan_round_rejects_a_cyclic_plan_and_retries_with_the_cycle_described()
             cross_repo_experience,
             validation_feedback="",
             repair_guidance="",
+            stuck_tried_workers=None,
         ):
             calls.append(validation_feedback)
             if not validation_feedback:
@@ -862,6 +866,7 @@ def test_plan_round_accepts_the_retry_even_if_it_is_still_cyclic() -> None:
             cross_repo_experience,
             validation_feedback="",
             repair_guidance="",
+            stuck_tried_workers=None,
         ):
             calls.append(validation_feedback)
             return RoundPlan(
@@ -928,6 +933,7 @@ class _AlwaysStuckAndAlwaysProposesBridgeReasoner(_PassthroughLookupsReasoner):
         cross_repo_experience,
         validation_feedback="",
         repair_guidance="",
+        stuck_tried_workers=None,
     ):
         assignments = {need_id: [workers[0].id] for need_id in frontier.ready}
         special_tactics = {
@@ -1045,6 +1051,7 @@ class _DecomposesRootIntoTwoChildrenReasoner(_PassthroughLookupsReasoner):
         cross_repo_experience,
         validation_feedback="",
         repair_guidance="",
+        stuck_tried_workers=None,
     ):
         self._round += 1
         if self._round == 1:
@@ -1140,6 +1147,7 @@ class _AssignsSameWorkerToTwoIndependentNeedsReasoner(_PassthroughLookupsReasone
         cross_repo_experience,
         validation_feedback="",
         repair_guidance="",
+        stuck_tried_workers=None,
     ):
         worker_id = workers[0].id
         if not self._added_aux_need:
@@ -1265,6 +1273,7 @@ def test_closure_check_survives_a_partial_verdict_creating_a_gap_node(tmp_path: 
             cross_repo_experience,
             validation_feedback="",
             repair_guidance="",
+            stuck_tried_workers=None,
         ):
             return RoundPlan(assignments={need_id: [workers[0].id] for need_id in frontier.ready})
 
@@ -1347,6 +1356,7 @@ def test_ask_with_seeded_initial_state_only_works_the_unresolved_part(tmp_path: 
             cross_repo_experience,
             validation_feedback="",
             repair_guidance="",
+            stuck_tried_workers=None,
         ):
             assigned_need_ids.extend(frontier.ready)
             return RoundPlan(assignments={need_id: [workers[0].id] for need_id in frontier.ready})
@@ -1402,6 +1412,7 @@ def test_ask_forces_the_given_assignment_at_round_0_only(tmp_path: Path) -> None
             cross_repo_experience,
             validation_feedback="",
             repair_guidance="",
+            stuck_tried_workers=None,
         ):
             return RoundPlan(assignments={need_id: ["worker-a"] for need_id in frontier.ready})
 
@@ -1461,6 +1472,7 @@ def test_ask_forces_a_global_search_at_round_0_with_no_stuck_episode_needed(
             cross_repo_experience,
             validation_feedback="",
             repair_guidance="",
+            stuck_tried_workers=None,
         ):
             return RoundPlan()
 
@@ -1477,6 +1489,78 @@ def test_ask_forces_a_global_search_at_round_0_with_no_stuck_episode_needed(
     assert execution.special_tactic == "global_fallback"
     assert execution.resolution == "resolved"
     assert state.final_need_graph["root"].resolution == "resolved"
+
+
+class _StubbornlyReassignsTriedWorkerReasoner(_PassthroughLookupsReasoner):
+    """Never escalates a stuck need on its own -- keeps proposing a plain
+    reassignment of the same single known worker for ready AND
+    stuck-subgraph-member need_ids alike, ignoring the stuck_tried_workers
+    hint plan_round receives entirely. Exists to prove
+    LocalCoordinator.ask() enforces routing self-correction mechanically
+    (see _enforce_no_repeat_stuck_assignment) rather than only hoping a
+    stochastic planner notices the hint and diversifies on its own."""
+
+    def observe(self, *, question, worker_id, territory_id, evidence):
+        return WorkerObservation(worker_id=worker_id, territory_id=territory_id)
+
+    def check_need_resolution(self, *, need, new_evidence, question):
+        return NeedResolution(status="unresolved")
+
+    def plan_round(
+        self,
+        *,
+        question,
+        graph,
+        resolution_results,
+        evidence,
+        workers,
+        memory_hints,
+        frontier,
+        observed_needs,
+        incomplete_parents,
+        cross_repo_experience,
+        validation_feedback="",
+        repair_guidance="",
+        stuck_tried_workers=None,
+    ):
+        stuck_members = {need_id for group in frontier.stuck_subgraphs for need_id in group}
+        targets = set(frontier.ready) | stuck_members
+        return RoundPlan(assignments={need_id: [workers[0].id] for need_id in targets})
+
+
+def test_ask_overrides_a_stuck_reassignment_of_only_already_tried_workers(
+    tmp_path: Path,
+) -> None:
+    # Routing self-correction: once a need is stuck (>= _STUCK_THRESHOLD
+    # rounds without progress), an assignment made up entirely of workers
+    # already recorded as tried-with-no-progress on it must not execute as
+    # a plain repeat -- the coordinator overrides it with a forced
+    # global_fallback rather than trusting the planner to diversify on its
+    # own, since this fixture's reasoner deliberately never does.
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "a.py").write_text("def a():\n    pass\n", encoding="utf-8")
+    worker = WorkerCard(
+        id="worker-a", territory_id="a", name="a", root="src", files=["src/a.py"]
+    )
+
+    state = LocalCoordinator(
+        tmp_path, [worker], reasoner=_StubbornlyReassignsTriedWorkerReasoner()
+    ).ask("question", max_rounds=4)
+
+    # Rounds 0-2: not yet stuck (progress flips to "stuck" only after
+    # post_frontier for the *next* round is already computed -- see
+    # _STUCK_THRESHOLD's own bookkeeping -- so the override's earliest
+    # possible round is one later than rounds_without_progress alone would
+    # suggest). By round 3 the reasoner is still proposing the same
+    # already-tried worker_a for the now-stuck root -- confirmed overridden.
+    assert len(state.rounds) == 4
+    for round_index in range(3):
+        assert state.rounds[round_index].node_executions[0].special_tactic == ""
+    round3_executions = state.rounds[3].node_executions
+    assert round3_executions, "expected round 3 to still execute something for the stuck need"
+    assert round3_executions[0].need_id == "root"
+    assert round3_executions[0].special_tactic == "global_fallback"
+    assert round3_executions[0].worker_ids == []
 
 
 class _AlwaysUnresolvedSingleWorkerReasoner(_PassthroughLookupsReasoner):
@@ -1508,6 +1592,7 @@ class _AlwaysUnresolvedSingleWorkerReasoner(_PassthroughLookupsReasoner):
         cross_repo_experience,
         validation_feedback="",
         repair_guidance="",
+        stuck_tried_workers=None,
     ):
         assignments = {need_id: [workers[0].id] for need_id in frontier.ready}
         special_tactics = {
@@ -1571,6 +1656,7 @@ class _AlwaysPrefersBrokenWorkerReasoner(_PassthroughLookupsReasoner):
         cross_repo_experience,
         validation_feedback="",
         repair_guidance="",
+        stuck_tried_workers=None,
     ):
         return RoundPlan(assignments={need_id: ["worker-broken"] for need_id in frontier.ready})
 

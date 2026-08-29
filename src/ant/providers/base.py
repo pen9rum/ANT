@@ -105,6 +105,7 @@ class WorkerReasoner(Protocol):
         cross_repo_experience: list[str],
         validation_feedback: str = "",
         repair_guidance: str = "",
+        stuck_tried_workers: dict[str, list[str]] | None = None,
     ) -> RoundPlan:
         """The single per-round Orchestrator planning call: replaces
         select_workers/decide_local_action and the hand-coded escalation
@@ -166,6 +167,20 @@ class WorkerReasoner(Protocol):
         attempt, not an instruction this call is required to follow --
         same status as cross_repo_experience, just task-scoped instead of
         cross-repo.
+
+        `stuck_tried_workers` maps a need_id inside one of
+        `frontier.stuck_subgraphs` to the worker ids RecoveryState already
+        recorded as tried-with-no-progress on it (empty/None for a need
+        with no stuck history yet, which is every need until it has spent
+        _STUCK_THRESHOLD rounds without progress). This is advisory too --
+        the coordinator does not require assignments to avoid these ids --
+        but repeating one anyway is expected to be a deliberate, informed
+        choice (e.g. reusing a worker with a different, more specific need
+        this round) rather than the planner simply having no memory of
+        what already failed: LocalCoordinator.ask() enforces this
+        mechanically after the call returns, overriding an assignment that
+        names *only* already-tried workers for a still-stuck need with a
+        forced global_fallback rather than executing the repeat.
         """
         ...
 

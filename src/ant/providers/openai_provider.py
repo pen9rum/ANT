@@ -674,6 +674,7 @@ class OpenAIProvider:
         cross_repo_experience: list[str],
         validation_feedback: str = "",
         repair_guidance: str = "",
+        stuck_tried_workers: dict[str, list[str]] | None = None,
     ) -> RoundPlan:
         # The single per-round Orchestrator call: replaces select_workers/
         # decide_local_action and the hand-coded escalation ladder
@@ -725,8 +726,15 @@ class OpenAIProvider:
             + (f"\n  memory: {memory_hints[worker.id]}" if worker.id in memory_hints else "")
             for worker in workers
         ]
+        stuck_tried_workers = stuck_tried_workers or {}
         stuck_lines = [
             f"- subgraph {index}: {', '.join(group)}"
+            + "".join(
+                f"\n    {need_id} already tried with no progress: "
+                f"{', '.join(stuck_tried_workers[need_id])}"
+                for need_id in group
+                if stuck_tried_workers.get(need_id)
+            )
             for index, group in enumerate(frontier.stuck_subgraphs)
         ]
         observed_need_lines = [
@@ -764,7 +772,13 @@ class OpenAIProvider:
             "Every other kind of recovery (reassign to a different "
             "worker, redecompose the need, form a coalition) is just an "
             "ordinary graph_updates/assignments entry, no special tactic "
-            "needed.\n"
+            "needed. A stuck subgraph line below may list, per need_id, "
+            "which workers were already tried on it with no progress -- "
+            "assigning the exact same worker(s) again is expected to be a "
+            "deliberate choice (e.g. that worker now has a narrower, "
+            "different sub-need), not the default; prefer a different "
+            "worker, a coalition, or one of the two special tactics "
+            "instead unless you have a specific reason to repeat.\n"
             "4. For each item in 'Observed needs' below: decide whether to "
             "create a new graph node from it (via graph_updates), fold its "
             "content into an existing node you're editing, or leave it "

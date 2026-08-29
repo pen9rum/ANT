@@ -267,6 +267,12 @@ class LocalCoordinator:
                 for need_id, node in graph.nodes.items()
             }
 
+            stuck_tried_workers = {
+                need_id: sorted(recovery.tried_workers_by_node.get(need_id, set()))
+                for group in frontier.stuck_subgraphs
+                for need_id in group
+                if recovery.tried_workers_by_node.get(need_id)
+            }
             plan = _plan_round_with_cycle_validation(
                 self.reasoner,
                 question=question,
@@ -280,7 +286,9 @@ class LocalCoordinator:
                 incomplete_parents=incomplete_parents,
                 cross_repo_experience=self.cross_repo_experience,
                 repair_guidance=repair_guidance,
+                stuck_tried_workers=stuck_tried_workers,
             )
+            _enforce_no_repeat_stuck_assignment(plan, stuck_tried_workers)
             if round_index == 0 and forced_first_round_assignments:
                 # Overrides whatever the Orchestrator itself proposed for
                 # these need_ids this round -- a forced repair action must
@@ -909,6 +917,7 @@ def _plan_round_with_cycle_validation(
     incomplete_parents: list[str],
     cross_repo_experience: list[str],
     repair_guidance: str = "",
+    stuck_tried_workers: dict[str, list[str]] | None = None,
 ) -> RoundPlan:
     """Calls reasoner.plan_round() and validates the graph its
     graph_updates would produce -- merged onto the existing graph -- has
@@ -935,6 +944,7 @@ def _plan_round_with_cycle_validation(
         incomplete_parents=incomplete_parents,
         cross_repo_experience=cross_repo_experience,
         repair_guidance=repair_guidance,
+        stuck_tried_workers=stuck_tried_workers,
     )
     cycles = find_cycles(_merge_graph_updates(graph, plan))
     if not cycles:
@@ -960,7 +970,46 @@ def _plan_round_with_cycle_validation(
         cross_repo_experience=cross_repo_experience,
         validation_feedback=feedback,
         repair_guidance=repair_guidance,
+        stuck_tried_workers=stuck_tried_workers,
     )
+
+
+def _enforce_no_repeat_stuck_assignment(
+    plan: RoundPlan, stuck_tried_workers: dict[str, list[str]]
+) -> None:
+    """Routing self-correction: `stuck_tried_workers` (see plan_round's own
+    docstring) is advisory information, and the Orchestrator's own choice
+    to repeat an already-tried worker is respected when it names even one
+    worker outside that tried set (e.g. keeping a tried worker in a new
+    coalition alongside someone new) -- this only overrides the one
+    pattern that is never a deliberate choice: an assignment for a
+    still-stuck need_id made up *entirely* of workers RecoveryState already
+    recorded as tried-with-no-progress on it, which just re-runs the exact
+    same thing again. Confirmed on real traces (see this session's own
+    diagnosis) that a stochastic planner can do this repeatedly, several
+    rounds in a row, with no self-correction -- it has no memory of its
+    own past assignments unless told, and stuck_tried_workers alone (a
+    prompt hint) does not reliably stop it.
+
+    Downgrades to global_fallback rather than picking a specific
+    alternative worker algorithmically: that judgment call -- which
+    *particular* other worker is a good complementary choice -- belongs to
+    the Orchestrator's own reasoning (now that it has been told what
+    failed), not to a mechanical substitution here. This only fires when
+    the Orchestrator did not diversify despite that information; the
+    existing global_fallback tactic (unscoped repo-wide search) is the
+    one safe, already-tested escape hatch that requires no such judgment.
+    Mutates `plan` in place -- called right after plan_round returns, same
+    pattern as the forced_first_round_assignments override.
+    """
+    for need_id, tried in stuck_tried_workers.items():
+        assigned = plan.assignments.get(need_id)
+        if not assigned or not tried:
+            continue
+        if set(assigned) - set(tried):
+            continue  # at least one new worker in the mix -- a real choice
+        del plan.assignments[need_id]
+        plan.special_tactics.setdefault(need_id, "global_fallback")
 
 
 def _merge_graph_updates(graph: NeedGraph, plan: RoundPlan) -> NeedGraph:
