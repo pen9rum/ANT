@@ -2,6 +2,8 @@ from pathlib import Path
 
 from ant.coordinator import LocalCoordinator
 from ant.coordinator.local import (
+    RecoveryState,
+    StuckEpisode,
     _build_temporary_bridge,
     _close_resolved_needs,
     _matches_term,
@@ -1489,6 +1491,78 @@ def test_ask_forces_a_global_search_at_round_0_with_no_stuck_episode_needed(
     assert execution.special_tactic == "global_fallback"
     assert execution.resolution == "resolved"
     assert state.final_need_graph["root"].resolution == "resolved"
+
+
+def test_ask_does_not_double_execute_global_fallback_when_orchestrator_also_picks_it(
+    tmp_path: Path,
+) -> None:
+    # Regression test: forced_first_round_global_search_ids's forced
+    # execution and the Orchestrator's own independently-chosen
+    # plan.special_tactics used to both run global_fallback for the same
+    # need_id in the same round -- confirmed live on real qibo/seaborn
+    # traces (one need_id's round-0 node_executions showed global_fallback
+    # twice). This needs a real stuck episode to exist (unlike the
+    # no-episode-needed test above) so the Orchestrator's own
+    # special_tactics loop is actually capable of executing at all --
+    # otherwise _episode_for_need's own None-guard would prevent the
+    # second run for an unrelated reason, and this test would pass
+    # without the fix doing anything.
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "findme.py").write_text(
+        "def target_function():\n    pass\n", encoding="utf-8"
+    )
+    worker = WorkerCard(
+        id="worker-src",
+        territory_id="src",
+        name="src",
+        root="src",
+        searchable_terms=["target_function"],
+        files=["src/findme.py"],
+    )
+
+    class _AlsoPicksGlobalFallbackReasoner(_PassthroughLookupsReasoner):
+        def observe(self, *, question, worker_id, territory_id, evidence):
+            return WorkerObservation(worker_id=worker_id, territory_id=territory_id)
+
+        def check_need_resolution(self, *, need, new_evidence, question):
+            return NeedResolution(status="resolved" if new_evidence else "unresolved")
+
+        def plan_round(
+            self,
+            *,
+            question,
+            graph,
+            resolution_results,
+            evidence,
+            workers,
+            memory_hints,
+            frontier,
+            observed_needs,
+            incomplete_parents,
+            cross_repo_experience,
+            validation_feedback="",
+            repair_guidance="",
+            stuck_tried_workers=None,
+        ):
+            return RoundPlan(special_tactics={"root": "global_fallback"})
+
+    recovery = RecoveryState(
+        stuck_episodes={"root": StuckEpisode(episode_id="root", members={"root"})},
+        episode_by_need_id={"root": "root"},
+    )
+
+    state = LocalCoordinator(
+        tmp_path, [worker], reasoner=_AlsoPicksGlobalFallbackReasoner()
+    ).ask(
+        "Where is target_function defined?",
+        max_rounds=1,
+        initial_recovery=recovery,
+        forced_first_round_global_search_ids={"root"},
+    )
+
+    root_executions = [ne for ne in state.rounds[0].node_executions if ne.need_id == "root"]
+    assert len(root_executions) == 1
+    assert root_executions[0].special_tactic == "global_fallback"
 
 
 class _StubbornlyReassignsTriedWorkerReasoner(_PassthroughLookupsReasoner):

@@ -430,6 +430,17 @@ class LocalCoordinator:
                             ],
                         )
                     )
+                    # Drop any special_tactic the Orchestrator's own
+                    # plan_round() call independently proposed for this
+                    # same need_id this round -- confirmed live on real
+                    # qibo/seaborn traces: nothing previously stopped
+                    # plan.special_tactics from also choosing
+                    # global_fallback (or temporary_bridge) for a need_id
+                    # already force-executed above, running global_fallback
+                    # twice in the same round for no new evidence, at real
+                    # API cost. The forced execution already happened; nothing
+                    # left for the Orchestrator's own choice to add here.
+                    plan.special_tactics.pop(need_id, None)
 
             for need_id, tactic in plan.special_tactics.items():
                 episode = _episode_for_need(recovery, need_id)
