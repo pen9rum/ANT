@@ -314,6 +314,42 @@ def test_symbol_channel_weights_a_shared_path_component_below_a_rare_term_match(
     assert ranked[0][0] == "extractor/teachable.py"
 
 
+def test_search_finds_results_when_a_workers_entire_scope_sits_under_a_low_value_directory_name(
+    tmp_path: Path,
+) -> None:
+    # Regression test for a real bug found only via a live smoke test
+    # against real qibo data, not any synthetic test: an earlier version
+    # of _territory_index skipped is_low_value_path/has_low_value_part
+    # files entirely when building the territory-wide corpus (intended to
+    # keep generated/vendored noise out). But has_low_value_part flags
+    # entire directory names like "examples"/"test"/"tests"/"doc"/"docs"
+    # as low-value -- and a worker's whole assigned file scope can, and
+    # in this case did, live entirely under one of those names
+    # (worker-examples-reuploading-classifier in the real qibo repo). The
+    # filter then excluded every single file the worker owned, leaving an
+    # empty corpus and zero search results, unconditionally, no matter
+    # the query. A worker's `files` list is already its deliberately
+    # assigned scope, not something a generic noise filter should be
+    # allowed to zero out entirely -- so the filter was removed rather
+    # than special-cased.
+    (tmp_path / "examples" / "reuploading_classifier").mkdir(parents=True)
+    (tmp_path / "examples" / "reuploading_classifier" / "qlassifier.py").write_text(
+        "def paint_world_map(self):\n"
+        "    fig, ax = world_map_template()\n"
+        "    ax.scatter(laea_x(angles), laea_y(angles))\n",
+        encoding="utf-8",
+    )
+
+    evidence = LocalSearchTool(tmp_path).search(
+        "bloch sphere visualization world map",
+        ["examples/reuploading_classifier/qlassifier.py"],
+        limit=8,
+    )
+
+    assert evidence
+    assert evidence[0].path == "examples/reuploading_classifier/qlassifier.py"
+
+
 def test_symbol_ranking_is_conditioned_on_current_need(tmp_path: Path) -> None:
     (tmp_path / "src").mkdir()
     (tmp_path / "src" / "backend.py").write_text(

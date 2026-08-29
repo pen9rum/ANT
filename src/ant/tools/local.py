@@ -24,7 +24,6 @@ from ant.retrieval.dense import (
     get_shared_embedder,
 )
 from ant.retrieval.relevance import extract_terms, is_stem_match, score_evidence
-from ant.tools.path_prior import has_low_value_part, is_low_value_path
 from ant.tools.symbol_index import SymbolDefinition, SymbolIndex, build_symbol_index
 
 # `_query_terms` used to be its own local implementation; it is now a thin
@@ -185,9 +184,16 @@ class LocalSearchTool:
         self, sorted_files: tuple[str, ...]
     ) -> tuple[BM25Index, list[tuple[str, int, list[str]]], dict[str, set[int]]]:
         """Cached (per sorted file scope, same key as symbol_index) territory-
-        wide retrieval index for search(): reads every non-low-value file in
-        the scope once, splits each into _retrieval_regions' own definition/
-        paragraph-aware blocks, and builds
+        wide retrieval index for search(): reads every file in the scope
+        once (no is_low_value_path/has_low_value_part filtering here -- an
+        earlier version excluded files under directory names like
+        "examples"/"test"/"doc", which silently zeroed out the entire
+        corpus for any worker whose whole assigned territory happens to
+        live under one of those names, e.g. worker-examples-*; a worker's
+        `files` list is already that worker's deliberately assigned scope,
+        not a place to second-guess with a generic noise filter), splits
+        each into _retrieval_regions' own definition/paragraph-aware
+        blocks, and builds
 
         - one BM25Index over *every* region across the whole scope (not one
           per file -- this is the actual fix for search()'s old per-file-
@@ -223,8 +229,6 @@ class LocalSearchTool:
         region_by_start: dict[tuple[str, int], int] = {}
 
         for relative in sorted_files:
-            if is_low_value_path(relative) or has_low_value_part(relative):
-                continue
             path = self.repo_root / relative
             try:
                 lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
