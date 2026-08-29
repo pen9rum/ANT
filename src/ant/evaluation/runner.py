@@ -10,7 +10,7 @@ from ant.coordinator import LocalCoordinator
 from ant.domain import TokenUsage
 from ant.evaluation.datasets import EvalExample
 from ant.evaluation.judge import judge_answer
-from ant.evaluation.metrics import EvalScore
+from ant.evaluation.metrics import EvalScore, build_reference_idf
 from ant.memory import (
     GlobalMemoryStore,
     IndexStore,
@@ -50,6 +50,10 @@ def run_batch(
     provider = OpenAIProvider() if synthesize == "openai" else None
     global_memory = GlobalMemoryStore()
     out_path.parent.mkdir(parents=True, exist_ok=True)
+    # Built once over this batch's own reference answers, then reused for
+    # every example's F1 -- see build_reference_idf's docstring for why a
+    # per-question corpus of one document would defeat the point.
+    idf = build_reference_idf(example.answer for example in examples)
     results: list[BatchResult] = []
     with out_path.open("w", encoding="utf-8") as handle:
         for example in examples:
@@ -81,6 +85,7 @@ def run_batch(
                     max_rounds=max_rounds,
                     judge=judge,
                     global_memory=global_memory,
+                    idf=idf,
                 )
             except Exception as exc:  # noqa: BLE001 - one bad example must not sink the batch
                 # A single malformed model response (or any other failure)
@@ -114,6 +119,7 @@ def _run_example(
     max_rounds: int,
     judge: str,
     global_memory: GlobalMemoryStore,
+    idf: dict[str, float] | None = None,
 ) -> BatchResult:
     started_at = time.time()
     example_index = (
@@ -153,6 +159,7 @@ def _run_example(
         evidence_count=len(state.evidence),
         unresolved_need_count=len(state.unresolved_needs),
         judge=judge,
+        idf=idf,
     )
     record_task_memory(
         colony_memory,

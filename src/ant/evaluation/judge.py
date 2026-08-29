@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
+
 from ant.evaluation.metrics import EvalScore, evaluate_answer
 from ant.providers import OpenAIProvider
 from ant.providers.openai_provider import _loads_json_object
@@ -85,12 +87,14 @@ def judge_answer(
     evidence_count: int,
     unresolved_need_count: int,
     judge: str = "heuristic",
+    idf: Mapping[str, float] | None = None,
 ) -> EvalScore:
     score = evaluate_answer(
         prediction=prediction,
         expected=expected,
         evidence_count=evidence_count,
         unresolved_need_count=unresolved_need_count,
+        idf=idf,
     )
     if judge != "openai" or not expected:
         return score
