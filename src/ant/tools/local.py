@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -22,8 +23,8 @@ from ant.retrieval.dense import (
     build_and_cache_in_background,
     get_shared_embedder,
 )
-from ant.retrieval.relevance import TOKEN_RE, extract_terms, score_evidence
-from ant.tools.path_prior import has_low_value_part, has_source_part, is_low_value_path
+from ant.retrieval.relevance import extract_terms, is_stem_match, score_evidence
+from ant.tools.path_prior import has_low_value_part, is_low_value_path
 from ant.tools.symbol_index import SymbolDefinition, SymbolIndex, build_symbol_index
 
 # `_query_terms` used to be its own local implementation; it is now a thin
@@ -54,6 +55,14 @@ class LocalSearchTool:
         compare=False,
         repr=False,
     )
+    # Territory-wide retrieval index, keyed by tuple(sorted(files)) same as
+    # _symbol_indexes above -- built once per distinct file scope, reused
+    # across a worker's several search() calls in one task. See
+    # _territory_index's own docstring for what's cached here and why.
+    _territory_cache: dict[
+        tuple[str, ...],
+        tuple[BM25Index, list[tuple[str, int, list[str]]], dict[str, set[int]]],
+    ] = field(default_factory=dict, init=False, compare=False, repr=False)
 
     def search(
         self,
@@ -62,27 +71,35 @@ class LocalSearchTool:
         limit: int = 8,
         context_lines: int = 6,
     ) -> list[Evidence]:
+        # context_lines is accepted for backward compatibility with every
+        # existing caller (references() passes it explicitly) but no
+        # longer changes region size: a region's boundaries now come from
+        # _retrieval_regions' own definition/paragraph-aware block
+        # splitting (shared with the territory-wide BM25 corpus below),
+        # not a fixed line radius around a single matched line.
+        del context_lines
         terms = _query_terms(query)
-        symbols = _query_symbols(query)
         if not terms:
             return []
 
-        candidates: list[tuple[int, str, int, list[str], str]] = []
-        for relative in files:
-            path = self.repo_root / relative
-            lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
-            candidates.extend(_bm25_block_candidates(relative, lines, terms, limit=24))
-            for index, line in enumerate(lines, start=1):
-                line_score = _line_score(line, terms, symbols=symbols)
-                if line_score <= 0:
-                    continue
-                score = line_score + _path_score(relative, symbols)
-                start = max(1, index - context_lines)
-                end = min(len(lines), index + context_lines)
-                candidates.append((score, relative, start, lines[start - 1 : end], line.strip()))
-
-        candidates.sort(key=lambda item: item[0], reverse=True)
-        return _merge_windows(candidates[: limit * 2], limit=limit)
+        bm25, regions, symbol_term_index = self._territory_index(tuple(sorted(files)))
+        if not regions:
+            return []
+        # Gather more than the caller's own `limit` from each channel
+        # before fusing -- same head-room principle the old code already
+        # used (its own candidates[: limit * 2] cut before _merge_windows),
+        # sized a bit deeper here since Reciprocal Rank Fusion benefits
+        # from seeing further down each channel's own ranking, not just
+        # its very top.
+        channel_limit = limit * 6
+        bm25_ranked = _bm25_channel_rank(bm25, regions, terms, channel_limit)
+        symbol_ranked = _symbol_path_channel_rank(regions, symbol_term_index, terms, channel_limit)
+        fused = _reciprocal_rank_fusion(bm25_ranked, symbol_ranked)
+        candidates = [
+            (round(score * 1000), path, start, block, matched)
+            for score, path, start, block, matched in fused
+        ]
+        return _merge_windows(candidates[: limit * 4], limit=limit)
 
     def navigate(self, symbol: str, files: list[str], limit: int = 6) -> list[Evidence]:
         terms = _query_terms(symbol)
@@ -163,6 +180,82 @@ class LocalSearchTool:
         if key not in self._symbol_indexes:
             self._symbol_indexes[key] = build_symbol_index(self.repo_root, list(key))
         return self._symbol_indexes[key]
+
+    def _territory_index(
+        self, sorted_files: tuple[str, ...]
+    ) -> tuple[BM25Index, list[tuple[str, int, list[str]]], dict[str, set[int]]]:
+        """Cached (per sorted file scope, same key as symbol_index) territory-
+        wide retrieval index for search(): reads every non-low-value file in
+        the scope once, splits each into _retrieval_regions' own definition/
+        paragraph-aware blocks, and builds
+
+        - one BM25Index over *every* region across the whole scope (not one
+          per file -- this is the actual fix for search()'s old per-file-
+          scoped BM25: BM25Index's own IDF now sees document frequency
+          across the real territory, so a term common across most files in
+          it is correctly weighted lower than one rare across the territory,
+          regardless of how common or rare it is within any single file);
+        - a term -> region-index lookup for exact symbol/filename-stem/path-
+          component matches, each normalized through the same _query_terms
+          extractor search()'s own query goes through -- a lowercase query
+          term matches a symbol's real (possibly capitalized) name exactly
+          the way it matches the query's own tokenization, with no
+          dependency on the query string happening to preserve the source's
+          original capitalization.
+
+        A definition's own region is looked up by (path, its AST line
+        number) against the regions _retrieval_regions produced for that
+        file. This lookup can miss for a *decorated* definition specifically
+        -- _retrieval_regions treats a non-blank, non-definition-prefixed
+        decorator line as the start of its own short region, so the block
+        starting exactly at the decorated def/class's own line number may
+        never get created. A decorated symbol is not lost in that case (it
+        is still just as findable through the BM25 channel, which doesn't
+        depend on this alignment at all), it only misses the exact-match
+        channel's extra boost -- a known, accepted limitation, not a crash
+        or a silent wrong answer.
+        """
+        if sorted_files in self._territory_cache:
+            return self._territory_cache[sorted_files]
+
+        regions: list[tuple[str, int, list[str]]] = []
+        symbol_term_index: dict[str, set[int]] = defaultdict(set)
+        region_by_start: dict[tuple[str, int], int] = {}
+
+        for relative in sorted_files:
+            if is_low_value_path(relative) or has_low_value_part(relative):
+                continue
+            path = self.repo_root / relative
+            try:
+                lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+            except OSError:
+                continue
+            stem_terms = _query_terms(Path(relative).stem)
+            part_terms = [
+                term for part in Path(relative).parts[:-1] for term in _query_terms(part)
+            ]
+            for start, block in _retrieval_regions(lines):
+                region_index = len(regions)
+                regions.append((relative, start, block))
+                region_by_start[(relative, start)] = region_index
+                for term in (*stem_terms, *part_terms):
+                    symbol_term_index[term].add(region_index)
+
+        symbol_idx = self.symbol_index(list(sorted_files))
+        for definition in symbol_idx.definitions:
+            region_index = region_by_start.get((definition.path, definition.line))
+            if region_index is None:
+                continue
+            for term in {*_query_terms(definition.name), *_query_terms(definition.qualname)}:
+                symbol_term_index[term].add(region_index)
+
+        documents = [
+            (str(index), " ".join(_query_terms("\n".join(block))))
+            for index, (_, _, block) in enumerate(regions)
+        ]
+        result = (BM25Index(documents), regions, dict(symbol_term_index))
+        self._territory_cache[sorted_files] = result
+        return result
 
     def dense_search(self, query: str, files: list[str], limit: int = 4) -> list[Evidence]:
         """Paraphrase-robust retrieval: finds candidates whose wording has no
@@ -385,15 +478,16 @@ class LocalSearchTool:
         return [symbol for _, _, symbol in scored[:limit]]
 
 
-def _query_symbols(query: str) -> list[str]:
-    return [
-        token
-        for token in TOKEN_RE.findall(query)
-        if "_" in token or any(character.isupper() for character in token)
-    ]
-
-
-def _line_score(line: str, terms: list[str], symbols: list[str] | None = None) -> int:
+def _line_score(line: str, terms: list[str]) -> int:
+    # Only used by navigate()/callers()/imports() now -- ranking candidate
+    # *definition*/*import*/*caller-usage* lines within an already-narrow,
+    # structurally-filtered candidate set, not search()'s open-ended
+    # cross-file territory ranking (see search()'s own territory-wide
+    # BM25 + symbol/path channels for that -- a flat per-term score is
+    # exactly what search() moved away from, since it has no notion of
+    # how common or rare a term is across the files being searched; these
+    # three callers' candidate sets are already narrowed to a specific
+    # structural role first, where that doesn't matter the same way).
     line_terms = set(_query_terms(line))
     lowered = line.lower()
     score = 0
@@ -402,29 +496,6 @@ def _line_score(line: str, terms: list[str], symbols: list[str] | None = None) -
             score += 3
         elif term in lowered:
             score += 1
-    for symbol in symbols or []:
-        if symbol in line:
-            score += 8
-        if _is_definition_line(line.strip()) and symbol in line:
-            score += 8
-    return score
-
-
-def _path_score(relative: str, symbols: list[str]) -> int:
-    path = relative.replace("\\", "/")
-    score = 0
-    if path.endswith(".py"):
-        score += 2
-    if is_low_value_path(path):
-        score -= 4
-    if has_low_value_part(path):
-        score -= 2
-    if has_source_part(path):
-        score += 2
-    lowered = path.lower()
-    for symbol in symbols:
-        if symbol.lower() in lowered:
-            score += 4
     return score
 
 
@@ -554,27 +625,116 @@ def _definition_claim(definition: SymbolDefinition) -> str:
     return f"Defines {definition.kind} {definition.qualname or definition.name}."
 
 
-def _bm25_block_candidates(
-    relative: str,
-    lines: list[str],
+_RegionRank = tuple[str, int, list[str], str]  # (path, start_line, block_lines, matched_line)
+
+
+def _bm25_channel_rank(
+    bm25: BM25Index,
+    regions: list[tuple[str, int, list[str]]],
     terms: list[str],
     limit: int,
-) -> list[tuple[int, str, int, list[str], str]]:
-    """Rank coherent definition/paragraph blocks, not isolated physical lines."""
-    regions = _retrieval_regions(lines)
-    documents = [
-        (str(index), " ".join(_query_terms("\n".join(block))))
-        for index, (_, block) in enumerate(regions)
-    ]
-    hits = BM25Index(documents).search(terms, limit=limit)
-    candidates = []
-    for score, doc_id in hits:
-        start, block = regions[int(doc_id)]
+) -> list[_RegionRank]:
+    """search()'s BM25 channel: regions already come from the territory-
+    wide index built once by LocalSearchTool._territory_index, so this is
+    just running the query against it and translating doc_id back to the
+    region it names -- the actual cross-file IDF fix lives in that index's
+    construction (one BM25Index over the whole territory), not here.
+    """
+    ranked: list[_RegionRank] = []
+    for _score, doc_id in bm25.search(terms, limit=limit):
+        path, start, block = regions[int(doc_id)]
         matched = next((line.strip() for line in block if line.strip()), "")
-        block_terms = set(_query_terms("\n".join(block)))
-        coverage = sum(term in block_terms for term in terms)
-        candidates.append((round(score * 4) + 6 + coverage * 10, relative, start, block, matched))
-    return candidates
+        ranked.append((path, start, block, matched))
+    return ranked
+
+
+def _symbol_path_channel_rank(
+    regions: list[tuple[str, int, list[str]]],
+    symbol_term_index: dict[str, set[int]],
+    terms: list[str],
+    limit: int,
+) -> list[_RegionRank]:
+    """search()'s exact-match channel: how many distinct query terms hit a
+    region through symbol_term_index (symbol name/qualname, filename stem,
+    or path component -- see _territory_index) decides its rank here. This
+    produces a rank ordering for Reciprocal Rank Fusion, not a score
+    comparable to BM25's -- RRF only ever looks at rank position within
+    each channel, never at the two channels' raw scores side by side,
+    which is exactly why RRF is the right way to combine two structurally
+    different signals without inventing a new weight to balance them.
+
+    A hit is weighted by 1/(number of regions that term maps to), not
+    counted flatly: a shared parent directory (e.g. every file living
+    under "extractor/") makes that path component match *every* region in
+    the territory, and a flat +1 per matched term would let it swamp a
+    genuinely rare symbol/filename match one term at a time -- the exact
+    same "common term outweighs the one rare discriminative term" failure
+    this whole retrieval rewrite exists to remove, just relocated into
+    this channel instead of _line_score. Weighting by inverse match-count
+    is the same "rare signals count for more" principle BM25's own IDF
+    already applies, not a new hand-tuned constant.
+    """
+    region_hits: dict[int, float] = defaultdict(float)
+    for term in terms:
+        matches = symbol_term_index.get(term)
+        if not matches:
+            # No exact token match -- fall back to the same >=4-char-
+            # prefix stem heuristic already used elsewhere in this
+            # codebase (ant.retrieval.relevance.is_stem_match) for a
+            # different grammatical form of the same word: a query asking
+            # about "worker selection" should still match a symbol/file
+            # actually spelled "select_workers" or "workers", without
+            # this channel silently missing it just because the exact
+            # token strings differ.
+            matches = {
+                region_index
+                for key, region_indices in symbol_term_index.items()
+                if is_stem_match(term, key)
+                for region_index in region_indices
+            }
+        if not matches:
+            continue
+        weight = 1.0 / len(matches)
+        for region_index in matches:
+            region_hits[region_index] += weight
+    ranked_indices = sorted(
+        region_hits, key=lambda index: (-region_hits[index], regions[index][0], regions[index][1])
+    )
+    ranked: list[_RegionRank] = []
+    for index in ranked_indices[:limit]:
+        path, start, block = regions[index]
+        matched = next((line.strip() for line in block if line.strip()), "")
+        ranked.append((path, start, block, matched))
+    return ranked
+
+
+# Reciprocal Rank Fusion's own standard constant (Cormack, Clarke & Buettcher
+# 2009) -- not a value tuned for this codebase or dataset, the one deliberate
+# exception to not adding new hand-tuned constants to this ranking path.
+_RRF_K = 60
+
+
+def _reciprocal_rank_fusion(
+    *ranked_lists: list[_RegionRank],
+) -> list[tuple[float, str, int, list[str], str]]:
+    """Combines any number of independently-ranked candidate lists into one
+    fused ranking by rank position alone (score(region) = sum over lists of
+    1/(_RRF_K + rank_in_that_list)) -- deliberately never looks at either
+    channel's own raw score, since BM25 scores and "how many exact terms
+    matched" aren't on a comparable scale and blending them directly would
+    just be a new hand-tuned weight in disguise. A region appearing highly
+    in even one channel, or moderately in both, naturally floats up.
+    """
+    scores: dict[tuple[str, int], float] = defaultdict(float)
+    payload: dict[tuple[str, int], _RegionRank] = {}
+    for ranked in ranked_lists:
+        for rank, region in enumerate(ranked, start=1):
+            key = (region[0], region[1])
+            scores[key] += 1.0 / (_RRF_K + rank)
+            payload.setdefault(key, region)
+    fused = [(scores[key], *payload[key]) for key in scores]
+    fused.sort(key=lambda item: item[0], reverse=True)
+    return fused
 
 
 def _retrieval_regions(lines: list[str]) -> list[tuple[int, list[str]]]:

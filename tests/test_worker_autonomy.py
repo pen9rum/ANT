@@ -3,6 +3,7 @@ from pathlib import Path
 from ant.domain import Evidence, WorkerCard
 from ant.retrieval import BM25Index
 from ant.tools import LocalSearchTool
+from ant.tools.local import _symbol_path_channel_rank
 from ant.workers import AutonomousWorker, WorkerRunConfig
 from ant.workers.autonomous import _rank_evidence
 
@@ -177,6 +178,140 @@ def test_bm25_uses_method_region_instead_of_whole_class(tmp_path: Path) -> None:
 
     assert "def sample_shots" in evidence[0].quote
     assert "filler_0" not in evidence[0].quote
+
+
+def _boilerplate_extractor(class_name: str) -> str:
+    # Mirrors the real yt-dlp extractor shape this regression targets:
+    # every sibling file shares the same generic vocabulary (error,
+    # unable, find, url, extractor), so those terms are common across the
+    # whole territory and should NOT be what decides the ranking.
+    return (
+        f"class {class_name}(BaseIE):\n"
+        "    def _real_extract(self, url):\n"
+        "        webpage = self._download_webpage(url, None)\n"
+        "        if not webpage:\n"
+        "            raise ExtractorError('Unable to find video URL')\n"
+        "        return self._extract_from_webpage(webpage)\n"
+    )
+
+
+def test_territory_wide_bm25_ranks_a_rare_term_above_common_boilerplate_across_files(
+    tmp_path: Path,
+) -> None:
+    # Regression test for the yt-dlp Teachable incident: search()'s old
+    # per-file-scoped BM25 (a fresh BM25Index per file, so its own IDF
+    # never saw document frequency across the other files) let a file
+    # matching several common, territory-wide boilerplate terms outrank
+    # the one file containing the query's actual discriminative term.
+    # Lowercase "teachable" in the query on purpose -- the fix must not
+    # depend on the query preserving a symbol's original capitalization.
+    (tmp_path / "extractor").mkdir()
+    sibling_names = ["Soundcloud", "Pornhub", "Rai", "Tiktok", "Archiveorg", "Tnaflix"]
+    for name in sibling_names:
+        (tmp_path / "extractor" / f"{name.lower()}.py").write_text(
+            _boilerplate_extractor(f"{name}IE"), encoding="utf-8"
+        )
+    (tmp_path / "extractor" / "teachable.py").write_text(
+        _boilerplate_extractor("TeachableIE"), encoding="utf-8"
+    )
+    files = [f"extractor/{name.lower()}.py" for name in [*sibling_names, "teachable"]]
+
+    evidence = LocalSearchTool(tmp_path).search(
+        "teachable extractor unable to find video url", files, limit=3
+    )
+
+    assert evidence
+    assert evidence[0].path == "extractor/teachable.py"
+
+
+def test_territory_wide_bm25_orders_the_rare_term_file_above_common_term_only_files(
+    tmp_path: Path,
+) -> None:
+    # Same shape, checking relative order specifically rather than just
+    # top-1 presence: every sibling file matches the query's common terms
+    # (error/unable/find/url/extractor) about equally well, so if the rare
+    # term "teachable" carried no extra weight, teachable.py would just be
+    # one of several ~tied files, not reliably first.
+    (tmp_path / "extractor").mkdir()
+    sibling_names = ["Soundcloud", "Pornhub", "Rai", "Tiktok", "Archiveorg", "Tnaflix"]
+    for name in sibling_names:
+        (tmp_path / "extractor" / f"{name.lower()}.py").write_text(
+            _boilerplate_extractor(f"{name}IE"), encoding="utf-8"
+        )
+    (tmp_path / "extractor" / "teachable.py").write_text(
+        _boilerplate_extractor("TeachableIE"), encoding="utf-8"
+    )
+    files = [f"extractor/{name.lower()}.py" for name in [*sibling_names, "teachable"]]
+
+    evidence = LocalSearchTool(tmp_path).search(
+        "teachable extractor unable to find video url", files, limit=len(files)
+    )
+
+    ranked_paths = [item.path for item in evidence]
+    assert ranked_paths[0] == "extractor/teachable.py"
+
+
+def test_symbol_channel_matches_a_class_name_regardless_of_query_capitalization(
+    tmp_path: Path,
+) -> None:
+    # The old "symbol bonus" only fired when the query string happened to
+    # preserve a symbol's original capitalization (_query_symbols required
+    # an uppercase char in the *query* token itself). A need's search
+    # query is Orchestrator-authored free text, not guaranteed to echo a
+    # proper noun's exact casing -- confirmed on a real trace, the auto-
+    # generated need_id for the Teachable question was already all-
+    # lowercase. This asserts the fix: an all-lowercase query still finds
+    # the class through the symbol/path channel.
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "teachable.py").write_text(
+        "class TeachableIE(BaseIE):\n    def _real_extract(self, url):\n        pass\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "src" / "unrelated.py").write_text(
+        "class UnrelatedIE(BaseIE):\n    def _real_extract(self, url):\n        pass\n",
+        encoding="utf-8",
+    )
+
+    evidence = LocalSearchTool(tmp_path).search(
+        "teachable video extraction", ["src/teachable.py", "src/unrelated.py"], limit=1
+    )
+
+    assert evidence
+    assert evidence[0].path == "src/teachable.py"
+
+
+def test_symbol_channel_weights_a_shared_path_component_below_a_rare_term_match() -> None:
+    # Regression test for a bug found only via a live smoke test against
+    # real yt-dlp data (the synthetic tests above used too small a corpus
+    # to expose it): every file in a territory sharing one parent
+    # directory (e.g. "extractor/") makes that directory name match
+    # *every* region in the territory through the same symbol_term_index
+    # this channel uses for filenames/symbols. A flat +1-per-matched-term
+    # count let nine sibling regions, each additionally matching three
+    # common symbol-level terms ("find"/"video"/"url", from a shared
+    # helper name), outrank the one region whose only extra match was the
+    # query's actual rare, discriminative term ("teachable") -- the exact
+    # "common terms drown the rare term" failure this whole retrieval
+    # rewrite exists to remove, just relocated into this channel instead
+    # of the old _line_score. The fix weights each matched term by
+    # 1/(regions it matches), so "extractor" (all 10 regions) contributes
+    # almost nothing while "teachable" (1 region) dominates.
+    regions = [("extractor/teachable.py", 0, ["class TeachableIE"])] + [
+        (f"extractor/sibling{i}.py", 0, [f"class Sibling{i}IE"]) for i in range(9)
+    ]
+    symbol_term_index: dict[str, set[int]] = {
+        "extractor": set(range(10)),
+        "teachable": {0},
+        "find": set(range(1, 10)),
+        "video": set(range(1, 10)),
+        "url": set(range(1, 10)),
+    }
+
+    ranked = _symbol_path_channel_rank(
+        regions, symbol_term_index, ["teachable", "extractor", "find", "video", "url"], limit=10
+    )
+
+    assert ranked[0][0] == "extractor/teachable.py"
 
 
 def test_symbol_ranking_is_conditioned_on_current_need(tmp_path: Path) -> None:
