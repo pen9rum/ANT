@@ -1,5 +1,7 @@
+import warnings
 from pathlib import Path
 
+import pytest
 from typer.testing import CliRunner
 
 from ant.cli import app
@@ -52,6 +54,40 @@ def test_index_store_persists_workers_and_traces(tmp_path: Path) -> None:
     )
     assert result.exit_code == 0
     assert '"worker_id": "worker-src"' in result.stdout
+
+
+def test_load_workers_warns_when_routing_summary_is_empty(tmp_path: Path) -> None:
+    # Regression test for the qibo-index-clean incident: reusing a stale
+    # index snapshot (saved by an older code path, before routing_summary
+    # was populated at build time) as a "clean baseline" silently made the
+    # Orchestrator route blind on every worker -- no error, only caught by
+    # manually inspecting one worker's fields well after the fact. This
+    # should be flagged the moment such an index is loaded, not left to
+    # manual discovery.
+    territory = Territory(id="src", root="src", files=["src/app.py"], summary="Owns source.")
+    stale_worker = WorkerCard(
+        id="worker-src", territory_id="src", name="src worker", root="src",
+        files=["src/app.py"], routing_summary="",
+    )
+    store = IndexStore(tmp_path / ".ant")
+    store.save([territory], [stale_worker])
+
+    with pytest.warns(UserWarning, match="empty routing_summary"):
+        store.load_workers()
+
+
+def test_load_workers_does_not_warn_when_routing_summary_is_populated(tmp_path: Path) -> None:
+    territory = Territory(id="src", root="src", files=["src/app.py"], summary="Owns source.")
+    healthy_worker = WorkerCard(
+        id="worker-src", territory_id="src", name="src worker", root="src",
+        files=["src/app.py"], routing_summary="territory: src | capability: owns src files",
+    )
+    store = IndexStore(tmp_path / ".ant")
+    store.save([territory], [healthy_worker])
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        store.load_workers()  # must not raise (i.e. must not warn)
 
 
 def test_colony_memory_returns_matching_routes(tmp_path: Path) -> None:

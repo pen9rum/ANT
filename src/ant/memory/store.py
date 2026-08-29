@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import warnings
 from pathlib import Path
 
 from ant.domain import CodeSymbol, EvidenceState, Territory, WorkerCard
@@ -49,10 +50,14 @@ class IndexStore:
                 self._create_schema(connection)
                 rows = connection.execute("select payload from workers order by id").fetchall()
             if rows:
-                return [WorkerCard.model_validate_json(row[0]) for row in rows]
+                workers = [WorkerCard.model_validate_json(row[0]) for row in rows]
+                _warn_if_routing_summaries_look_stale(workers, self.path)
+                return workers
 
         data = json.loads((self.path / "workers.json").read_text(encoding="utf-8"))
-        return [WorkerCard.model_validate(item) for item in data]
+        workers = [WorkerCard.model_validate(item) for item in data]
+        _warn_if_routing_summaries_look_stale(workers, self.path)
+        return workers
 
     def load_symbols(self) -> list[CodeSymbol]:
         return [
@@ -115,6 +120,45 @@ class IndexStore:
             );
             """
         )
+
+
+def _warn_if_routing_summaries_look_stale(workers: list[WorkerCard], path: Path) -> None:
+    """A worker built by the current codebase always has a non-empty
+    routing_summary -- indexing.cards.build_worker_cards (initial index
+    time) and evolution._with_routing_summary (birth/specialize/merge)
+    are the only two construction sites, and both populate it
+    unconditionally before the card is ever saved. An empty one is the
+    signature of an index snapshot written by an older code path (from
+    before routing_summary was wired up), or a hand-edited/corrupted
+    workers.json -- not a state the current codebase can produce itself.
+
+    Confirmed directly: reusing exactly such a stale snapshot as a "clean
+    baseline" for a real experiment silently made the Orchestrator route
+    blind on every original worker (it reads only this field for
+    per-round routing decisions, never the full card) -- no error, no
+    crash, only caught well after the fact by manually inspecting a
+    specific worker's fields. This warns at load time instead, once per
+    load_workers() call, rather than requiring that same manual check
+    every time an index directory of uncertain provenance gets reused.
+    """
+    if not workers:
+        return
+    empty_ids = [worker.id for worker in workers if not worker.routing_summary.strip()]
+    if not empty_ids:
+        return
+    shown = ", ".join(empty_ids[:5])
+    more = f", and {len(empty_ids) - 5} more" if len(empty_ids) > 5 else ""
+    warnings.warn(
+        f"{len(empty_ids)}/{len(workers)} worker(s) loaded from {path} have an "
+        f"empty routing_summary ({shown}{more}). The Orchestrator reads only "
+        "this field for routing, so these workers are effectively invisible "
+        "to it every round. This is not a state the current code produces on "
+        "its own -- it usually means this index was saved by an older code "
+        "path, before routing_summary was populated at build/evolve time. "
+        "Rebuild the index (or re-run evolve_workers) rather than treating "
+        "this as a clean baseline.",
+        stacklevel=3,
+    )
 
 
 def _symbol_manifest(workers: list[WorkerCard]) -> list[dict[str, object]]:
