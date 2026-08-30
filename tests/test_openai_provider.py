@@ -1,7 +1,17 @@
 import os
 from pathlib import Path
 
-from ant.domain import AbsenceProof, Evidence, FrontierResult, NeedGraph, TokenUsage, WorkerCard
+from ant.domain import (
+    AbsenceProof,
+    Evidence,
+    FrontierResult,
+    NeedGraph,
+    NeedNode,
+    ProposedNode,
+    TokenUsage,
+    UnresolvedNeed,
+    WorkerCard,
+)
 from ant.providers import OpenAIProvider
 from ant.providers.openai_provider import (
     ResponseResult,
@@ -206,7 +216,6 @@ def test_plan_round_parses_graph_updates_assignments_and_special_tactics() -> No
         workers=workers,
         memory_hints={},
         frontier=FrontierResult(ready=["n1"], blocked=[], stuck_subgraphs=[]),
-        observed_needs=[],
         incomplete_parents=[],
         cross_repo_experience=[],
     )
@@ -255,7 +264,6 @@ def test_plan_round_shows_worker_searchable_terms_not_just_routing_summary() -> 
         workers=workers,
         memory_hints={},
         frontier=FrontierResult(ready=[], blocked=[], stuck_subgraphs=[]),
-        observed_needs=[],
         incomplete_parents=[],
         cross_repo_experience=[],
     )
@@ -298,7 +306,6 @@ def test_plan_round_shows_probe_anchors_and_orders_candidates_by_them() -> None:
         workers=workers,
         memory_hints={},
         frontier=FrontierResult(ready=[], blocked=[], stuck_subgraphs=[]),
-        observed_needs=[],
         incomplete_parents=[],
         cross_repo_experience=[],
         candidate_probes={
@@ -356,7 +363,6 @@ def test_plan_round_keeps_original_worker_order_with_no_candidate_probes() -> No
         workers=workers,
         memory_hints={},
         frontier=FrontierResult(ready=[], blocked=[], stuck_subgraphs=[]),
-        observed_needs=[],
         incomplete_parents=[],
         cross_repo_experience=[],
     )
@@ -383,12 +389,136 @@ def test_plan_round_drops_an_assignment_to_a_worker_id_not_in_the_candidate_list
         workers=[WorkerCard(id="worker-a", territory_id="a", name="a", root="a")],
         memory_hints={},
         frontier=FrontierResult(ready=["n1"], blocked=[], stuck_subgraphs=[]),
-        observed_needs=[],
         incomplete_parents=[],
         cross_repo_experience=[],
     )
 
     assert plan.assignments == {}
+
+
+def test_consolidate_graph_returns_empty_plan_with_no_proposals() -> None:
+    provider = OpenAIProvider(model="gpt-4.1")
+    provider.responses_json = lambda prompt, max_output_tokens=512: type(  # type: ignore[method-assign]
+        "Result", (), {"text": "should never be called"}
+    )()
+
+    plan = provider.consolidate_graph(
+        question="q", active_nodes={}, proposals=[], candidate_hints={}
+    )
+
+    assert plan.decisions == []
+
+
+def test_consolidate_graph_shows_active_nodes_and_candidate_hints_in_the_prompt() -> None:
+    provider = OpenAIProvider(model="gpt-4.1")
+    captured: dict[str, str] = {}
+
+    def fake_responses_json(prompt: str, max_output_tokens: int = 512):
+        captured["prompt"] = prompt
+        return type("Result", (), {"text": "{}"})()
+
+    provider.responses_json = fake_responses_json  # type: ignore[method-assign]
+    active_nodes = {
+        "existing-gap": NeedNode(
+            need_id="existing-gap",
+            need="the existing gap",
+            detail=UnresolvedNeed(description="the existing gap"),
+        )
+    }
+    proposals = [
+        ProposedNode(
+            proposal_id="proposal-1",
+            need="a reworded version of the existing gap",
+            detail=UnresolvedNeed(description="a reworded version of the existing gap"),
+            source="worker_observed",
+        )
+    ]
+
+    provider.consolidate_graph(
+        question="q",
+        active_nodes=active_nodes,
+        proposals=proposals,
+        candidate_hints={"proposal-1": ["existing-gap"]},
+    )
+
+    prompt = captured["prompt"]
+    assert "existing-gap" in prompt
+    assert "the existing gap" in prompt
+    assert "proposal-1" in prompt
+    assert "a reworded version of the existing gap" in prompt
+    assert "nearby existing nodes: existing-gap" in prompt
+
+
+def test_consolidate_graph_parses_create_merge_and_drop_decisions() -> None:
+    provider = OpenAIProvider(model="gpt-4.1")
+    provider.responses_json = lambda prompt, max_output_tokens=2048: type(  # type: ignore[method-assign]
+        "Result",
+        (),
+        {
+            "text": (
+                '{"decisions": ['
+                '{"proposal_id": "p1", "action": "create"}, '
+                '{"proposal_id": "p2", "action": "merge", "target_node_id": "existing-gap"}, '
+                '{"proposal_id": "p3", "action": "drop"}'
+                "]}"
+            )
+        },
+    )()
+    proposals = [
+        ProposedNode(proposal_id="p1", need="a", detail=UnresolvedNeed(description="a")),
+        ProposedNode(proposal_id="p2", need="b", detail=UnresolvedNeed(description="b")),
+        ProposedNode(proposal_id="p3", need="c", detail=UnresolvedNeed(description="c")),
+    ]
+
+    plan = provider.consolidate_graph(
+        question="q", active_nodes={}, proposals=proposals, candidate_hints={}
+    )
+
+    decisions = {d.proposal_id: d for d in plan.decisions}
+    assert decisions["p1"].action == "create"
+    assert decisions["p2"].action == "merge"
+    assert decisions["p2"].target_node_id == "existing-gap"
+    assert decisions["p3"].action == "drop"
+
+
+def test_consolidate_graph_drops_a_merge_decision_missing_its_required_target() -> None:
+    provider = OpenAIProvider(model="gpt-4.1")
+    provider.responses_json = lambda prompt, max_output_tokens=2048: type(  # type: ignore[method-assign]
+        "Result",
+        (),
+        {"text": '{"decisions": [{"proposal_id": "p1", "action": "merge"}]}'},
+    )()
+    proposals = [ProposedNode(proposal_id="p1", need="a", detail=UnresolvedNeed(description="a"))]
+
+    plan = provider.consolidate_graph(
+        question="q", active_nodes={}, proposals=proposals, candidate_hints={}
+    )
+
+    # No target_node_id for an action that requires one -- dropped rather
+    # than trusted, same tolerant-of-malformed-entries posture as
+    # _parse_round_plan. LocalCoordinator defaults an undecided proposal to
+    # "create", so this is a safe degrade, not a lost proposal.
+    assert plan.decisions == []
+
+
+def test_consolidate_graph_drops_a_decision_for_an_unknown_proposal_id() -> None:
+    provider = OpenAIProvider(model="gpt-4.1")
+    provider.responses_json = lambda prompt, max_output_tokens=2048: type(  # type: ignore[method-assign]
+        "Result",
+        (),
+        {
+            "text": (
+                '{"decisions": [{"proposal_id": "not-a-real-proposal", "action": "create"}]}'
+            )
+        },
+    )()
+    proposals = [ProposedNode(proposal_id="p1", need="a", detail=UnresolvedNeed(description="a"))]
+
+    plan = provider.consolidate_graph(
+        question="q", active_nodes={}, proposals=proposals, candidate_hints={}
+    )
+
+    assert plan.decisions == []
 
 
 def test_completeness_notes_only_includes_exhaustive_proofs() -> None:

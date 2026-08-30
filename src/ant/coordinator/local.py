@@ -5,6 +5,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import cast
 
+import numpy as np
+
 from ant.coordinator.graph_analyzer import compute_frontier, find_cycles
 from ant.coordinator.repair import (
     assemble_trajectory_package,
@@ -18,12 +20,15 @@ from ant.domain import (
     Evidence,
     EvidenceState,
     FrontierResult,
+    GraphConsolidationDecision,
+    GraphConsolidationPlan,
     GraphDelta,
     NeedGraph,
     NeedNode,
     NeedResolution,
     NodeExecutionTrace,
     PlanningRound,
+    ProposedNode,
     RecoverySnapshot,
     RoundPlan,
     StuckEpisodeSnapshot,
@@ -43,7 +48,12 @@ from ant.providers import (
     WorkerReasoner,
 )
 from ant.retrieval import STOP_WORDS, TOKEN_RE, extract_terms, is_stem_match, score_evidence
-from ant.retrieval.dense import WORKER_CARDS_KEY, EmbeddingIndex
+from ant.retrieval.dense import (
+    WORKER_CARDS_KEY,
+    EmbeddingEntry,
+    EmbeddingIndex,
+    get_shared_embedder,
+)
 from ant.scoring_config import DEFAULT_SCORING_CONFIG
 from ant.tools import LocalSearchTool
 from ant.tools.path_prior import has_low_value_part, has_source_part
@@ -97,6 +107,15 @@ _ESCALATED_NEED_CANDIDATE_LIMIT = 10
 # short look, not the full evidence-gathering AutonomousWorker.run() would
 # do once actually committed to.
 _PROBE_ANCHOR_LIMIT = 3
+
+# How many existing active nodes get surfaced as a proposal's
+# candidate_hints for Need Graph Consolidation (see
+# _candidate_hints_for_proposals/WorkerReasoner.consolidate_graph) --
+# embedding-nearest-neighbor retrieval, never itself the merge decision.
+# Same order of magnitude as _FRESH_NEED_CANDIDATE_LIMIT; at today's
+# observed graph sizes (<=8 active nodes) this is a no-op in practice, it
+# only starts narrowing once a task's graph actually grows past it.
+_CONSOLIDATION_CANDIDATE_LIMIT = 5
 
 
 @dataclass
@@ -319,7 +338,6 @@ class LocalCoordinator:
                 workers=candidate_workers,
                 memory_hints=memory_hints,
                 frontier=frontier,
-                observed_needs=observed_needs,
                 incomplete_parents=incomplete_parents,
                 cross_repo_experience=self.cross_repo_experience,
                 repair_guidance=repair_guidance,
@@ -339,12 +357,18 @@ class LocalCoordinator:
                 # free, no parallel code path to keep in sync.
                 for need_id, worker_ids in forced_first_round_assignments.items():
                     plan.assignments[need_id] = list(worker_ids)
+            # Captured against the graph as it stood entering this round --
+            # a new-id graph_updates entry is a PROPOSAL, not a commit (see
+            # RoundPlan's docstring); collected now, alongside this round's
+            # worker-observed needs, for the consolidation step later in
+            # the round, well after this round's own existing-node edits
+            # below.
+            orchestrator_new_nodes = {
+                need_id: node
+                for need_id, node in plan.graph_updates.items()
+                if need_id not in graph.nodes
+            }
             graph = _merge_plan_into_graph(graph, plan)
-            observed_needs = [
-                need
-                for index, need in enumerate(observed_needs)
-                if str(index) not in plan.resolved_observed_need_indices
-            ]
 
             # Baseline captured AFTER the graph edit, BEFORE execution: a
             # pure Orchestrator rewrite (e.g. dropping a depends_on edge)
@@ -583,6 +607,19 @@ class LocalCoordinator:
                         observations=observations,
                     )
                 )
+
+            # Need Graph Consolidation: propose -> execute (above) ->
+            # consolidate (here) -> closure check (below). This round's
+            # own new-node proposals plus the persistent worker-observed-
+            # needs buffer are unified and handed to the Graph Organizer
+            # together -- neither becomes a real node on its own anymore
+            # (see RoundPlan's docstring, GraphConsolidationPlan). The
+            # buffer is fully consumed every round (a proposal with no
+            # explicit decision still defaults to "create" -- see
+            # _apply_consolidation_decisions), so nothing carries over.
+            proposals = _collect_proposals(orchestrator_new_nodes, observed_needs)
+            graph = self._consolidate_and_commit(question, graph, proposals, recovery)
+            observed_needs = []
 
             # Closure check: a parent whose children just all resolved.
             # "unresolved" is explicitly handed back to the Orchestrator
@@ -1051,6 +1088,34 @@ class LocalCoordinator:
             probes[need_id] = worker_probes
         return probes
 
+    def _consolidate_and_commit(
+        self,
+        question: str,
+        graph: NeedGraph,
+        proposals: list[ProposedNode],
+        recovery: RecoveryState,
+    ) -> NeedGraph:
+        """Need Graph Consolidation: the one place a *new* node actually
+        comes into existence (see WorkerReasoner.consolidate_graph's own
+        docstring). A no-op when this round proposed nothing -- no LLM
+        call spent on an empty buffer.
+        """
+        if not proposals:
+            return graph
+        active_nodes = {
+            node_id: node
+            for node_id, node in graph.nodes.items()
+            if node.resolution != "resolved" and node_id not in recovery.abandoned_node_ids
+        }
+        candidate_hints = _candidate_hints_for_proposals(active_nodes, proposals)
+        consolidation_plan = self.reasoner.consolidate_graph(
+            question=question,
+            active_nodes=active_nodes,
+            proposals=proposals,
+            candidate_hints=candidate_hints,
+        )
+        return _apply_consolidation_decisions(graph, proposals, consolidation_plan)
+
     @staticmethod
     def _query_from_needs(question: str, needs: list[UnresolvedNeed]) -> str:
         # Keep the original question as a stable lexical anchor in every round's
@@ -1113,7 +1178,6 @@ def _plan_round_with_cycle_validation(
     workers: list[WorkerCard],
     memory_hints: dict[str, str],
     frontier: FrontierResult,
-    observed_needs: list[UnresolvedNeed],
     incomplete_parents: list[str],
     cross_repo_experience: list[str],
     repair_guidance: str = "",
@@ -1141,7 +1205,6 @@ def _plan_round_with_cycle_validation(
         workers=workers,
         memory_hints=memory_hints,
         frontier=frontier,
-        observed_needs=observed_needs,
         incomplete_parents=incomplete_parents,
         cross_repo_experience=cross_repo_experience,
         repair_guidance=repair_guidance,
@@ -1167,7 +1230,6 @@ def _plan_round_with_cycle_validation(
         workers=workers,
         memory_hints=memory_hints,
         frontier=frontier,
-        observed_needs=observed_needs,
         incomplete_parents=incomplete_parents,
         cross_repo_experience=cross_repo_experience,
         validation_feedback=feedback,
@@ -1228,31 +1290,33 @@ def _merge_graph_updates(graph: NeedGraph, plan: RoundPlan) -> NeedGraph:
 
 
 def _merge_plan_into_graph(graph: NeedGraph, plan: RoundPlan) -> NeedGraph:
-    """Applies plan.graph_updates onto `graph` for real: a brand-new
-    need_id is added as-is (fresh NeedNode defaults for
-    resolution/execution/progress are correct for something that never
-    existed before); an existing need_id only has its
-    need/depends_on/related_to/children/detail fields overwritten -- its
+    """Applies plan.graph_updates onto `graph` for *existing* nodes only:
+    need/depends_on/related_to/children/detail get overwritten -- its
     resolution/execution/progress/rounds_without_progress are preserved
     untouched, since the Orchestrator never legitimately writes those
     three dimensions (see NeedNode's docstring) and its own copy of an
     existing node only ever carries their default values, not real ones.
+
+    A *new* need_id in plan.graph_updates is deliberately NOT added here
+    -- see RoundPlan's own docstring: a new-id entry is only a proposal
+    for this round's Potential Needs Buffer, collected separately (see
+    LocalCoordinator._collect_proposals) and only becomes a real node if
+    WorkerReasoner.consolidate_graph decides to create/attach/relate it.
     """
     nodes = dict(graph.nodes)
     for need_id, update in plan.graph_updates.items():
         existing = nodes.get(need_id)
         if existing is None:
-            nodes[need_id] = update
-        else:
-            nodes[need_id] = existing.model_copy(
-                update={
-                    "need": update.need,
-                    "depends_on": update.depends_on,
-                    "related_to": update.related_to,
-                    "children": update.children,
-                    "detail": update.detail,
-                }
-            )
+            continue
+        nodes[need_id] = existing.model_copy(
+            update={
+                "need": update.need,
+                "depends_on": update.depends_on,
+                "related_to": update.related_to,
+                "children": update.children,
+                "detail": update.detail,
+            }
+        )
     return graph.model_copy(update={"nodes": nodes})
 
 
@@ -1917,6 +1981,218 @@ def _merge_need_pair(old: UnresolvedNeed, new: UnresolvedNeed) -> UnresolvedNeed
             "evidence_ids": sorted(set(old.evidence_ids) | set(new.evidence_ids)),
         }
     )
+
+
+def _collect_proposals(
+    orchestrator_new_nodes: dict[str, NeedNode],
+    observed: list[UnresolvedNeed],
+) -> list[ProposedNode]:
+    """Unifies this round's Potential Needs Buffer: the Orchestrator's own
+    new-id graph_updates entries (proposal_id = its own suggested need_id,
+    kept as-is -- see GraphConsolidationDecision's "create" semantics) plus
+    the coordinator's worker-observed-needs buffer (proposal_id minted
+    here, since an UnresolvedNeed carries no id of its own). Neither
+    becomes a real node until WorkerReasoner.consolidate_graph decides.
+    """
+    proposals = [
+        ProposedNode(
+            proposal_id=need_id,
+            need=node.need,
+            detail=node.detail,
+            proposed_depends_on=list(node.depends_on),
+            proposed_children=list(node.children),
+            proposed_related_to=list(node.related_to),
+            source="orchestrator",
+        )
+        for need_id, node in orchestrator_new_nodes.items()
+    ]
+    proposals.extend(
+        ProposedNode(
+            proposal_id=f"obs-{index}",
+            need=need.missing or need.description,
+            detail=need,
+            source="worker_observed",
+        )
+        for index, need in enumerate(observed)
+    )
+    return proposals
+
+
+def _candidate_hints_for_proposals(
+    active_nodes: dict[str, NeedNode],
+    proposals: list[ProposedNode],
+) -> dict[str, list[str]]:
+    """Retrieval-only step for Need Graph Consolidation: dense-embedding
+    nearest neighbors of each proposal's need text among the currently
+    active (unresolved, not abandoned) nodes -- never itself the merge
+    decision, exactly the same "narrows candidates, does not decide"
+    posture as ant.coordinator.worker_retrieval.rank_workers. A no-op
+    (empty dict) when there's no shared embedder available (same
+    degrade-gracefully behavior as dense_search) or nothing to compare
+    against -- consolidate_graph still runs, just without hints for that
+    round, it never blocks on this.
+    """
+    if not proposals or not active_nodes:
+        return {}
+    embedder = get_shared_embedder()
+    if embedder is None:
+        return {}
+    node_ids = list(active_nodes)
+    node_vectors = embedder.embed([active_nodes[node_id].need for node_id in node_ids])
+    if not node_vectors:
+        return {}
+    entries = [
+        EmbeddingEntry(path=node_id, line_start=0, line_end=0, quote=active_nodes[node_id].need)
+        for node_id in node_ids
+    ]
+    array = np.asarray(node_vectors, dtype=np.float32)
+    norms = np.linalg.norm(array, axis=1, keepdims=True)
+    norms[norms == 0] = 1.0
+    index = EmbeddingIndex(entries=entries, vectors=array / norms)
+
+    proposal_vectors = embedder.embed([proposal.need for proposal in proposals])
+    if not proposal_vectors:
+        return {}
+    hints: dict[str, list[str]] = {}
+    for proposal, vector in zip(proposals, proposal_vectors, strict=True):
+        results = index.search(vector, limit=_CONSOLIDATION_CANDIDATE_LIMIT)
+        hints[proposal.proposal_id] = [entry.path for _score, entry in results]
+    return hints
+
+
+def _apply_consolidation_decisions(
+    graph: NeedGraph,
+    proposals: list[ProposedNode],
+    plan: GraphConsolidationPlan,
+) -> NeedGraph:
+    """Commits WorkerReasoner.consolidate_graph's verdicts for real.
+    Two passes, not one, so a proposal's depends_on/children/related_to
+    can reference *another* proposal from this same batch regardless of
+    which one is processed first:
+
+    Pass 1 -- decide each proposal's own committed identity (mint a
+    permanent node for create/attach/relate, or resolve to an existing
+    target for merge/subsume, applying that enrichment immediately since
+    it only ever touches a pre-existing node) and record it in `remap`.
+    A proposal with no decision at all defaults to "create" (same safe
+    fallback MockLLMProvider always returns); a merge/subsume whose
+    target_node_id isn't a real node also falls back to "create" rather
+    than silently losing the proposal.
+
+    Pass 2 -- now that `remap` is complete, resolve every proposal_id
+    reference through it, in EVERY node's children/depends_on/related_to
+    -- not just newly-minted proposals' own edges, but also any
+    pre-existing node whose own list was set by the Orchestrator's direct
+    existing-node edit (_merge_plan_into_graph, applied before this
+    function runs) to name a *new* id it is simultaneously proposing this
+    same round via graph_updates. Confirmed live: a root node's children
+    edit named a proposal that this round's Organizer decided to merge
+    away, leaving a dangling child id and crashing the closure check with
+    a KeyError once this ran unpatched -- a reference to anything that
+    isn't a committed node (dropped, merged/subsumed with no live remap
+    entry, or simply never real) is dropped from the list rather than
+    left dangling. Attach/relate target wiring (parent gains a child,
+    a minted node gains a related_to edge) is handled separately after,
+    since those are edges arriving AT a minted node from its own
+    decision, not outgoing references to resolve.
+    """
+    decisions_by_id = {decision.proposal_id: decision for decision in plan.decisions}
+    nodes = dict(graph.nodes)
+    remap: dict[str, str] = {}
+    minted: list[tuple[ProposedNode, GraphConsolidationDecision | None]] = []
+
+    for proposal in proposals:
+        decision = decisions_by_id.get(proposal.proposal_id)
+        action = decision.action if decision else "create"
+        target = decision.target_node_id if decision else ""
+
+        if action == "drop":
+            continue
+        if action in ("merge", "subsume") and target in nodes:
+            existing = nodes[target]
+            if action == "merge":
+                nodes[target] = existing.model_copy(
+                    update={"detail": _merge_need_pair(proposal.detail, existing.detail)}
+                )
+            else:  # subsume
+                nodes[target] = existing.model_copy(
+                    update={"need": proposal.need, "detail": proposal.detail}
+                )
+            remap[proposal.proposal_id] = target
+            continue
+
+        # create / attach / relate, or a merge/subsume with no real target
+        # (falls back to create rather than silently losing the proposal).
+        nodes[proposal.proposal_id] = NeedNode(
+            need_id=proposal.proposal_id,
+            need=proposal.need,
+            detail=proposal.detail,
+            depends_on=list(proposal.proposed_depends_on),
+            children=list(proposal.proposed_children),
+            related_to=list(proposal.proposed_related_to),
+        )
+        remap[proposal.proposal_id] = proposal.proposal_id
+        minted.append((proposal, decision))
+
+    proposal_ids = {proposal.proposal_id for proposal in proposals}
+
+    def resolve_ref(ref: str) -> str | None:
+        if ref in remap:
+            return remap[ref]
+        if ref in proposal_ids:
+            return None  # dropped, or a merge/subsume with no real target
+        if ref in nodes:
+            return ref
+        return None  # a stale/unknown id -- discard rather than leave dangling
+
+    def _resolved(values: list[str]) -> list[str]:
+        result: list[str] = []
+        for ref in values:
+            resolved = resolve_ref(ref)
+            if resolved and resolved not in result:
+                result.append(resolved)
+        return result
+
+    for node_id, node in list(nodes.items()):
+        new_children = _resolved(node.children)
+        new_depends_on = _resolved(node.depends_on)
+        new_related_to = _resolved(node.related_to)
+        if (
+            new_children != node.children
+            or new_depends_on != node.depends_on
+            or new_related_to != node.related_to
+        ):
+            nodes[node_id] = node.model_copy(
+                update={
+                    "children": new_children,
+                    "depends_on": new_depends_on,
+                    "related_to": new_related_to,
+                }
+            )
+
+    for proposal, decision in minted:
+        node_id = remap[proposal.proposal_id]
+        action = decision.action if decision else "create"
+
+        parent_id = None
+        if action == "attach" and decision and decision.target_node_id:
+            parent_id = resolve_ref(decision.target_node_id)
+        elif proposal.proposed_parent:
+            parent_id = resolve_ref(proposal.proposed_parent)
+        if action == "relate" and decision and decision.target_node_id:
+            related_target = resolve_ref(decision.target_node_id)
+            if related_target and related_target in nodes:
+                current = nodes[node_id]
+                if related_target not in current.related_to:
+                    nodes[node_id] = current.model_copy(
+                        update={"related_to": [*current.related_to, related_target]}
+                    )
+
+        if parent_id and parent_id in nodes and node_id not in nodes[parent_id].children:
+            parent = nodes[parent_id]
+            nodes[parent_id] = parent.model_copy(update={"children": [*parent.children, node_id]})
+
+    return graph.model_copy(update={"nodes": nodes})
 
 
 def _evidence_key(item: Evidence) -> tuple[str, int, int, str]:

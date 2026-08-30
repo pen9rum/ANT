@@ -5,9 +5,13 @@ import re
 from ant.domain import (
     Evidence,
     FrontierResult,
+    GraphConsolidationDecision,
+    GraphConsolidationPlan,
     NeedGraph,
+    NeedNode,
     NeedResolution,
     PlanningRound,
+    ProposedNode,
     RoundPlan,
     UnresolvedNeed,
     WorkerCard,
@@ -160,7 +164,6 @@ class MockLLMProvider:
         workers: list[WorkerCard],
         memory_hints: dict[str, str],
         frontier: FrontierResult,
-        observed_needs: list[UnresolvedNeed],
         incomplete_parents: list[str],
         cross_repo_experience: list[str],
         validation_feedback: str = "",
@@ -177,6 +180,25 @@ class MockLLMProvider:
             return RoundPlan()
         first_worker_id = workers[0].id
         return RoundPlan(assignments={need_id: [first_worker_id] for need_id in frontier.ready})
+
+    def consolidate_graph(
+        self,
+        *,
+        question: str,
+        active_nodes: dict[str, NeedNode],
+        proposals: list[ProposedNode],
+        candidate_hints: dict[str, list[str]],
+    ) -> GraphConsolidationPlan:
+        # Deterministic stand-in: every proposal becomes a real node,
+        # matching this codebase's behavior before consolidation existed
+        # -- exists so orchestration can run without an API key, not to
+        # exercise real merge/subsume/attach/drop judgment.
+        return GraphConsolidationPlan(
+            decisions=[
+                GraphConsolidationDecision(proposal_id=proposal.proposal_id, action="create")
+                for proposal in proposals
+            ]
+        )
 
     def summarize_task_experience(
         self,

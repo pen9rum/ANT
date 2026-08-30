@@ -6,8 +6,11 @@ from ant.coordinator.local import (
     _FRESH_NEED_CANDIDATE_LIMIT,
     RecoveryState,
     StuckEpisode,
+    _apply_consolidation_decisions,
     _build_temporary_bridge,
+    _candidate_hints_for_proposals,
     _close_resolved_needs,
+    _collect_proposals,
     _matches_term,
     _merge_needs,
     _plan_round_with_cycle_validation,
@@ -20,9 +23,12 @@ from ant.domain import (
     CodeSymbol,
     Evidence,
     FrontierResult,
+    GraphConsolidationDecision,
+    GraphConsolidationPlan,
     NeedGraph,
     NeedNode,
     NeedResolution,
+    ProposedNode,
     RepairAction,
     RepairPlan,
     RoundPlan,
@@ -194,7 +200,6 @@ def test_cross_repo_experience_reaches_plan_round(tmp_path: Path) -> None:
             workers,
             memory_hints,
             frontier,
-            observed_needs,
             incomplete_parents,
             cross_repo_experience,
             validation_feedback="",
@@ -267,7 +272,6 @@ def test_ask_threads_probe_results_into_plan_round(tmp_path: Path) -> None:
             workers,
             memory_hints,
             frontier,
-            observed_needs,
             incomplete_parents,
             cross_repo_experience,
             validation_feedback="",
@@ -460,7 +464,6 @@ def test_ask_narrows_plan_round_workers_and_records_candidates_in_the_trace(
             workers,
             memory_hints,
             frontier,
-            observed_needs,
             incomplete_parents,
             cross_repo_experience,
             validation_feedback="",
@@ -492,6 +495,19 @@ class _PassthroughLookupsReasoner:
 
     def select_lookups(self, *, need, evidence, candidates):
         return candidates
+
+    def consolidate_graph(self, *, question, active_nodes, proposals, candidate_hints):
+        # Create-everything passthrough, matching MockLLMProvider's own
+        # default -- preserves every existing scenario's graph-shape
+        # assertions from before Need Graph Consolidation existed. Only a
+        # test specifically about merge/subsume/attach/relate/drop
+        # overrides this.
+        return GraphConsolidationPlan(
+            decisions=[
+                GraphConsolidationDecision(proposal_id=proposal.proposal_id, action="create")
+                for proposal in proposals
+            ]
+        )
 
     def select_workers(self, *, query, need, candidates, limit, memory_hints):
         return [worker.id for worker in candidates]
@@ -555,7 +571,6 @@ class _PassthroughLookupsReasoner:
         workers,
         memory_hints,
         frontier,
-        observed_needs,
         incomplete_parents,
         cross_repo_experience,
         validation_feedback="",
@@ -1017,7 +1032,6 @@ def test_plan_round_accepts_an_acyclic_plan_without_retrying() -> None:
             workers,
             memory_hints,
             frontier,
-            observed_needs,
             incomplete_parents,
             cross_repo_experience,
             validation_feedback="",
@@ -1037,7 +1051,6 @@ def test_plan_round_accepts_an_acyclic_plan_without_retrying() -> None:
         workers=[],
         memory_hints={},
         frontier=frontier,
-        observed_needs=[],
         incomplete_parents=[],
         cross_repo_experience=[],
     )
@@ -1066,7 +1079,6 @@ def test_plan_round_rejects_a_cyclic_plan_and_retries_with_the_cycle_described()
             workers,
             memory_hints,
             frontier,
-            observed_needs,
             incomplete_parents,
             cross_repo_experience,
             validation_feedback="",
@@ -1103,7 +1115,6 @@ def test_plan_round_rejects_a_cyclic_plan_and_retries_with_the_cycle_described()
         workers=[],
         memory_hints={},
         frontier=frontier,
-        observed_needs=[],
         incomplete_parents=[],
         cross_repo_experience=[],
     )
@@ -1137,7 +1148,6 @@ def test_plan_round_accepts_the_retry_even_if_it_is_still_cyclic() -> None:
             workers,
             memory_hints,
             frontier,
-            observed_needs,
             incomplete_parents,
             cross_repo_experience,
             validation_feedback="",
@@ -1166,7 +1176,6 @@ def test_plan_round_accepts_the_retry_even_if_it_is_still_cyclic() -> None:
         workers=[],
         memory_hints={},
         frontier=frontier,
-        observed_needs=[],
         incomplete_parents=[],
         cross_repo_experience=[],
     )
@@ -1205,7 +1214,6 @@ class _AlwaysStuckAndAlwaysProposesBridgeReasoner(_PassthroughLookupsReasoner):
         workers,
         memory_hints,
         frontier,
-        observed_needs,
         incomplete_parents,
         cross_repo_experience,
         validation_feedback="",
@@ -1324,7 +1332,6 @@ class _DecomposesRootIntoTwoChildrenReasoner(_PassthroughLookupsReasoner):
         workers,
         memory_hints,
         frontier,
-        observed_needs,
         incomplete_parents,
         cross_repo_experience,
         validation_feedback="",
@@ -1421,7 +1428,6 @@ class _AssignsSameWorkerToTwoIndependentNeedsReasoner(_PassthroughLookupsReasone
         workers,
         memory_hints,
         frontier,
-        observed_needs,
         incomplete_parents,
         cross_repo_experience,
         validation_feedback="",
@@ -1548,7 +1554,6 @@ def test_closure_check_survives_a_partial_verdict_creating_a_gap_node(tmp_path: 
             workers,
             memory_hints,
             frontier,
-            observed_needs,
             incomplete_parents,
             cross_repo_experience,
             validation_feedback="",
@@ -1632,7 +1637,6 @@ def test_ask_with_seeded_initial_state_only_works_the_unresolved_part(tmp_path: 
             workers,
             memory_hints,
             frontier,
-            observed_needs,
             incomplete_parents,
             cross_repo_experience,
             validation_feedback="",
@@ -1689,7 +1693,6 @@ def test_ask_forces_the_given_assignment_at_round_0_only(tmp_path: Path) -> None
             workers,
             memory_hints,
             frontier,
-            observed_needs,
             incomplete_parents,
             cross_repo_experience,
             validation_feedback="",
@@ -1750,7 +1753,6 @@ def test_ask_forces_a_global_search_at_round_0_with_no_stuck_episode_needed(
             workers,
             memory_hints,
             frontier,
-            observed_needs,
             incomplete_parents,
             cross_repo_experience,
             validation_feedback="",
@@ -1819,7 +1821,6 @@ def test_ask_does_not_double_execute_global_fallback_when_orchestrator_also_pick
             workers,
             memory_hints,
             frontier,
-            observed_needs,
             incomplete_parents,
             cross_repo_experience,
             validation_feedback="",
@@ -1873,7 +1874,6 @@ class _StubbornlyReassignsTriedWorkerReasoner(_PassthroughLookupsReasoner):
         workers,
         memory_hints,
         frontier,
-        observed_needs,
         incomplete_parents,
         cross_repo_experience,
         validation_feedback="",
@@ -1945,7 +1945,6 @@ class _AlwaysUnresolvedSingleWorkerReasoner(_PassthroughLookupsReasoner):
         workers,
         memory_hints,
         frontier,
-        observed_needs,
         incomplete_parents,
         cross_repo_experience,
         validation_feedback="",
@@ -2010,7 +2009,6 @@ class _AlwaysPrefersBrokenWorkerReasoner(_PassthroughLookupsReasoner):
         workers,
         memory_hints,
         frontier,
-        observed_needs,
         incomplete_parents,
         cross_repo_experience,
         validation_feedback="",
@@ -2066,3 +2064,274 @@ def test_retry_from_trajectory_resolves_a_need_the_original_attempt_abandoned(
     # Orchestrator reasoner always prefers) -- proving the fast-repair
     # action was forced, not merely offered as text.
     assert retried.rounds[0].node_executions[0].worker_ids == ["worker-fixed"]
+
+
+def _proposal(
+    proposal_id: str,
+    need: str = "some gap",
+    *,
+    depends_on: list[str] | None = None,
+    children: list[str] | None = None,
+    related_to: list[str] | None = None,
+    parent: str = "",
+    source: str = "orchestrator",
+) -> ProposedNode:
+    return ProposedNode(
+        proposal_id=proposal_id,
+        need=need,
+        detail=UnresolvedNeed(description=need),
+        proposed_depends_on=depends_on or [],
+        proposed_children=children or [],
+        proposed_related_to=related_to or [],
+        proposed_parent=parent,
+        source=source,
+    )
+
+
+def test_collect_proposals_combines_orchestrator_new_nodes_and_observed_needs() -> None:
+    orchestrator_new_nodes = {
+        "new-gap": NeedNode(
+            need_id="new-gap", need="a new gap", detail=UnresolvedNeed(description="a new gap")
+        ),
+    }
+    observed = [UnresolvedNeed(description="worker saw this", missing="worker saw this")]
+
+    proposals = _collect_proposals(orchestrator_new_nodes, observed)
+
+    assert len(proposals) == 2
+    orchestrator_proposal = next(p for p in proposals if p.source == "orchestrator")
+    assert orchestrator_proposal.proposal_id == "new-gap"
+    assert orchestrator_proposal.need == "a new gap"
+    worker_proposal = next(p for p in proposals if p.source == "worker_observed")
+    assert worker_proposal.need == "worker saw this"
+    # A worker-observed proposal_id is minted fresh (UnresolvedNeed carries
+    # no id of its own) and must not collide with a real node id.
+    assert worker_proposal.proposal_id not in orchestrator_new_nodes
+
+
+def test_apply_consolidation_decisions_create_mints_a_permanent_node() -> None:
+    graph = NeedGraph(nodes={})
+    proposals = [_proposal("proposal-1", "brand new gap")]
+    plan = GraphConsolidationPlan(
+        decisions=[GraphConsolidationDecision(proposal_id="proposal-1", action="create")]
+    )
+
+    result = _apply_consolidation_decisions(graph, proposals, plan)
+
+    assert set(result.nodes) == {"proposal-1"}
+    assert result.nodes["proposal-1"].need == "brand new gap"
+
+
+def test_apply_consolidation_decisions_defaults_an_undecided_proposal_to_create() -> None:
+    graph = NeedGraph(nodes={})
+    proposals = [_proposal("proposal-1", "no decision reached")]
+    plan = GraphConsolidationPlan(decisions=[])
+
+    result = _apply_consolidation_decisions(graph, proposals, plan)
+
+    assert set(result.nodes) == {"proposal-1"}
+
+
+def test_apply_consolidation_decisions_merge_produces_no_new_id_and_enriches_target() -> None:
+    existing = NeedNode(
+        need_id="existing-gap",
+        need="the existing gap",
+        detail=UnresolvedNeed(description="the existing gap", relevant_symbols=["QAOA"]),
+    )
+    graph = NeedGraph(nodes={"existing-gap": existing})
+    proposals = [
+        ProposedNode(
+            proposal_id="proposal-1",
+            need="a reworded version of the existing gap",
+            detail=UnresolvedNeed(
+                description="a reworded version of the existing gap",
+                relevant_symbols=["FALQON"],
+            ),
+        )
+    ]
+    plan = GraphConsolidationPlan(
+        decisions=[
+            GraphConsolidationDecision(
+                proposal_id="proposal-1", action="merge", target_node_id="existing-gap"
+            )
+        ]
+    )
+
+    result = _apply_consolidation_decisions(graph, proposals, plan)
+
+    assert set(result.nodes) == {"existing-gap"}
+    assert sorted(result.nodes["existing-gap"].detail.relevant_symbols) == ["FALQON", "QAOA"]
+    # The target's own wording survives a merge (only subsume replaces it).
+    assert result.nodes["existing-gap"].need == "the existing gap"
+
+
+def test_apply_consolidation_decisions_subsume_replaces_target_wording_with_no_new_id() -> None:
+    existing = NeedNode(
+        need_id="existing-gap",
+        need="vague existing gap",
+        detail=UnresolvedNeed(description="vague existing gap"),
+    )
+    graph = NeedGraph(nodes={"existing-gap": existing})
+    proposals = [_proposal("proposal-1", "sharper restatement of the same gap")]
+    plan = GraphConsolidationPlan(
+        decisions=[
+            GraphConsolidationDecision(
+                proposal_id="proposal-1", action="subsume", target_node_id="existing-gap"
+            )
+        ]
+    )
+
+    result = _apply_consolidation_decisions(graph, proposals, plan)
+
+    assert set(result.nodes) == {"existing-gap"}
+    assert result.nodes["existing-gap"].need == "sharper restatement of the same gap"
+
+
+def test_apply_consolidation_decisions_attach_becomes_a_child_of_the_named_node() -> None:
+    parent = NeedNode(
+        need_id="parent-node", need="parent", detail=UnresolvedNeed(description="parent")
+    )
+    graph = NeedGraph(nodes={"parent-node": parent})
+    proposals = [_proposal("proposal-1", "child gap")]
+    plan = GraphConsolidationPlan(
+        decisions=[
+            GraphConsolidationDecision(
+                proposal_id="proposal-1", action="attach", target_node_id="parent-node"
+            )
+        ]
+    )
+
+    result = _apply_consolidation_decisions(graph, proposals, plan)
+
+    assert set(result.nodes) == {"parent-node", "proposal-1"}
+    assert result.nodes["parent-node"].children == ["proposal-1"]
+
+
+def test_apply_consolidation_decisions_drop_produces_nothing() -> None:
+    graph = NeedGraph(nodes={})
+    proposals = [_proposal("proposal-1", "already covered by existing evidence")]
+    plan = GraphConsolidationPlan(
+        decisions=[GraphConsolidationDecision(proposal_id="proposal-1", action="drop")]
+    )
+
+    result = _apply_consolidation_decisions(graph, proposals, plan)
+
+    assert result.nodes == {}
+
+
+def test_apply_consolidation_decisions_resolves_cross_proposal_references() -> None:
+    # Two brand-new proposals in the same round, each naming the *other*
+    # by its provisional proposal_id -- must resolve regardless of commit
+    # order, per _apply_consolidation_decisions' two-pass design.
+    graph = NeedGraph(nodes={})
+    proposals = [
+        _proposal("proposal-1", "gap one", depends_on=["proposal-2"]),
+        _proposal("proposal-2", "gap two", related_to=["proposal-1"]),
+    ]
+    plan = GraphConsolidationPlan(
+        decisions=[
+            GraphConsolidationDecision(proposal_id="proposal-1", action="create"),
+            GraphConsolidationDecision(proposal_id="proposal-2", action="create"),
+        ]
+    )
+
+    result = _apply_consolidation_decisions(graph, proposals, plan)
+
+    assert result.nodes["proposal-1"].depends_on == ["proposal-2"]
+    assert result.nodes["proposal-2"].related_to == ["proposal-1"]
+
+
+def test_apply_consolidation_decisions_redirects_a_reference_to_a_merged_proposal() -> None:
+    # proposal-2 depends on proposal-1, but proposal-1 gets merged into an
+    # existing node rather than minted fresh -- the edge must follow the
+    # remap to the real target, not dangle on a proposal_id that never
+    # became a node.
+    existing = NeedNode(
+        need_id="existing-gap", need="existing", detail=UnresolvedNeed(description="existing")
+    )
+    graph = NeedGraph(nodes={"existing-gap": existing})
+    proposals = [
+        _proposal("proposal-1", "duplicate of existing"),
+        _proposal("proposal-2", "depends on the duplicate", depends_on=["proposal-1"]),
+    ]
+    plan = GraphConsolidationPlan(
+        decisions=[
+            GraphConsolidationDecision(
+                proposal_id="proposal-1", action="merge", target_node_id="existing-gap"
+            ),
+            GraphConsolidationDecision(proposal_id="proposal-2", action="create"),
+        ]
+    )
+
+    result = _apply_consolidation_decisions(graph, proposals, plan)
+
+    assert set(result.nodes) == {"existing-gap", "proposal-2"}
+    assert result.nodes["proposal-2"].depends_on == ["existing-gap"]
+
+
+def test_apply_consolidation_decisions_drops_a_dangling_child_ref_on_an_existing_node() -> None:
+    # Regression test: confirmed live on a real qibo gen0 run --
+    # _merge_plan_into_graph trusts the Orchestrator's direct edit of an
+    # EXISTING node's children list as-is, and that edit can legitimately
+    # name a brand-new id the Orchestrator is simultaneously proposing via
+    # graph_updates this same round. If the Organizer decides "merge" (or
+    # "drop") for that proposal, it never becomes a real node -- without
+    # this fix the parent's children list still pointed at the vanished
+    # proposal_id, and the closure-check loop's
+    # graph.nodes[child_id].resolution lookup raised KeyError.
+    root = NeedNode(
+        need_id="root",
+        need="root need",
+        detail=UnresolvedNeed(description="root need"),
+        children=["proposal-1"],
+    )
+    existing = NeedNode(
+        need_id="existing-gap", need="existing", detail=UnresolvedNeed(description="existing")
+    )
+    graph = NeedGraph(nodes={"root": root, "existing-gap": existing})
+    proposals = [_proposal("proposal-1", "same as existing-gap, reworded")]
+    plan = GraphConsolidationPlan(
+        decisions=[
+            GraphConsolidationDecision(
+                proposal_id="proposal-1", action="merge", target_node_id="existing-gap"
+            )
+        ]
+    )
+
+    result = _apply_consolidation_decisions(graph, proposals, plan)
+
+    assert set(result.nodes) == {"root", "existing-gap"}
+    # The dangling reference is redirected to the merge target, not left
+    # pointing at a node_id that no longer (and never did) exist.
+    assert result.nodes["root"].children == ["existing-gap"]
+
+
+def test_apply_consolidation_decisions_drops_a_child_ref_to_a_dropped_proposal() -> None:
+    root = NeedNode(
+        need_id="root",
+        need="root need",
+        detail=UnresolvedNeed(description="root need"),
+        children=["proposal-1"],
+    )
+    graph = NeedGraph(nodes={"root": root})
+    proposals = [_proposal("proposal-1", "already covered")]
+    plan = GraphConsolidationPlan(
+        decisions=[GraphConsolidationDecision(proposal_id="proposal-1", action="drop")]
+    )
+
+    result = _apply_consolidation_decisions(graph, proposals, plan)
+
+    assert set(result.nodes) == {"root"}
+    assert result.nodes["root"].children == []
+
+
+def test_candidate_hints_for_proposals_degrades_gracefully_with_no_embedder(monkeypatch) -> None:
+    monkeypatch.setattr("ant.coordinator.local.get_shared_embedder", lambda: None)
+    active_nodes = {
+        "existing-gap": NeedNode(
+            need_id="existing-gap", need="existing", detail=UnresolvedNeed(description="existing")
+        )
+    }
+    proposals = [_proposal("proposal-1", "some new gap")]
+
+    assert _candidate_hints_for_proposals(active_nodes, proposals) == {}

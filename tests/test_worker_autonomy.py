@@ -514,7 +514,6 @@ class _DenylistReasoner:
         workers,
         memory_hints,
         frontier,
-        observed_needs,
         incomplete_parents,
         cross_repo_experience,
         validation_feedback="",
@@ -523,6 +522,9 @@ class _DenylistReasoner:
         candidate_probes=None,
     ):
         raise AssertionError("this test does not exercise plan_round()")
+
+    def consolidate_graph(self, *, question, active_nodes, proposals, candidate_hints):
+        raise AssertionError("this test does not exercise consolidate_graph()")
 
     def summarize_task_experience(self, *, question, rounds, unresolved_needs, evidence_count):
         raise AssertionError("this test does not exercise summarize_task_experience()")

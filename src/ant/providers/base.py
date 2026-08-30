@@ -6,9 +6,12 @@ from ant.domain import (
     AbsenceProof,
     Evidence,
     FrontierResult,
+    GraphConsolidationPlan,
     NeedGraph,
+    NeedNode,
     NeedResolution,
     PlanningRound,
+    ProposedNode,
     RepairPlan,
     RoundPlan,
     TaskTrajectoryPackage,
@@ -100,7 +103,6 @@ class WorkerReasoner(Protocol):
         workers: list[WorkerCard],
         memory_hints: dict[str, str],
         frontier: FrontierResult,
-        observed_needs: list[UnresolvedNeed],
         incomplete_parents: list[str],
         cross_repo_experience: list[str],
         validation_feedback: str = "",
@@ -128,13 +130,18 @@ class WorkerReasoner(Protocol):
         recovery plan might do, like reassigning or redecomposing, is
         expressed as ordinary graph_updates/assignments, no special flag).
 
-        `observed_needs` is the coordinator's persistent buffer of gaps
-        raised by workers' own observe() calls that have not yet been
-        acted on -- shown explicitly (not folded into `evidence`) so a
-        real gap can't quietly get lost in evidence-context noise; this
-        call decides per item whether to create a node from it, merge it
-        into an existing node's edit, or leave/discard it, and reports
-        which indices it handled via RoundPlan.resolved_observed_need_indices.
+        This call does NOT see worker-observed gaps (`observed_needs`) --
+        that responsibility, and the decision of whether a *new*
+        `graph_updates` proposal actually becomes a permanent node at all,
+        belongs entirely to WorkerReasoner.consolidate_graph now (see its
+        own docstring and GraphConsolidationPlan). This call's own
+        `graph_updates` may still propose brand-new nodes (a new need_id
+        entry) -- those are provisional until consolidate_graph decides on
+        them, same as an observed need; an *existing* need_id in
+        `graph_updates` is still applied directly and immediately, as
+        always (revising wording, editing `depends_on`/`related_to`/
+        `children` between already-real nodes is this call's own free
+        judgment, not routed through consolidation).
 
         `incomplete_parents` lists parent need_ids whose children just all
         resolved but whose own closure check (check_need_resolution on the
@@ -204,6 +211,48 @@ class WorkerReasoner(Protocol):
         anchors can still be the right call (a need's answer may not be
         lexically/semantically close to it at all), and this call keeps
         free choice within `workers`.
+        """
+        ...
+
+    def consolidate_graph(
+        self,
+        *,
+        question: str,
+        active_nodes: dict[str, NeedNode],
+        proposals: list[ProposedNode],
+        candidate_hints: dict[str, list[str]],
+    ) -> GraphConsolidationPlan:
+        """The Graph Organizer: the one place a *new* need node actually
+        comes into existence. Runs once per round, after this round's
+        assignments have executed (so it can also see what worker
+        execution surfaced), on the Potential Needs Buffer -- this round's
+        new-id `graph_updates` proposals from plan_round PLUS the
+        coordinator's persistent worker-observed-needs buffer, unified
+        (see ProposedNode.source). Owns exactly one concern: keep the
+        problem representation from duplicating or exploding, never
+        worker routing or resolution status.
+
+        `active_nodes` is every existing node that is not yet resolved and
+        not abandoned -- keyed by their real, permanent need_id. `proposals`
+        is this round's buffer. `candidate_hints` maps each proposal's
+        `proposal_id` to a short list of nearby existing node ids (dense-
+        embedding nearest neighbors over need text, computed by the
+        coordinator before this call -- see
+        LocalCoordinator._candidate_hints_for_proposals) -- exactly the
+        same "retrieval narrows, judgment decides" split that fixed worker
+        routing tonight: embedding similarity is never itself the merge
+        decision, a fixed cosine threshold cannot tell "same gap reworded"
+        from "a more specific child" from "genuinely related but distinct"
+        apart, only a real judgment call can. A proposal's hints existing
+        is not a suggestion to merge -- plenty of genuinely-new proposals
+        will have nearby-but-distinct existing nodes as hints; this call
+        is free to still say "create".
+
+        Return exactly one GraphConsolidationDecision per proposal (a
+        proposal with no decision is treated as "create" by the
+        coordinator, the same safe default MockLLMProvider always
+        returns). See GraphConsolidationDecision's own docstring for what
+        each action does structurally.
         """
         ...
 

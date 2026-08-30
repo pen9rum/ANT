@@ -16,11 +16,14 @@ from ant.domain import (
     CodeSymbol,
     Evidence,
     FrontierResult,
+    GraphConsolidationDecision,
+    GraphConsolidationPlan,
     NeedGraph,
     NeedNode,
     NeedResolution,
     NodeExecutionTrace,
     PlanningRound,
+    ProposedNode,
     RepairAction,
     RepairPlan,
     RoundPlan,
@@ -669,7 +672,6 @@ class OpenAIProvider:
         workers: list[WorkerCard],
         memory_hints: dict[str, str],
         frontier: FrontierResult,
-        observed_needs: list[UnresolvedNeed],
         incomplete_parents: list[str],
         cross_repo_experience: list[str],
         validation_feedback: str = "",
@@ -771,11 +773,6 @@ class OpenAIProvider:
             )
             for index, group in enumerate(frontier.stuck_subgraphs)
         ]
-        observed_need_lines = [
-            f"[{index}] {need.missing or need.description} (need_type={need.need_type}, "
-            f"scope={need.scope})"
-            for index, need in enumerate(observed_needs)
-        ]
         experience_lines = [f"- {experience}" for experience in cross_repo_experience]
         feedback_block = (
             f"\nYour previous graph_updates for this round were rejected: "
@@ -789,11 +786,16 @@ class OpenAIProvider:
             "task's Need Graph. You decide exactly three things, and "
             "nothing else -- never resolution/execution/progress status, "
             "those are computed elsewhere:\n"
-            "1. graph_updates: create/decompose need nodes and edit their "
-            "depends_on/related_to/children edges. A node's need_id, once "
-            "it exists, is permanent -- never reuse an existing id to mean "
-            "a different underlying gap; when a node is too coarse, add "
-            "children under it instead of replacing it.\n"
+            "1. graph_updates: for an EXISTING need_id, edit its need/"
+            "depends_on/related_to/children directly -- a node's need_id, "
+            "once it exists, is permanent, never reuse an existing id to "
+            "mean a different underlying gap. For a NEW need_id, this is "
+            "only a PROPOSAL: it does not become a real graph node yet, a "
+            "separate Graph Organizer step decides afterward whether to "
+            "create it, merge it into an existing node, or drop it -- so "
+            "propose freely when you genuinely think more decomposition is "
+            "needed, you are not responsible for checking it against "
+            "every existing node yourself.\n"
             "2. assignments: which worker id(s) handle each ready-frontier "
             "need_id this round. One worker id is a plain follow-up/"
             "handoff; more than one is a coalition -- same kind of entry "
@@ -813,14 +815,7 @@ class OpenAIProvider:
             "different sub-need), not the default; prefer a different "
             "worker, a coalition, or one of the two special tactics "
             "instead unless you have a specific reason to repeat.\n"
-            "4. For each item in 'Observed needs' below: decide whether to "
-            "create a new graph node from it (via graph_updates), fold its "
-            "content into an existing node you're editing, or leave it "
-            "alone -- then list its index in resolved_observed_need_indices "
-            "if you did anything with it (created a node, merged it, or "
-            "deliberately decided to discard it); leave its index out to "
-            "keep it pending for a future round.\n"
-            "5. For each id in 'Parents needing more decomposition' below: "
+            "4. For each id in 'Parents needing more decomposition' below: "
             "its children are all resolved but its own closure check says "
             "the decomposition still doesn't cover its original scope -- "
             "add more children under it via graph_updates (or otherwise "
@@ -836,8 +831,6 @@ class OpenAIProvider:
             f"Stuck subgraphs needing a recovery plan:\n"
             f"{chr(10).join(stuck_lines) or '(none)'}\n"
             f"Parents needing more decomposition: {', '.join(incomplete_parents) or '(none)'}\n"
-            f"Observed needs (act on these, see instruction 4):\n"
-            f"{chr(10).join(observed_need_lines) or '(none)'}\n"
             f"Workers:\n{chr(10).join(worker_lines)}\n"
             "Candidate probes (cheap search per candidate before "
             "committing -- use what was actually found, not just which "
@@ -852,17 +845,96 @@ class OpenAIProvider:
             "need_id, need, depends_on, related_to, children -- omit any "
             "you're not changing; children lists other need_ids already "
             "present in this same graph_updates list or the current "
-            "graph), assignments (an object mapping need_id to a list of "
-            "worker ids, ready-frontier or stuck-subgraph-member need_ids "
-            "only), special_tactics (an object mapping need_id to exactly "
-            "\"temporary_bridge\" or \"global_fallback\", only for the two "
-            "special cases above), and resolved_observed_need_indices (a "
-            "list of indices, as strings, from Observed needs that you "
-            "acted on this round)."
+            "graph -- for a NEW need_id this is a proposal only, see "
+            "instruction 1), assignments (an object mapping need_id to a "
+            "list of worker ids, ready-frontier or stuck-subgraph-member "
+            "need_ids only), and special_tactics (an object mapping "
+            "need_id to exactly \"temporary_bridge\" or \"global_fallback\", "
+            "only for the two special cases above)."
         )
         result = self.responses_json(prompt, max_output_tokens=2048)
         data = _loads_json_object(result.text)
         return _parse_round_plan(data, graph=graph, workers=workers)
+
+    def consolidate_graph(
+        self,
+        *,
+        question: str,
+        active_nodes: dict[str, NeedNode],
+        proposals: list[ProposedNode],
+        candidate_hints: dict[str, list[str]],
+    ) -> GraphConsolidationPlan:
+        # The Graph Organizer: the one place a new need node actually comes
+        # into existence (see WorkerReasoner.consolidate_graph's own
+        # docstring for the full action semantics). Every active node is
+        # shown in full (there is no exclusion here, only the per-proposal
+        # candidate_hints below narrow what's highlighted as *likely*
+        # related) -- same "never let a filter zero out a legitimate
+        # option" posture as the rest of this pipeline.
+        if not proposals:
+            return GraphConsolidationPlan()
+        active_lines = [
+            f"[{node_id}] {node.need} (resolution={node.resolution}, "
+            f"children={node.children}, depends_on={node.depends_on})"
+            for node_id, node in active_nodes.items()
+        ]
+        proposal_lines = []
+        for proposal in proposals:
+            hints = candidate_hints.get(proposal.proposal_id, [])
+            proposal_lines.append(
+                f"[{proposal.proposal_id}] (source={proposal.source}) {proposal.need}"
+                + (f"\n  nearby existing nodes: {', '.join(hints)}" if hints else "")
+                + (
+                    f"\n  proposer suggested parent: {proposal.proposed_parent}"
+                    if proposal.proposed_parent
+                    else ""
+                )
+            )
+        prompt = (
+            "You are the Graph Organizer for a codebase-QA task's Need "
+            "Graph. Your only job is keeping the problem representation "
+            "from duplicating or exploding -- you do not route work to "
+            "workers and you do not judge whether anything is resolved, "
+            "only whether each proposed need is actually a NEW gap.\n"
+            "For each proposal below, choose exactly one action:\n"
+            "- create: genuinely new and independent, not covered by any "
+            "existing node.\n"
+            "- attach: genuinely new, but it is a sub-part of an existing "
+            "node's own scope -- give target_node_id, it becomes that "
+            "node's child.\n"
+            "- relate: genuinely new and independent, but meaningfully "
+            "connected to an existing node (not a dependency, not a "
+            "duplicate) -- give target_node_id.\n"
+            "- merge: this is the SAME gap as an existing unresolved node, "
+            "just worded differently -- give target_node_id, no new node "
+            "is created.\n"
+            "- subsume: this is a MORE SPECIFIC restatement of an existing "
+            "node's own scope (not a child, a sharper version of the same "
+            "thing) -- give target_node_id, that node's own wording will "
+            "be replaced by this proposal's.\n"
+            "- drop: already covered by existing evidence or another node, "
+            "not worth tracking separately.\n"
+            "'Nearby existing nodes' under a proposal is a retrieval hint "
+            "only (embedding similarity), never a rule -- a proposal with "
+            "nearby nodes listed can still be 'create' if it is genuinely "
+            "distinct, and one with no nearby nodes listed can still be "
+            "'merge'/'subsume' if you judge it to be the same gap.\n"
+            f"Question: {question}\n"
+            f"Active (unresolved, not abandoned) nodes:\n"
+            f"{chr(10).join(active_lines) or '(none)'}\n"
+            f"Proposals:\n{chr(10).join(proposal_lines)}\n"
+            "Return JSON with key decisions: a list of objects with "
+            "proposal_id, action (one of create/attach/relate/merge/"
+            "subsume/drop), target_node_id (required for attach/relate/"
+            "merge/subsume, the existing node id -- may also be another "
+            "proposal_id from this same list if that proposal is itself "
+            "being created), and rationale (brief). Cover every proposal_id "
+            "listed above exactly once."
+        )
+        result = self.responses_json(prompt, max_output_tokens=2048)
+        data = _loads_json_object(result.text)
+        valid_ids = {p.proposal_id for p in proposals}
+        return _parse_consolidation_plan(data, valid_proposal_ids=valid_ids)
 
     def propose_repair(self, *, package: TaskTrajectoryPackage) -> RepairPlan:
         # Task-conditioned ("fast") evolution's one reasoning call --
@@ -1454,19 +1526,58 @@ def _parse_round_plan(
             ):
                 special_tactics[need_id] = tactic
 
-    raw_resolved_indices = data.get("resolved_observed_need_indices")
-    resolved_observed_need_indices = (
-        [str(item) for item in raw_resolved_indices if isinstance(item, (str, int))]
-        if isinstance(raw_resolved_indices, list)
-        else []
-    )
-
     return RoundPlan(
         graph_updates=graph_updates,
         assignments=assignments,
         special_tactics=special_tactics,
-        resolved_observed_need_indices=resolved_observed_need_indices,
     )
+
+
+_CONSOLIDATION_ACTIONS = {"create", "attach", "relate", "merge", "subsume", "drop"}
+_CONSOLIDATION_TARGET_REQUIRED = {"attach", "relate", "merge", "subsume"}
+
+
+def _parse_consolidation_plan(
+    data: dict,
+    *,
+    valid_proposal_ids: set[str],
+) -> GraphConsolidationPlan:
+    """Builds a GraphConsolidationPlan from consolidate_graph's raw JSON
+    response, same tolerant-of-malformed-entries posture as
+    _parse_round_plan: an entry with an unknown proposal_id, an invalid
+    action, or a missing target_node_id where one is required is simply
+    dropped -- LocalCoordinator treats any proposal_id with no decision at
+    all as "create" (see _consolidate_and_commit), so a dropped entry
+    degrades to the same safe default MockLLMProvider always returns, not
+    a crash or a silently vanished proposal.
+    """
+    decisions: list[GraphConsolidationDecision] = []
+    raw_decisions = data.get("decisions")
+    if isinstance(raw_decisions, list):
+        for raw in raw_decisions:
+            if not isinstance(raw, dict):
+                continue
+            proposal_id = raw.get("proposal_id")
+            action = raw.get("action")
+            if not isinstance(proposal_id, str) or proposal_id not in valid_proposal_ids:
+                continue
+            if action not in _CONSOLIDATION_ACTIONS:
+                continue
+            target_node_id = raw.get("target_node_id")
+            if not isinstance(target_node_id, str):
+                target_node_id = ""
+            if action in _CONSOLIDATION_TARGET_REQUIRED and not target_node_id:
+                continue
+            rationale = raw.get("rationale")
+            decisions.append(
+                GraphConsolidationDecision(
+                    proposal_id=proposal_id,
+                    action=action,
+                    target_node_id=target_node_id,
+                    rationale=rationale if isinstance(rationale, str) else "",
+                )
+            )
+    return GraphConsolidationPlan(decisions=decisions)
 
 
 _REPAIR_ACTION_KINDS = {

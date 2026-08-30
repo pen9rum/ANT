@@ -224,27 +224,32 @@ class FrontierResult(BaseModel):
 
 class RoundPlan(BaseModel):
     """Output of WorkerReasoner.plan_round(): the Orchestrator's single
-    per-round decision. This covers everything the Orchestrator is
-    responsible for in the new graph-based pipeline -- decomposing or
-    creating need nodes, editing `depends_on`/`related_to` edges, and
-    assigning workers to this round's frontier (a single worker id means a
-    plain follow-up/handoff, more than one means a coalition; both are the
-    same kind of entry here, no separate escalation-tactic vocabulary
-    needed for them). It never writes `resolution`/`execution`/`progress`
+    per-round decision. It never writes `resolution`/`execution`/`progress`
     -- each of those three dimensions has exactly one other writer (see
-    NeedNode's docstring).
+    NeedNode's docstring). It also never has the final word on whether a
+    *new* need node actually comes into existence -- see `graph_updates`
+    below and GraphConsolidationPlan/WorkerReasoner.consolidate_graph.
     """
 
-    # New or updated nodes this call wants to add/change, keyed by
-    # need_id. A node already in the existing graph that isn't mentioned
-    # here is left untouched. need_id is permanent (see NeedNode): this
-    # can introduce a brand-new id, or update an existing node's
-    # `need`/`depends_on`/`related_to`/`children` -- it must never reuse
-    # an existing need_id to mean something semantically different.
+    # Edits to nodes that already exist in the graph, AND proposals for
+    # brand-new ones, both keyed by need_id -- the two are told apart
+    # purely by whether that need_id is already in the graph. An existing
+    # need_id here is applied directly (need/depends_on/related_to/children
+    # edits -- the Orchestrator's own free judgment call, same as always).
+    # A *new* need_id here is only a PROPOSAL: it is collected into this
+    # round's Potential Needs Buffer alongside worker-observed needs, and
+    # only becomes a real, permanent graph node if
+    # WorkerReasoner.consolidate_graph decides "create"/"attach"/"relate"
+    # for it -- "merge"/"subsume"/"drop" mean it never gets a node_id at
+    # all. This is the fix for graph growth outrunning resolution: the
+    # Orchestrator proposing a need no longer means it exists immediately;
+    # see GraphConsolidationPlan for the actual per-proposal decision.
     graph_updates: dict[str, NeedNode] = Field(default_factory=dict)
     # need_id -> worker ids assigned this round. Only ready-frontier
     # need_ids (or, for a stuck subgraph handed to this call, one of its
-    # members) should appear here.
+    # members) should appear here -- a need_id that is only a proposal
+    # this round (see graph_updates above) is never assignable yet, it
+    # does not exist in the graph until consolidated.
     assignments: dict[str, list[str]] = Field(default_factory=dict)
     # Stuck-subgraph root need_id -> "temporary_bridge" | "global_fallback"
     # -- only present when the Orchestrator's recovery plan for that
@@ -253,15 +258,63 @@ class RoundPlan(BaseModel):
     # (reassign, redecompose, form a coalition) is expressed as ordinary
     # graph_updates/assignments above; no special flag needed for those.
     special_tactics: dict[str, str] = Field(default_factory=dict)
-    # Indices into that call's own `observed_needs` argument that this plan
-    # has acted on in some way (created a node from, merged into an
-    # existing node's edit, or deliberately decided not to track) -- the
-    # coordinator drops exactly these from its persistent observed-needs
-    # buffer afterward, everything else stays pending for a future round.
-    # Mirrors reasoner.select_evidence's index-based consumption pattern
-    # rather than requiring content-matching heuristics to guess which
-    # buffered need a graph_updates entry came from.
-    resolved_observed_need_indices: list[str] = Field(default_factory=list)
+
+
+class ProposedNode(BaseModel):
+    """One new-node candidate for this round's Potential Needs Buffer --
+    from either the Orchestrator's own graph_updates (a new-id entry, see
+    RoundPlan's docstring) or a worker's observed_needs. Never becomes a
+    permanent NeedGraph node until WorkerReasoner.consolidate_graph
+    decides what to do with it (see GraphConsolidationDecision).
+    """
+
+    proposal_id: str  # this round's own provisional label, never persisted as a real need_id
+    need: str
+    detail: UnresolvedNeed
+    # Existing node ids OR other proposal_ids from this same round's
+    # buffer -- resolved through the commit-order proposal_id -> real
+    # node_id map as decisions are applied (see
+    # LocalCoordinator._consolidate_and_commit).
+    proposed_depends_on: list[str] = Field(default_factory=list)
+    proposed_children: list[str] = Field(default_factory=list)
+    proposed_related_to: list[str] = Field(default_factory=list)
+    # Non-empty => the proposer suggests this become a child of that
+    # existing node specifically (a hint only -- consolidate_graph can
+    # still choose "attach" to a different target, or a different action
+    # entirely).
+    proposed_parent: str = ""
+    source: str = "orchestrator"  # "orchestrator" | "worker_observed"
+
+
+class GraphConsolidationDecision(BaseModel):
+    """WorkerReasoner.consolidate_graph's verdict on one ProposedNode.
+
+    - "create": genuinely new, independent node. Permanent id = the
+      proposal's own proposal_id.
+    - "attach": genuinely new, but wired as a `children` entry of
+      target_node_id instead of standalone. Also gets a permanent id
+      (the proposal's own proposal_id).
+    - "relate": genuinely new and independent, but wired with a
+      `related_to` edge to target_node_id (not a dependency/duplicate).
+      Also gets a permanent id.
+    - "merge": this proposal *is* an existing unresolved node, just
+      reworded -- no new id; target_node_id's detail is enriched (union
+      of relevant_symbols/suggested_terms) with the proposal's own.
+    - "subsume": this proposal is a more specific restatement of an
+      existing node's own scope -- no new id; target_node_id's own
+      need/detail text is replaced by the proposal's sharper wording.
+    - "drop": already covered by existing evidence/nodes -- discarded
+      entirely, no id, no edit.
+    """
+
+    proposal_id: str
+    action: str
+    target_node_id: str = ""  # existing node id -- required for merge/subsume/attach/relate
+    rationale: str = ""
+
+
+class GraphConsolidationPlan(BaseModel):
+    decisions: list[GraphConsolidationDecision] = Field(default_factory=list)
 
 
 class NodeExecutionTrace(BaseModel):
