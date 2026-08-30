@@ -106,7 +106,7 @@ class WorkerReasoner(Protocol):
         validation_feedback: str = "",
         repair_guidance: str = "",
         stuck_tried_workers: dict[str, list[str]] | None = None,
-        worker_relevance_rank: dict[str, int] | None = None,
+        candidate_probes: dict[str, dict[str, list[Evidence]]] | None = None,
     ) -> RoundPlan:
         """The single per-round Orchestrator planning call: replaces
         select_workers/decide_local_action and the hand-coded escalation
@@ -183,14 +183,27 @@ class WorkerReasoner(Protocol):
         names *only* already-tried workers for a still-stuck need with a
         forced global_fallback rather than executing the repeat.
 
-        `worker_relevance_rank` maps a worker id to its rank (1 = best) by
-        ant.coordinator.worker_retrieval.rank_workers against this round's
-        frontier -- lexical/exact-symbol/dense retrieval over WorkerCard.symbols,
-        never a relevance-based exclusion (a worker with no entry here
-        simply has no retrieval signal, not a bad one). Advisory context
-        only, same status as memory_hints/cross_repo_experience: this call
-        is not required to follow it, and `workers` here still lists every
-        worker regardless of rank.
+        `workers` here is already narrowed to a per-need retrieval-ranked
+        candidate set (see LocalCoordinator._candidate_workers_for_round)
+        -- structural, not advisory: an assignment naming a worker id
+        outside this list is dropped when the response is parsed (see
+        _parse_round_plan's valid_worker_ids check), so an id must come
+        from here to take effect at all.
+
+        `candidate_probes` maps a ready need_id to {worker_id: anchors} --
+        each candidate's own cheap, local pre-commit search()/dense_search()
+        result (see LocalCoordinator._probe_need_candidates), at most a
+        handful of Evidence items each, empty for a candidate that found
+        nothing. This is the primary signal for *which* candidate to
+        actually commit to: prefer a candidate whose probe turned up
+        something concretely relevant over one that merely sounds relevant
+        by name/routing_summary -- confirmed live that the latter alone is
+        not reliable (a "gates" question pulling assignment toward a
+        gates-named worker over a better-ranked one with no actual gates-
+        drawing content). Still not a hard rule: a candidate with no probe
+        anchors can still be the right call (a need's answer may not be
+        lexically/semantically close to it at all), and this call keeps
+        free choice within `workers`.
         """
         ...
 

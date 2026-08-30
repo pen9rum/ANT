@@ -265,13 +265,17 @@ def test_plan_round_shows_worker_searchable_terms_not_just_routing_summary() -> 
     assert "paint_world_map" in captured["prompt"]
 
 
-def test_plan_round_reorders_and_annotates_workers_by_relevance_rank() -> None:
-    # worker_relevance_rank comes from ant.coordinator.worker_retrieval's
-    # retrieval-based ranking (BM25 + exact-symbol + dense over
-    # WorkerCard.symbols) -- when the coordinator supplies one, the prompt
-    # should surface it as a rank annotation and put the best match first,
-    # WITHOUT dropping any worker from the list (see rank_workers' own
-    # docstring: never exclusionary, only reordering/annotation).
+def test_plan_round_shows_probe_anchors_and_orders_candidates_by_them() -> None:
+    # candidate_probes comes from LocalCoordinator._probe_need_candidates --
+    # a cheap search()/dense_search() look each candidate takes into its
+    # own territory before the Orchestrator commits to one. The prompt
+    # should show what was actually found (or "no anchors found"),
+    # grouped by need_id, and put the candidate with the strongest probe
+    # signal first -- replacing the old retrieval-rank annotation entirely
+    # (confirmed live that a rank number alone was not reliable enough:
+    # a "gates" question still pulled assignment toward a gates-named
+    # worker over a better-ranked one with no actual gates-drawing
+    # content). Never exclusionary -- worker-b (no anchors) still listed.
     provider = OpenAIProvider(model="gpt-4.1")
     captured: dict[str, str] = {}
 
@@ -297,23 +301,40 @@ def test_plan_round_reorders_and_annotates_workers_by_relevance_rank() -> None:
         observed_needs=[],
         incomplete_parents=[],
         cross_repo_experience=[],
-        worker_relevance_rank={"worker-c": 1, "worker-a": 2},
+        candidate_probes={
+            "root": {
+                "worker-c": [
+                    Evidence(
+                        path="src/c.py",
+                        line_start=10,
+                        line_end=12,
+                        quote="def target_function():",
+                        reason="probe",
+                    )
+                ],
+                "worker-a": [],
+                "worker-b": [],
+            }
+        },
     )
 
     prompt = captured["prompt"]
-    # Every worker still listed -- worker-b has no rank entry (no
-    # retrieval signal) but must not be excluded.
+    # Every worker still listed -- worker-a/worker-b found nothing but
+    # must not be excluded.
     assert "worker-a" in prompt
     assert "worker-b" in prompt
     assert "worker-c" in prompt
-    assert "(retrieval rank 1/3)" in prompt
-    assert "(retrieval rank 2/3)" in prompt
-    # Best match first: worker-c's line precedes worker-a's, which
-    # precedes worker-b's (unranked, falls back to original order last).
-    assert prompt.index("worker-c") < prompt.index("worker-a") < prompt.index("worker-b")
+    assert "retrieval rank" not in prompt
+    assert "src/c.py:10" in prompt
+    assert "target_function" in prompt
+    assert "no anchors found" in prompt
+    # Strongest probe signal first: worker-c (1 anchor) precedes the
+    # zero-anchor workers.
+    assert prompt.index("worker-c") < prompt.index("worker-a")
+    assert prompt.index("worker-c") < prompt.index("worker-b")
 
 
-def test_plan_round_keeps_original_worker_order_when_no_relevance_rank_given() -> None:
+def test_plan_round_keeps_original_worker_order_with_no_candidate_probes() -> None:
     provider = OpenAIProvider(model="gpt-4.1")
     captured: dict[str, str] = {}
 

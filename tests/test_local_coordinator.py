@@ -200,7 +200,7 @@ def test_cross_repo_experience_reaches_plan_round(tmp_path: Path) -> None:
             validation_feedback="",
             repair_guidance="",
             stuck_tried_workers=None,
-            worker_relevance_rank=None,
+            candidate_probes=None,
         ):
             received.append(cross_repo_experience)
             return RoundPlan()
@@ -215,15 +215,15 @@ def test_cross_repo_experience_reaches_plan_round(tmp_path: Path) -> None:
     assert received == [["a transferable pattern from another repo"]]
 
 
-def test_ask_threads_a_retrieval_based_worker_relevance_rank_into_plan_round(
-    tmp_path: Path,
-) -> None:
-    # ant.coordinator.worker_retrieval.rank_workers is built from
-    # WorkerCard.symbols (the AST's real, non-truncated definition list),
-    # not searchable_terms -- confirm ask() actually computes and threads
-    # this rank through to plan_round() every round, and that the worker
-    # whose symbol table contains the question's own rare term ranks
-    # ahead of an unrelated sibling.
+def test_ask_threads_probe_results_into_plan_round(tmp_path: Path) -> None:
+    # ant.coordinator.local.LocalCoordinator._probe_need_candidates gives
+    # each of a ready need's narrowed candidates one cheap search()/
+    # dense_search() look into its own territory before the Orchestrator
+    # commits -- confirm ask() actually computes and threads this through
+    # to plan_round() every round: the worker whose file actually contains
+    # the query's own rare term ("FALQON") gets a real probe anchor, an
+    # unrelated sibling's probe comes back empty (found nothing, not
+    # simply absent).
     (tmp_path / "src").mkdir()
     (tmp_path / "src" / "circuit.py").write_text("class FALQON:\n    pass\n", encoding="utf-8")
     (tmp_path / "src" / "other.py").write_text("class Unrelated:\n    pass\n", encoding="utf-8")
@@ -251,7 +251,7 @@ def test_ask_threads_a_retrieval_based_worker_relevance_rank_into_plan_round(
             )
         ],
     )
-    received: list[dict[str, int] | None] = []
+    received: list[dict[str, dict[str, list[Evidence]]] | None] = []
 
     class _RecordingReasoner(_PassthroughLookupsReasoner):
         def observe(self, *, question, worker_id, territory_id, evidence):
@@ -273,9 +273,9 @@ def test_ask_threads_a_retrieval_based_worker_relevance_rank_into_plan_round(
             validation_feedback="",
             repair_guidance="",
             stuck_tried_workers=None,
-            worker_relevance_rank=None,
+            candidate_probes=None,
         ):
-            received.append(worker_relevance_rank)
+            received.append(candidate_probes)
             return RoundPlan()
 
     LocalCoordinator(tmp_path, [target, sibling], reasoner=_RecordingReasoner()).ask(
@@ -283,15 +283,16 @@ def test_ask_threads_a_retrieval_based_worker_relevance_rank_into_plan_round(
     )
 
     # worker-other genuinely has no retrieval signal for this query (its
-    # corpus -- symbol/file/responsibility text -- shares no term with
-    # "FALQON"), so it correctly has no entry at all (see rank_workers'
-    # docstring: no entry means "no signal", not "worst possible").
-    # worker-models, whose symbol table contains the query's own rare
-    # term, must be ranked.
+    # corpus shares no term with "FALQON"), so it never became a
+    # candidate in the first place -- nothing to probe, no entry at all
+    # (same "no signal, not a bad one" distinction rank_workers itself
+    # makes -- see _candidate_workers_for_round).
     assert received
     assert received[0]
-    assert received[0].get("worker-models") == 1
-    assert "worker-other" not in received[0]
+    root_probes = received[0]["root"]
+    assert root_probes["worker-models"]
+    assert root_probes["worker-models"][0].path == "src/circuit.py"
+    assert "worker-other" not in root_probes
 
 
 def _numbered_workers(tmp_path: Path, count: int) -> list[WorkerCard]:
@@ -465,7 +466,7 @@ def test_ask_narrows_plan_round_workers_and_records_candidates_in_the_trace(
             validation_feedback="",
             repair_guidance="",
             stuck_tried_workers=None,
-            worker_relevance_rank=None,
+            candidate_probes=None,
         ):
             captured_worker_counts.append(len(workers))
             return RoundPlan(assignments={need_id: [workers[0].id] for need_id in frontier.ready})
@@ -477,6 +478,7 @@ def test_ask_narrows_plan_round_workers_and_records_candidates_in_the_trace(
     assert execution.need_id == "root"
     assert len(execution.candidate_worker_ids) == _FRESH_NEED_CANDIDATE_LIMIT
     assert execution.candidate_worker_ranks
+    assert len(execution.candidate_probe_anchor_counts) == _FRESH_NEED_CANDIDATE_LIMIT
 
 
 class _PassthroughLookupsReasoner:
@@ -559,7 +561,7 @@ class _PassthroughLookupsReasoner:
         validation_feedback="",
         repair_guidance="",
         stuck_tried_workers=None,
-        worker_relevance_rank=None,
+        candidate_probes=None,
     ):
         # TODO(Phase 7): every scenario reasoner below this class exercises
         # the old routing/escalation-specific ask() mechanics, which the
@@ -1021,7 +1023,7 @@ def test_plan_round_accepts_an_acyclic_plan_without_retrying() -> None:
             validation_feedback="",
             repair_guidance="",
             stuck_tried_workers=None,
-            worker_relevance_rank=None,
+            candidate_probes=None,
         ):
             calls.append(validation_feedback)
             return RoundPlan(assignments={"n1": ["worker-a"]})
@@ -1070,7 +1072,7 @@ def test_plan_round_rejects_a_cyclic_plan_and_retries_with_the_cycle_described()
             validation_feedback="",
             repair_guidance="",
             stuck_tried_workers=None,
-            worker_relevance_rank=None,
+            candidate_probes=None,
         ):
             calls.append(validation_feedback)
             if not validation_feedback:
@@ -1141,7 +1143,7 @@ def test_plan_round_accepts_the_retry_even_if_it_is_still_cyclic() -> None:
             validation_feedback="",
             repair_guidance="",
             stuck_tried_workers=None,
-            worker_relevance_rank=None,
+            candidate_probes=None,
         ):
             calls.append(validation_feedback)
             return RoundPlan(
@@ -1209,7 +1211,7 @@ class _AlwaysStuckAndAlwaysProposesBridgeReasoner(_PassthroughLookupsReasoner):
         validation_feedback="",
         repair_guidance="",
         stuck_tried_workers=None,
-        worker_relevance_rank=None,
+        candidate_probes=None,
     ):
         assignments = {need_id: [workers[0].id] for need_id in frontier.ready}
         special_tactics = {
@@ -1328,7 +1330,7 @@ class _DecomposesRootIntoTwoChildrenReasoner(_PassthroughLookupsReasoner):
         validation_feedback="",
         repair_guidance="",
         stuck_tried_workers=None,
-        worker_relevance_rank=None,
+        candidate_probes=None,
     ):
         self._round += 1
         if self._round == 1:
@@ -1425,7 +1427,7 @@ class _AssignsSameWorkerToTwoIndependentNeedsReasoner(_PassthroughLookupsReasone
         validation_feedback="",
         repair_guidance="",
         stuck_tried_workers=None,
-        worker_relevance_rank=None,
+        candidate_probes=None,
     ):
         worker_id = workers[0].id
         if not self._added_aux_need:
@@ -1552,7 +1554,7 @@ def test_closure_check_survives_a_partial_verdict_creating_a_gap_node(tmp_path: 
             validation_feedback="",
             repair_guidance="",
             stuck_tried_workers=None,
-            worker_relevance_rank=None,
+            candidate_probes=None,
         ):
             return RoundPlan(assignments={need_id: [workers[0].id] for need_id in frontier.ready})
 
@@ -1636,7 +1638,7 @@ def test_ask_with_seeded_initial_state_only_works_the_unresolved_part(tmp_path: 
             validation_feedback="",
             repair_guidance="",
             stuck_tried_workers=None,
-            worker_relevance_rank=None,
+            candidate_probes=None,
         ):
             assigned_need_ids.extend(frontier.ready)
             return RoundPlan(assignments={need_id: [workers[0].id] for need_id in frontier.ready})
@@ -1693,7 +1695,7 @@ def test_ask_forces_the_given_assignment_at_round_0_only(tmp_path: Path) -> None
             validation_feedback="",
             repair_guidance="",
             stuck_tried_workers=None,
-            worker_relevance_rank=None,
+            candidate_probes=None,
         ):
             return RoundPlan(assignments={need_id: ["worker-a"] for need_id in frontier.ready})
 
@@ -1754,7 +1756,7 @@ def test_ask_forces_a_global_search_at_round_0_with_no_stuck_episode_needed(
             validation_feedback="",
             repair_guidance="",
             stuck_tried_workers=None,
-            worker_relevance_rank=None,
+            candidate_probes=None,
         ):
             return RoundPlan()
 
@@ -1823,7 +1825,7 @@ def test_ask_does_not_double_execute_global_fallback_when_orchestrator_also_pick
             validation_feedback="",
             repair_guidance="",
             stuck_tried_workers=None,
-            worker_relevance_rank=None,
+            candidate_probes=None,
         ):
             return RoundPlan(special_tactics={"root": "global_fallback"})
 
@@ -1877,7 +1879,7 @@ class _StubbornlyReassignsTriedWorkerReasoner(_PassthroughLookupsReasoner):
         validation_feedback="",
         repair_guidance="",
         stuck_tried_workers=None,
-        worker_relevance_rank=None,
+        candidate_probes=None,
     ):
         stuck_members = {need_id for group in frontier.stuck_subgraphs for need_id in group}
         targets = set(frontier.ready) | stuck_members
@@ -1949,7 +1951,7 @@ class _AlwaysUnresolvedSingleWorkerReasoner(_PassthroughLookupsReasoner):
         validation_feedback="",
         repair_guidance="",
         stuck_tried_workers=None,
-        worker_relevance_rank=None,
+        candidate_probes=None,
     ):
         assignments = {need_id: [workers[0].id] for need_id in frontier.ready}
         special_tactics = {
@@ -2014,7 +2016,7 @@ class _AlwaysPrefersBrokenWorkerReasoner(_PassthroughLookupsReasoner):
         validation_feedback="",
         repair_guidance="",
         stuck_tried_workers=None,
-        worker_relevance_rank=None,
+        candidate_probes=None,
     ):
         return RoundPlan(assignments={need_id: ["worker-broken"] for need_id in frontier.ready})
 

@@ -92,6 +92,12 @@ _RESOLUTION_RANK = {"unresolved": 0, "partial": 1, "resolved": 2}
 _FRESH_NEED_CANDIDATE_LIMIT = 5
 _ESCALATED_NEED_CANDIDATE_LIMIT = 10
 
+# How many probe anchors (see _probe_need_candidates) a single candidate
+# worker's cheap pre-commit search/dense_search call may surface -- a
+# short look, not the full evidence-gathering AutonomousWorker.run() would
+# do once actually committed to.
+_PROBE_ANCHOR_LIMIT = 3
+
 
 @dataclass
 class StuckEpisode:
@@ -301,6 +307,9 @@ class LocalCoordinator:
                     question, graph, frontier, worker_index, worker_card_embedding_index
                 )
             )
+            candidate_probes = self._probe_need_candidates(
+                question, graph, per_need_candidates, search
+            )
             plan = _plan_round_with_cycle_validation(
                 self.reasoner,
                 question=question,
@@ -315,7 +324,7 @@ class LocalCoordinator:
                 cross_repo_experience=self.cross_repo_experience,
                 repair_guidance=repair_guidance,
                 stuck_tried_workers=stuck_tried_workers,
-                worker_relevance_rank=worker_relevance_rank,
+                candidate_probes=candidate_probes,
             )
             _enforce_no_repeat_stuck_assignment(plan, stuck_tried_workers)
             if round_index == 0 and forced_first_round_assignments:
@@ -399,6 +408,7 @@ class LocalCoordinator:
                     node.need = resolution.refined_need.description
 
                 need_candidates = per_need_candidates.get(need_id, {})
+                need_probes = candidate_probes.get(need_id, {})
                 node_executions.append(
                     NodeExecutionTrace(
                         need_id=need_id,
@@ -411,6 +421,9 @@ class LocalCoordinator:
                         observations=observations,
                         candidate_worker_ids=sorted(need_candidates),
                         candidate_worker_ranks=need_candidates,
+                        candidate_probe_anchor_counts={
+                            worker_id: len(anchors) for worker_id, anchors in need_probes.items()
+                        },
                     )
                 )
 
@@ -990,6 +1003,54 @@ class LocalCoordinator:
         )
         return candidate_workers, worker_relevance_rank, per_need_candidates
 
+    def _probe_need_candidates(
+        self,
+        question: str,
+        graph: NeedGraph,
+        per_need_candidates: dict[str, dict[str, int]],
+        search: LocalSearchTool,
+    ) -> dict[str, dict[str, list[Evidence]]]:
+        """Probe-then-commit: before the Orchestrator picks which candidate
+        to actually assign, give each of a ready need's own narrowed
+        candidates (see _candidate_workers_for_round) one cheap, local look
+        into its own territory -- the same search()/dense_search() calls
+        AutonomousWorker.run() itself opens with, just without the full
+        reasoner-driven tool-use loop that follows them. No LLM call, no
+        extra cost beyond retrieval this repo already runs everywhere else.
+
+        Confirmed live that a rank number or a name/routing_summary that
+        merely sounds relevant is not reliable enough on its own (the
+        circuit-drawing question: worker-src-qibo-gates outranked by
+        worker-src-qibo-models yet still picked, apparently pulled by the
+        literal word "gates"). A worker that actually surfaces a matching
+        anchor in its own files is stronger, harder-to-fake evidence than
+        either signal -- so plan_round's prompt shows what was *found*,
+        not a prior guess about what's likely.
+
+        Scoped identically to the narrowing itself: only ready-frontier
+        needs' own candidates are probed, never the stuck-subgraph full-list
+        union (those needs already have richer recovery machinery and full,
+        unprobed visibility -- unchanged by this method).
+        """
+        probes: dict[str, dict[str, list[Evidence]]] = {}
+        for need_id, candidates in per_need_candidates.items():
+            node = graph.nodes.get(need_id)
+            if node is None:
+                continue
+            query = self._query_from_needs(question, [node.detail])
+            worker_probes: dict[str, list[Evidence]] = {}
+            for worker_id in candidates:
+                worker = next((w for w in self.workers if w.id == worker_id), None)
+                if worker is None:
+                    continue
+                lexical = search.search(query, worker.files, limit=_PROBE_ANCHOR_LIMIT)
+                dense = search.dense_search(query, worker.files, limit=_PROBE_ANCHOR_LIMIT)
+                worker_probes[worker_id] = _dedupe_evidence([*lexical, *dense])[
+                    :_PROBE_ANCHOR_LIMIT
+                ]
+            probes[need_id] = worker_probes
+        return probes
+
     @staticmethod
     def _query_from_needs(question: str, needs: list[UnresolvedNeed]) -> str:
         # Keep the original question as a stable lexical anchor in every round's
@@ -1057,7 +1118,7 @@ def _plan_round_with_cycle_validation(
     cross_repo_experience: list[str],
     repair_guidance: str = "",
     stuck_tried_workers: dict[str, list[str]] | None = None,
-    worker_relevance_rank: dict[str, int] | None = None,
+    candidate_probes: dict[str, dict[str, list[Evidence]]] | None = None,
 ) -> RoundPlan:
     """Calls reasoner.plan_round() and validates the graph its
     graph_updates would produce -- merged onto the existing graph -- has
@@ -1085,7 +1146,7 @@ def _plan_round_with_cycle_validation(
         cross_repo_experience=cross_repo_experience,
         repair_guidance=repair_guidance,
         stuck_tried_workers=stuck_tried_workers,
-        worker_relevance_rank=worker_relevance_rank,
+        candidate_probes=candidate_probes,
     )
     cycles = find_cycles(_merge_graph_updates(graph, plan))
     if not cycles:
@@ -1112,7 +1173,7 @@ def _plan_round_with_cycle_validation(
         validation_feedback=feedback,
         repair_guidance=repair_guidance,
         stuck_tried_workers=stuck_tried_workers,
-        worker_relevance_rank=worker_relevance_rank,
+        candidate_probes=candidate_probes,
     )
 
 

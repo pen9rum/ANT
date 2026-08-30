@@ -294,6 +294,14 @@ class NodeExecutionTrace(BaseModel):
     # not narrowed to any candidate set (see that method's docstring).
     candidate_worker_ids: list[str] = Field(default_factory=list)
     candidate_worker_ranks: dict[str, int] = Field(default_factory=dict)
+    # How many probe anchors (see LocalCoordinator._probe_need_candidates)
+    # each candidate turned up before this need's worker(s) were actually
+    # committed to -- just the counts, not the anchors themselves: the
+    # committed worker's own full AutonomousWorker.run() re-surfaces the
+    # real evidence through the ordinary pipeline, so persisting the
+    # probe's disposable anchors in full would be redundant weight for no
+    # real audit gain beyond "how many did each candidate find".
+    candidate_probe_anchor_counts: dict[str, int] = Field(default_factory=dict)
 
 
 class GraphDelta(BaseModel):
