@@ -2,6 +2,8 @@ from pathlib import Path
 
 from ant.coordinator import LocalCoordinator
 from ant.coordinator.local import (
+    _ESCALATED_NEED_CANDIDATE_LIMIT,
+    _FRESH_NEED_CANDIDATE_LIMIT,
     RecoveryState,
     StuckEpisode,
     _build_temporary_bridge,
@@ -13,6 +15,7 @@ from ant.coordinator.local import (
     _reopen_referenced_evidence,
     _select_evidence,
 )
+from ant.coordinator.worker_retrieval import build_worker_index
 from ant.domain import (
     CodeSymbol,
     Evidence,
@@ -289,6 +292,191 @@ def test_ask_threads_a_retrieval_based_worker_relevance_rank_into_plan_round(
     assert received[0]
     assert received[0].get("worker-models") == 1
     assert "worker-other" not in received[0]
+
+
+def _numbered_workers(tmp_path: Path, count: int) -> list[WorkerCard]:
+    (tmp_path / "src").mkdir(exist_ok=True)
+    workers = []
+    for i in range(count):
+        relative = f"src/m{i:02d}.py"
+        (tmp_path / relative).write_text(f"class Term{i:02d}:\n    pass\n", encoding="utf-8")
+        workers.append(
+            WorkerCard(
+                id=f"worker-{i:02d}",
+                territory_id=f"t{i:02d}",
+                name=f"w{i:02d}",
+                root="src",
+                files=[relative],
+                symbols=[
+                    CodeSymbol(
+                        name=f"Term{i:02d}",
+                        kind="class",
+                        path=relative,
+                        line=1,
+                        qualname=f"Term{i:02d}",
+                    )
+                ],
+            )
+        )
+    return workers
+
+
+def test_candidate_workers_for_round_narrows_a_fresh_ready_need(tmp_path: Path) -> None:
+    # Two-stage routing: retrieval gets structural authority over the
+    # candidate set for a fresh (rounds_without_progress == 0) ready need
+    # -- capped at _FRESH_NEED_CANDIDATE_LIMIT, not the full worker list.
+    # 12 workers, each with one symbol matching exactly one query term
+    # (uniform signal, more than either candidate limit), so truncation is
+    # actually exercised rather than accidentally passing because there
+    # weren't enough ranked candidates to truncate in the first place.
+    workers = _numbered_workers(tmp_path, 12)
+    question = " ".join(f"term{i:02d}" for i in range(12))
+    coordinator = LocalCoordinator(tmp_path, workers)
+    root_node = NeedNode(need_id="root", need=question, detail=UnresolvedNeed(description=question))
+    graph = NeedGraph(nodes={"root": root_node})
+    frontier = FrontierResult(ready=["root"], blocked=[], stuck_subgraphs=[])
+    worker_index = build_worker_index(workers)
+
+    candidates, ranks, per_need = coordinator._candidate_workers_for_round(
+        question, graph, frontier, worker_index, None
+    )
+
+    assert len(candidates) == _FRESH_NEED_CANDIDATE_LIMIT
+    assert len(ranks) == _FRESH_NEED_CANDIDATE_LIMIT
+    assert per_need["root"] == ranks
+
+
+def test_candidate_workers_for_round_widens_after_one_quiet_round(tmp_path: Path) -> None:
+    # Same need, but rounds_without_progress == 1 -- still on the ready
+    # frontier (_STUCK_THRESHOLD == 2), gets the wider escalation limit.
+    workers = _numbered_workers(tmp_path, 12)
+    question = " ".join(f"term{i:02d}" for i in range(12))
+    coordinator = LocalCoordinator(tmp_path, workers)
+    node = NeedNode(
+        need_id="root",
+        need=question,
+        detail=UnresolvedNeed(description=question),
+        rounds_without_progress=1,
+    )
+    graph = NeedGraph(nodes={"root": node})
+    frontier = FrontierResult(ready=["root"], blocked=[], stuck_subgraphs=[])
+    worker_index = build_worker_index(workers)
+
+    candidates, ranks, per_need = coordinator._candidate_workers_for_round(
+        question, graph, frontier, worker_index, None
+    )
+
+    assert len(candidates) == _ESCALATED_NEED_CANDIDATE_LIMIT
+    assert len(ranks) == _ESCALATED_NEED_CANDIDATE_LIMIT
+
+
+def test_candidate_workers_for_round_falls_back_to_full_list_with_no_retrieval_signal(
+    tmp_path: Path,
+) -> None:
+    # A need must never end up with zero candidates just because
+    # retrieval found nothing for its (here: all-stopword) query text --
+    # same "never let a filter zero out a legitimate scope" principle as
+    # tonight's _territory_index corpus-exclusion fix, one level up.
+    workers = _numbered_workers(tmp_path, 12)
+    coordinator = LocalCoordinator(tmp_path, workers)
+    node = NeedNode(
+        need_id="root", need="the and of", detail=UnresolvedNeed(description="the and of")
+    )
+    graph = NeedGraph(nodes={"root": node})
+    frontier = FrontierResult(ready=["root"], blocked=[], stuck_subgraphs=[])
+    worker_index = build_worker_index(workers)
+
+    candidates, ranks, per_need = coordinator._candidate_workers_for_round(
+        "the and of", graph, frontier, worker_index, None
+    )
+
+    assert len(candidates) == len(workers)
+    assert len(ranks) == len(workers)
+    assert len(per_need["root"]) == len(workers)
+
+
+def test_candidate_workers_for_round_shows_everyone_when_a_stuck_subgraph_exists(
+    tmp_path: Path,
+) -> None:
+    # A stuck need's ordinary reassignment still needs full visibility,
+    # unchanged from before this change -- only ready-frontier needs are
+    # narrowed.
+    workers = _numbered_workers(tmp_path, 12)
+    question = " ".join(f"term{i:02d}" for i in range(12))
+    coordinator = LocalCoordinator(tmp_path, workers)
+    fresh_node = NeedNode(
+        need_id="fresh", need=question, detail=UnresolvedNeed(description=question)
+    )
+    stuck_node = NeedNode(
+        need_id="stuck",
+        need="stuck thing",
+        detail=UnresolvedNeed(description="stuck thing"),
+        progress="stuck",
+    )
+    graph = NeedGraph(nodes={"fresh": fresh_node, "stuck": stuck_node})
+    frontier = FrontierResult(ready=["fresh"], blocked=[], stuck_subgraphs=[["stuck"]])
+    worker_index = build_worker_index(workers)
+
+    candidates, ranks, per_need = coordinator._candidate_workers_for_round(
+        question, graph, frontier, worker_index, None
+    )
+
+    assert len(candidates) == len(workers)
+    # The fresh need's own top-K is still recorded for audit purposes even
+    # though the round-level union ends up showing everyone.
+    assert len(per_need["fresh"]) == _FRESH_NEED_CANDIDATE_LIMIT
+
+
+def test_ask_narrows_plan_round_workers_and_records_candidates_in_the_trace(
+    tmp_path: Path,
+) -> None:
+    # End-to-end: ask()'s round loop actually calls
+    # _candidate_workers_for_round and threads its output both into
+    # plan_round's `workers` argument (this is what gives the narrowing
+    # real teeth -- _parse_round_plan already validates every assignment's
+    # worker_id against exactly this list, see
+    # test_plan_round_drops_an_assignment_to_a_worker_id_not_in_the_candidate_list
+    # in test_openai_provider.py) and into NodeExecutionTrace's new audit
+    # fields.
+    workers = _numbered_workers(tmp_path, 12)
+    question = " ".join(f"term{i:02d}" for i in range(12))
+    captured_worker_counts: list[int] = []
+
+    class _Reasoner(_PassthroughLookupsReasoner):
+        def observe(self, *, question, worker_id, territory_id, evidence):
+            return WorkerObservation(worker_id=worker_id, territory_id=territory_id)
+
+        def check_need_resolution(self, *, need, new_evidence, question):
+            return NeedResolution(status="resolved")
+
+        def plan_round(
+            self,
+            *,
+            question,
+            graph,
+            resolution_results,
+            evidence,
+            workers,
+            memory_hints,
+            frontier,
+            observed_needs,
+            incomplete_parents,
+            cross_repo_experience,
+            validation_feedback="",
+            repair_guidance="",
+            stuck_tried_workers=None,
+            worker_relevance_rank=None,
+        ):
+            captured_worker_counts.append(len(workers))
+            return RoundPlan(assignments={need_id: [workers[0].id] for need_id in frontier.ready})
+
+    state = LocalCoordinator(tmp_path, workers, reasoner=_Reasoner()).ask(question, max_rounds=1)
+
+    assert captured_worker_counts == [_FRESH_NEED_CANDIDATE_LIMIT]
+    execution = state.rounds[0].node_executions[0]
+    assert execution.need_id == "root"
+    assert len(execution.candidate_worker_ids) == _FRESH_NEED_CANDIDATE_LIMIT
+    assert execution.candidate_worker_ranks
 
 
 class _PassthroughLookupsReasoner:

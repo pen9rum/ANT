@@ -284,6 +284,16 @@ class NodeExecutionTrace(BaseModel):
     evidence_gain: int = 0
     need_reduction: int = 0  # 0 or 1, direct only -- see docstring above
     observations: list[WorkerObservation] = Field(default_factory=list)
+    # This need's own retrieval-ranked candidate set for the round it was
+    # planned in (see ant.coordinator.worker_retrieval.rank_workers and
+    # LocalCoordinator._candidate_workers_for_round) -- independent of
+    # which worker(s) actually ended up in `worker_ids` above, so a trace
+    # can be audited after the fact: was the right worker even a
+    # candidate this round, and did the Orchestrator pick correctly from
+    # it. Empty for a stuck-subgraph/special-tactic execution, which is
+    # not narrowed to any candidate set (see that method's docstring).
+    candidate_worker_ids: list[str] = Field(default_factory=list)
+    candidate_worker_ranks: dict[str, int] = Field(default_factory=dict)
 
 
 class GraphDelta(BaseModel):

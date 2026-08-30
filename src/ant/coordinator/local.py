@@ -12,7 +12,7 @@ from ant.coordinator.repair import (
     render_repair_guidance,
     resolve_repair_plan,
 )
-from ant.coordinator.worker_retrieval import build_worker_index, rank_workers
+from ant.coordinator.worker_retrieval import WorkerIndex, build_worker_index, rank_workers
 from ant.domain import (
     AbsenceProof,
     Evidence,
@@ -43,7 +43,7 @@ from ant.providers import (
     WorkerReasoner,
 )
 from ant.retrieval import STOP_WORDS, TOKEN_RE, extract_terms, is_stem_match, score_evidence
-from ant.retrieval.dense import WORKER_CARDS_KEY
+from ant.retrieval.dense import WORKER_CARDS_KEY, EmbeddingIndex
 from ant.scoring_config import DEFAULT_SCORING_CONFIG
 from ant.tools import LocalSearchTool
 from ant.tools.path_prior import has_low_value_part, has_source_part
@@ -78,6 +78,19 @@ _MAX_CONSECUTIVE_FAILED_RECOVERIES = 3
 # (_resolution_advanced below) -- partial -> partial is NOT an advance,
 # even though its status is "not unresolved".
 _RESOLUTION_RANK = {"unresolved": 0, "partial": 1, "resolved": 2}
+
+# Two-stage routing candidate-set size for a ready-frontier need, keyed by
+# that need's own rounds_without_progress (0 -> fresh, >=1 -> one quiet
+# round already, still on the ready frontier -- _STUCK_THRESHOLD == 2 is
+# where it actually leaves the ready frontier and enters
+# frontier.stuck_subgraphs instead, where temporary_bridge/global_fallback
+# already operate at full, unscoped width; see
+# _candidate_workers_for_round's own docstring). The one deliberate new
+# hand-tuned pair in this change -- a structural candidate-set cutoff
+# needs a number, same "flag it explicitly" treatment tonight's RRF k=60
+# constant got.
+_FRESH_NEED_CANDIDATE_LIMIT = 5
+_ESCALATED_NEED_CANDIDATE_LIMIT = 10
 
 
 @dataclass
@@ -283,29 +296,10 @@ class LocalCoordinator:
                 for need_id in group
                 if recovery.tried_workers_by_node.get(need_id)
             }
-            # Retrieval-ranked worker candidates for this round's own
-            # frontier -- ready nodes (about to actually be assigned) plus
-            # stuck-subgraph members (candidates for reassignment/recovery
-            # this round). Blocked nodes are deliberately excluded: they
-            # aren't assignable this round, so their query text would only
-            # dilute this round's relevance signal with off-topic terms.
-            relevance_query_needs = [
-                graph.nodes[need_id].detail
-                for need_id in {
-                    *frontier.ready,
-                    *(need_id for group in frontier.stuck_subgraphs for need_id in group),
-                }
-                if need_id in graph.nodes
-            ]
-            worker_relevance_rank = (
-                rank_workers(
-                    self._query_from_needs(question, relevance_query_needs),
-                    self.workers,
-                    worker_index,
-                    worker_card_embedding_index,
+            candidate_workers, worker_relevance_rank, per_need_candidates = (
+                self._candidate_workers_for_round(
+                    question, graph, frontier, worker_index, worker_card_embedding_index
                 )
-                if relevance_query_needs
-                else {}
             )
             plan = _plan_round_with_cycle_validation(
                 self.reasoner,
@@ -313,7 +307,7 @@ class LocalCoordinator:
                 graph=graph,
                 resolution_results=resolution_results,
                 evidence=evidence,
-                workers=self.workers,
+                workers=candidate_workers,
                 memory_hints=memory_hints,
                 frontier=frontier,
                 observed_needs=observed_needs,
@@ -404,6 +398,7 @@ class LocalCoordinator:
                     node.detail = resolution.refined_need
                     node.need = resolution.refined_need.description
 
+                need_candidates = per_need_candidates.get(need_id, {})
                 node_executions.append(
                     NodeExecutionTrace(
                         need_id=need_id,
@@ -414,6 +409,8 @@ class LocalCoordinator:
                         evidence_gain=len(new_evidence),
                         need_reduction=int(resolution.status == "resolved"),
                         observations=observations,
+                        candidate_worker_ids=sorted(need_candidates),
+                        candidate_worker_ranks=need_candidates,
                     )
                 )
 
@@ -896,6 +893,102 @@ class LocalCoordinator:
             round_needs.extend(observation.unresolved_needs)
             seen_worker_ids.add(worker.id)
         return observations, round_needs
+
+    def _candidate_workers_for_round(
+        self,
+        question: str,
+        graph: NeedGraph,
+        frontier: FrontierResult,
+        worker_index: WorkerIndex,
+        embedding_index: EmbeddingIndex | None,
+    ) -> tuple[list[WorkerCard], dict[str, int], dict[str, dict[str, int]]]:
+        """Two-stage routing: retrieval decides *recall* (which workers are
+        even shown to the Orchestrator this round), the Orchestrator keeps
+        *composition* authority (which of those, alone or as a coalition,
+        actually gets assigned) -- a structural narrowing, not a prompt-text
+        suggestion. Confirmed live, on two different models, that an
+        advisory-only rank annotation does not reliably beat a surface
+        lexical association (a "gates" question pulling the Orchestrator to
+        worker-src-qibo-gates over a rank-1-annotated worker-src-qibo-models):
+        the fix is to not show the alternative at all, not to ask more
+        persuasively.
+
+        Only narrows ready-frontier (not-yet-stuck) needs, sized by that
+        need's own rounds_without_progress: fresh (0) gets
+        _FRESH_NEED_CANDIDATE_LIMIT, one quiet round (>=1, still on the
+        ready frontier -- _STUCK_THRESHOLD==2 is where it actually leaves
+        the ready frontier) gets the wider _ESCALATED_NEED_CANDIDATE_LIMIT.
+        Once a need is genuinely stuck, this narrows nothing -- it already
+        gets full worker visibility via the union below, and
+        temporary_bridge/global_fallback (ant.coordinator.local's own
+        special-tactic handling) already operate at full, unscoped width.
+        That existing machinery *is* this ladder's final tier; this method
+        does not duplicate or touch it.
+
+        A need whose own query yields zero ranked candidates (rank_workers
+        found no signal in any channel -- e.g. an all-stopword need text)
+        falls back to the full worker list for that need alone: a need must
+        never end up with zero candidates because retrieval happened to
+        find nothing, the same "never let a filter zero out a legitimate
+        scope" principle behind tonight's _territory_index corpus-exclusion
+        fix, one level up.
+
+        Returns (candidate_workers, worker_relevance_rank, per_need_candidates):
+        - candidate_workers: the union to actually pass to plan_round as
+          its `workers` argument (this is what gives the narrowing real
+          teeth -- _parse_round_plan already validates every assignment's
+          worker_id against exactly this list, dropping anything outside
+          it, unchanged from tonight's advisory-rank version).
+        - worker_relevance_rank: per worker id, the best (lowest/minimum)
+          rank any ready need gave it -- stays meaningful as a prompt
+          annotation when more than one ready need shares a candidate.
+        - per_need_candidates: need_id -> {worker_id: rank}, this need's
+          own top-K before the round-level union -- purely for
+          NodeExecutionTrace's audit fields, not used for planning itself.
+        """
+        per_need_candidates: dict[str, dict[str, int]] = {}
+        candidate_ids: set[str] = set()
+        worker_relevance_rank: dict[str, int] = {}
+
+        for need_id in frontier.ready:
+            node = graph.nodes.get(need_id)
+            if node is None:
+                continue
+            limit = (
+                _FRESH_NEED_CANDIDATE_LIMIT
+                if node.rounds_without_progress == 0
+                else _ESCALATED_NEED_CANDIDATE_LIMIT
+            )
+            ranks = rank_workers(
+                self._query_from_needs(question, [node.detail]),
+                self.workers,
+                worker_index,
+                embedding_index,
+            )
+            top = dict(sorted(ranks.items(), key=lambda item: item[1])[:limit])
+            if not top:
+                # No retrieval signal for this need at all -- never leave
+                # it with zero candidates.
+                top = {worker.id: index for index, worker in enumerate(self.workers, start=1)}
+            per_need_candidates[need_id] = top
+            candidate_ids.update(top)
+            for worker_id, rank in top.items():
+                best_so_far = worker_relevance_rank.get(worker_id)
+                if best_so_far is None or rank < best_so_far:
+                    worker_relevance_rank[worker_id] = rank
+
+        if frontier.stuck_subgraphs:
+            # A stuck need's ordinary (non-special-tactic) reassignment
+            # still needs full visibility, exactly like before this
+            # change -- only ready-frontier needs are narrowed above.
+            candidate_ids.update(worker.id for worker in self.workers)
+
+        candidate_workers = (
+            [worker for worker in self.workers if worker.id in candidate_ids]
+            if candidate_ids
+            else list(self.workers)
+        )
+        return candidate_workers, worker_relevance_rank, per_need_candidates
 
     @staticmethod
     def _query_from_needs(question: str, needs: list[UnresolvedNeed]) -> str:
