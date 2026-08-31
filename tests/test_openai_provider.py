@@ -8,6 +8,8 @@ from ant.domain import (
     NeedGraph,
     NeedNode,
     ProposedNode,
+    StuckNodeSummary,
+    TaskTrajectoryPackage,
     TokenUsage,
     UnresolvedNeed,
     WorkerCard,
@@ -519,6 +521,242 @@ def test_consolidate_graph_drops_a_decision_for_an_unknown_proposal_id() -> None
     )
 
     assert plan.decisions == []
+
+
+def test_consolidate_graph_adds_the_alignment_instruction_only_when_enforced() -> None:
+    provider = OpenAIProvider(model="gpt-4.1")
+    captured: dict[str, str] = {}
+
+    def fake_responses_json(prompt: str, max_output_tokens: int = 2048):
+        captured["prompt"] = prompt
+        return type("Result", (), {"text": "{}"})()
+
+    provider.responses_json = fake_responses_json  # type: ignore[method-assign]
+    proposals = [ProposedNode(proposal_id="p1", need="a", detail=UnresolvedNeed(description="a"))]
+
+    provider.consolidate_graph(
+        question="original question",
+        active_nodes={},
+        proposals=proposals,
+        candidate_hints={},
+        enforce_alignment=False,
+    )
+    assert "Grounded Fast Repair" not in captured["prompt"]
+
+    provider.consolidate_graph(
+        question="original question",
+        active_nodes={},
+        proposals=proposals,
+        candidate_hints={},
+        enforce_alignment=True,
+    )
+    assert "Grounded Fast Repair" in captured["prompt"]
+    assert "DIRECTLY help answer the original question" in captured["prompt"]
+
+
+def test_assess_need_alignment_returns_empty_plan_with_no_stuck_nodes() -> None:
+    provider = OpenAIProvider(model="gpt-4.1")
+    provider.responses_json = lambda prompt, max_output_tokens=1536: type(  # type: ignore[method-assign]
+        "Result", (), {"text": "should never be called"}
+    )()
+
+    plan = provider.assess_need_alignment(
+        question="q", package=TaskTrajectoryPackage(question="q")
+    )
+
+    assert plan.verdicts == []
+
+
+def test_assess_need_alignment_shows_epistemic_state_as_read_only_context() -> None:
+    provider = OpenAIProvider(model="gpt-4.1")
+    captured: dict[str, str] = {}
+
+    def fake_responses_json(prompt: str, max_output_tokens: int = 1536):
+        captured["prompt"] = prompt
+        return type("Result", (), {"text": "{}"})()
+
+    provider.responses_json = fake_responses_json  # type: ignore[method-assign]
+    package = TaskTrajectoryPackage(
+        question="original question",
+        stuck_nodes=[
+            StuckNodeSummary(
+                need_id="n1",
+                need="role resolution inheritance",
+                resolution="unresolved",
+                epistemic_state="absence_supported",
+            )
+        ],
+    )
+
+    provider.assess_need_alignment(question="original question", package=package)
+
+    prompt = captured["prompt"]
+    assert "n1" in prompt
+    assert "role resolution inheritance" in prompt
+    assert "absence_supported" in prompt
+    assert "read-only" in prompt
+    # The prompt must never ask the model to SET epistemic_state -- only
+    # verdict/reframed_need/rationale are requested outputs.
+    assert "verdict (one of keep/reframe/drop)" in prompt
+
+
+def test_assess_need_alignment_parses_keep_reframe_and_drop_verdicts() -> None:
+    provider = OpenAIProvider(model="gpt-4.1")
+    provider.responses_json = lambda prompt, max_output_tokens=1536: type(  # type: ignore[method-assign]
+        "Result",
+        (),
+        {
+            "text": (
+                '{"verdicts": ['
+                '{"need_id": "n1", "verdict": "keep"}, '
+                '{"need_id": "n2", "verdict": "reframe", "reframed_need": "TLS/auth inheritance"}, '
+                '{"need_id": "n3", "verdict": "drop"}'
+                "]}"
+            )
+        },
+    )()
+    package = TaskTrajectoryPackage(
+        question="q",
+        stuck_nodes=[
+            StuckNodeSummary(need_id="n1", need="a", resolution="unresolved"),
+            StuckNodeSummary(need_id="n2", need="b", resolution="unresolved"),
+            StuckNodeSummary(need_id="n3", need="c", resolution="unresolved"),
+        ],
+    )
+
+    plan = provider.assess_need_alignment(question="q", package=package)
+
+    verdicts = {v.need_id: v for v in plan.verdicts}
+    assert verdicts["n1"].verdict == "keep"
+    assert verdicts["n2"].verdict == "reframe"
+    assert verdicts["n2"].reframed_need == "TLS/auth inheritance"
+    assert verdicts["n3"].verdict == "drop"
+
+
+def test_assess_need_alignment_drops_a_reframe_with_no_reframed_need_text() -> None:
+    provider = OpenAIProvider(model="gpt-4.1")
+    provider.responses_json = lambda prompt, max_output_tokens=1536: type(  # type: ignore[method-assign]
+        "Result",
+        (),
+        {"text": '{"verdicts": [{"need_id": "n1", "verdict": "reframe"}]}'},
+    )()
+    package = TaskTrajectoryPackage(
+        question="q",
+        stuck_nodes=[StuckNodeSummary(need_id="n1", need="a", resolution="unresolved")],
+    )
+
+    plan = provider.assess_need_alignment(question="q", package=package)
+
+    assert plan.verdicts == []
+
+
+def test_assess_need_alignment_drops_a_verdict_for_an_unknown_need_id() -> None:
+    provider = OpenAIProvider(model="gpt-4.1")
+    provider.responses_json = lambda prompt, max_output_tokens=1536: type(  # type: ignore[method-assign]
+        "Result",
+        (),
+        {"text": '{"verdicts": [{"need_id": "not-a-real-need", "verdict": "drop"}]}'},
+    )()
+    package = TaskTrajectoryPackage(
+        question="q",
+        stuck_nodes=[StuckNodeSummary(need_id="n1", need="a", resolution="unresolved")],
+    )
+
+    plan = provider.assess_need_alignment(question="q", package=package)
+
+    assert plan.verdicts == []
+
+
+def test_verify_evidence_upgrade_parses_an_approved_verdict() -> None:
+    provider = OpenAIProvider(model="gpt-4.1")
+    provider.responses_json = lambda prompt, max_output_tokens=512: type(  # type: ignore[method-assign]
+        "Result",
+        (),
+        {
+            "text": (
+                '{"approved": true, "supported_claim": "X directly implements Y", '
+                '"evidence_ids": ["0", "1"]}'
+            )
+        },
+    )()
+
+    verdict = provider.verify_evidence_upgrade(
+        need=UnresolvedNeed(description="need"),
+        epistemic_state="absence_supported",
+        new_evidence=[
+            Evidence(path="a.py", line_start=1, line_end=2, quote="x", reason="r")
+        ],
+        question="q",
+    )
+
+    assert verdict.approved is True
+    assert verdict.supported_claim == "X directly implements Y"
+    assert verdict.evidence_ids == ["0", "1"]
+
+
+def test_verify_evidence_upgrade_rejects_an_unapproved_or_malformed_response() -> None:
+    provider = OpenAIProvider(model="gpt-4.1")
+    evidence = [Evidence(path="a.py", line_start=1, line_end=2, quote="x", reason="r")]
+
+    provider.responses_json = lambda prompt, max_output_tokens=512: type(  # type: ignore[method-assign]
+        "Result", (), {"text": '{"approved": false}'}
+    )()
+    verdict = provider.verify_evidence_upgrade(
+        need=UnresolvedNeed(description="need"),
+        epistemic_state="open",
+        new_evidence=evidence,
+        question="q",
+    )
+    assert verdict.approved is False
+    assert verdict.supported_claim == ""
+    assert verdict.evidence_ids == []
+
+    # A non-bool "approved" value must never look like an approval either.
+    provider.responses_json = lambda prompt, max_output_tokens=512: type(  # type: ignore[method-assign]
+        "Result", (), {"text": '{"approved": "yes"}'}
+    )()
+    verdict = provider.verify_evidence_upgrade(
+        need=UnresolvedNeed(description="need"),
+        epistemic_state="open",
+        new_evidence=evidence,
+        question="q",
+    )
+    assert verdict.approved is False
+
+
+def test_verify_evidence_upgrade_rejects_approved_true_with_no_supported_claim() -> None:
+    provider = OpenAIProvider(model="gpt-4.1")
+    provider.responses_json = lambda prompt, max_output_tokens=512: type(  # type: ignore[method-assign]
+        "Result", (), {"text": '{"approved": true}'}
+    )()
+
+    verdict = provider.verify_evidence_upgrade(
+        need=UnresolvedNeed(description="need"),
+        epistemic_state="open",
+        new_evidence=[Evidence(path="a.py", line_start=1, line_end=2, quote="x", reason="r")],
+        question="q",
+    )
+
+    # "approved" with nothing concrete to point at is not a real grounded
+    # upgrade -- degrades to unapproved rather than producing a
+    # claim-less GroundedUpdate downstream.
+    assert verdict.approved is False
+
+
+def test_verify_evidence_upgrade_returns_unapproved_with_no_new_evidence() -> None:
+    provider = OpenAIProvider(model="gpt-4.1")
+    provider.responses_json = lambda prompt, max_output_tokens=512: type(  # type: ignore[method-assign]
+        "Result", (), {"text": "should never be called"}
+    )()
+
+    verdict = provider.verify_evidence_upgrade(
+        need=UnresolvedNeed(description="need"),
+        epistemic_state="open",
+        new_evidence=[],
+        question="q",
+    )
+
+    assert verdict.approved is False
 
 
 def test_completeness_notes_only_includes_exhaustive_proofs() -> None:

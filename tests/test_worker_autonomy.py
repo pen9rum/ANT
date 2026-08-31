@@ -501,6 +501,9 @@ class _DenylistReasoner:
     def check_need_resolution(self, *, need, new_evidence, question):
         raise AssertionError("this test does not exercise check_need_resolution()")
 
+    def verify_evidence_upgrade(self, *, need, epistemic_state, new_evidence, question):
+        raise AssertionError("this test does not exercise verify_evidence_upgrade()")
+
     def decide_local_action(self, *, need, evidence, worker_progress, worker):
         raise AssertionError("this test does not exercise decide_local_action()")
 
@@ -523,7 +526,9 @@ class _DenylistReasoner:
     ):
         raise AssertionError("this test does not exercise plan_round()")
 
-    def consolidate_graph(self, *, question, active_nodes, proposals, candidate_hints):
+    def consolidate_graph(
+        self, *, question, active_nodes, proposals, candidate_hints, enforce_alignment=False
+    ):
         raise AssertionError("this test does not exercise consolidate_graph()")
 
     def summarize_task_experience(self, *, question, rounds, unresolved_needs, evidence_count):

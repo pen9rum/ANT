@@ -5,8 +5,11 @@ from typing import Protocol, runtime_checkable
 from ant.domain import (
     AbsenceProof,
     Evidence,
+    EvidenceUpgradeVerdict,
     FrontierResult,
     GraphConsolidationPlan,
+    GroundedUpdate,
+    NeedAlignmentPlan,
     NeedGraph,
     NeedNode,
     NeedResolution,
@@ -46,6 +49,51 @@ class WorkerReasoner(Protocol):
         `new_evidence` is this round's own additions, not the full
         accumulated pool, so the verdict reflects what just happened, not
         what an earlier round already established.
+        """
+        ...
+
+    def verify_evidence_upgrade(
+        self,
+        *,
+        need: UnresolvedNeed,
+        epistemic_state: str,
+        new_evidence: list[Evidence],
+        question: str,
+    ) -> EvidenceUpgradeVerdict:
+        """Grounded Fast Repair's Evidence Upgrade Gate: called only during
+        a fast-repair `ask()` call (`enforce_alignment=True`), for every
+        leaf need whose `check_need_resolution` verdict this round is
+        "resolved"/"partial" -- gen0-carried-over or born during this same
+        retry alike, no distinction (see LocalCoordinator.
+        _apply_evidence_upgrade_gate). `epistemic_state` is
+        `RecoveryState.epistemic_states.get(need_id, "open")` -- the
+        need's grounded standing immediately before this round (an "open"
+        need born this retry with no prior proof either way, a gen0 need
+        that survived alignment as-is, or "open" again if it was just
+        reframed -- see NeedAlignmentVerdict).
+
+        The one question this answers: does `new_evidence` DIRECTLY
+        establish the entity/relation the need actually asks about -- not
+        an adjacent subsystem, a similarly-named symbol, or a different
+        mechanism that merely shares vocabulary. Confirmed live this is
+        the dominant fast-repair failure mode: a correct, honest gen0
+        hedge ("insufficient evidence" / "not in this repo") gets
+        replaced by a confident wrong claim once the retry finds
+        something adjacent-but-irrelevant and `check_need_resolution`
+        (which has no concept of "adjacent, therefore reject") accepts
+        it.
+
+        A False `approved` (including on a malformed/unparseable
+        response -- never let a parse failure look like a confident
+        upgrade) makes the coordinator revert this round's resolution
+        back to unresolved, so the need keeps whatever epistemic
+        commitment it already had rather than accepting an unsupported
+        upgrade. A True `approved` must include `supported_claim` and
+        `evidence_ids` (string indices into the evidence pool, same
+        convention as UnresolvedNeed.evidence_ids) -- these become a
+        GroundedUpdate, the only channel through which
+        AnswerSynthesizer.synthesize's patch mode may strengthen
+        `prior_answer`'s wording for this need.
         """
         ...
 
@@ -221,6 +269,7 @@ class WorkerReasoner(Protocol):
         active_nodes: dict[str, NeedNode],
         proposals: list[ProposedNode],
         candidate_hints: dict[str, list[str]],
+        enforce_alignment: bool = False,
     ) -> GraphConsolidationPlan:
         """The Graph Organizer: the one place a *new* need node actually
         comes into existence. Runs once per round, after this round's
@@ -253,6 +302,21 @@ class WorkerReasoner(Protocol):
         coordinator, the same safe default MockLLMProvider always
         returns). See GraphConsolidationDecision's own docstring for what
         each action does structurally.
+
+        `enforce_alignment` is True only inside a Grounded Fast Repair
+        retry (LocalCoordinator.ask(enforce_alignment=True), set by
+        retry_from_trajectory) -- when True, additionally judge, for each
+        proposal, whether resolving it would directly help answer
+        `question` (not merely "is this a reasonable code question on its
+        own"); if not, decide "drop" regardless of novelty/dedup
+        considerations, exactly the same test NeedAlignmentVerdict applies
+        to a fast retry's carried-over stuck nodes before round 0 -- this
+        is what keeps a node born mid-retry from drifting onto the wrong
+        sub-question the same way an original one could. False (the
+        default, used by every ordinary gen0/slow-gen1 round) leaves
+        `consolidate_graph`'s behavior exactly as it was before this
+        parameter existed -- dedup/decomposition judgment only, no
+        alignment-to-original-question check.
         """
         ...
 
@@ -363,6 +427,53 @@ class FastEvolutionReasoner(Protocol):
         LocalCoordinator.retry_from_trajectory for how each is applied).
         An empty RepairPlan (no actions) is a valid "just retry with
         carried-forward state, no extra guidance" verdict, not an error.
+
+        Called with a `package` that has already been through
+        assess_need_alignment/apply_alignment_verdicts -- any stuck node
+        this call sees has already been kept as-is or reframed onto the
+        original question; repair targeting never has to work around a
+        drifted framing itself.
+        """
+        ...
+
+    def assess_need_alignment(
+        self, *, question: str, package: TaskTrajectoryPackage
+    ) -> NeedAlignmentPlan:
+        """Grounded Fast Repair's Need Alignment Gate -- the first thing
+        that runs in retry_from_trajectory, before propose_repair. For
+        every `package.stuck_nodes` entry, judges only one thing: **would
+        fully answering this need, as currently framed, directly help
+        answer `question`** -- not "is this a reasonable code question on
+        its own". Confirmed live this is a real, distinct failure mode
+        from evidence adequacy: the two most catastrophic fast-repair
+        score drops observed this session both had the Orchestrator
+        decompose a need onto a plausible-sounding but wrong sub-question
+        (TLS/auth inheritance -> role-resolution inheritance; package
+        release version -> build-environment env_version) -- evidence was
+        genuinely adequate *for the wrong sub-question*, and the actually-
+        correct evidence was sitting in the same pool the whole time,
+        simply never the target of that node's own resolution check.
+
+        Each `StuckNodeSummary.epistemic_state` is shown as **grounded,
+        read-only context** (computed deterministically from real
+        AbsenceProof records by assemble_trajectory_package, never by a
+        reasoner) -- this call may use it to inform a verdict but must
+        never itself decide or report an epistemic_state; NeedAlignment
+        Verdict has no such field.
+
+        Returns one verdict per stuck need: "keep" (framing is fine, no
+        change), "reframe" (framing has drifted -- `reframed_need`
+        replaces it, and the need is treated as a fresh investigation:
+        epistemic state and everything accumulated under the old framing
+        is reset, never carried forward under the new one -- see
+        apply_alignment_verdicts), or "drop" (resolving this, even
+        perfectly, would not help answer `question` -- discard it; this
+        is NOT the same as "tried and failed", so it must never be
+        recorded as abandoned). A need_id with no verdict at all defaults
+        to keep. This same test (not this same call) is applied again,
+        continuously, to every *new* node a fast-repair retry's own
+        rounds propose -- see WorkerReasoner.consolidate_graph's
+        `enforce_alignment` parameter.
         """
         ...
 
@@ -398,7 +509,24 @@ class AnswerSynthesizer(Protocol):
         question: str,
         evidence: list[Evidence],
         absence_proofs: list[AbsenceProof] | None = None,
-    ) -> str: ...
+        prior_answer: str = "",
+        grounded_updates: list[GroundedUpdate] | None = None,
+    ) -> str:
+        """`prior_answer` == "" (every gen0/slow-gen1 call, and every
+        fast-repair call before this parameter existed) means full,
+        independent synthesis from `evidence` -- byte-identical behavior
+        to before this parameter existed. `prior_answer` != "" (only ever
+        set by a fast-repair retry, carrying prior_state.answer) switches
+        to Grounded Fast Repair's patch mode: revise `prior_answer`
+        freely in wording, but only convert an uncertain/absent claim to
+        a confident positive one where a `grounded_updates` entry names
+        that specific claim (see GroundedUpdate, produced only by an
+        approved WorkerReasoner.verify_evidence_upgrade verdict) --
+        everywhere `grounded_updates` says nothing, the original epistemic
+        commitment (still uncertain, still absent) must survive even
+        while its sentence is rephrased.
+        """
+        ...
 
     def synthesize_coalition(
         self,
@@ -407,7 +535,12 @@ class AnswerSynthesizer(Protocol):
         worker_ids: list[str],
         evidence: list[Evidence],
         absence_proofs: list[AbsenceProof] | None = None,
-    ) -> str: ...
+        prior_answer: str = "",
+        grounded_updates: list[GroundedUpdate] | None = None,
+    ) -> str:
+        """Same `prior_answer`/`grounded_updates` patch-mode contract as
+        `synthesize` -- see its docstring."""
+        ...
 
 
 @runtime_checkable

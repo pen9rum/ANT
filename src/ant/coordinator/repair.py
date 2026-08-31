@@ -14,14 +14,23 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from ant.domain import (
+    AbsenceProof,
     Evidence,
     EvidenceState,
+    NeedAlignmentPlan,
     NeedGraph,
     NeedNode,
     RepairPlan,
     StuckNodeSummary,
     TaskTrajectoryPackage,
 )
+
+# The canonical root need_id, hardcoded at LocalCoordinator.ask()'s initial
+# graph construction (NeedGraph(nodes={"root": ...})) -- never anything
+# else. apply_alignment_verdicts uses this to defensively refuse a "drop"
+# verdict on the root: dropping it would abandon the whole retry, never a
+# sound verdict regardless of what a reasoner said.
+ROOT_NEED_ID = "root"
 
 
 def assemble_trajectory_package(state: EvidenceState) -> TaskTrajectoryPackage:
@@ -35,6 +44,15 @@ def assemble_trajectory_package(state: EvidenceState) -> TaskTrajectoryPackage:
         member: episode.episode_id
         for episode in state.final_recovery_state.stuck_episodes
         for member in episode.members
+    }
+    # need_id -> its own AbsenceProof, when one exists that is genuinely
+    # about that one need (proof.need_id != "") -- a proof that couldn't be
+    # tied to one need (e.g. _verify_inheritance_completeness's
+    # question-level scan) simply matches nothing here and every need it
+    # might be relevant to falls through to "open" below, rather than
+    # guessing an owner.
+    absence_proof_by_need: dict[str, AbsenceProof] = {
+        proof.need_id: proof for proof in state.absence_proofs if proof.need_id
     }
     stuck_nodes: list[StuckNodeSummary] = []
     for need_id, node in state.final_need_graph.items():
@@ -79,6 +97,7 @@ def assemble_trajectory_package(state: EvidenceState) -> TaskTrajectoryPackage:
                 evidence_claims=evidence_claims,
                 is_abandoned=need_id in state.final_recovery_state.abandoned_node_ids,
                 stuck_episode_id=stuck_episode_by_member.get(need_id, ""),
+                epistemic_state=_epistemic_state_for(absence_proof_by_need.get(need_id)),
             )
         )
     return TaskTrajectoryPackage(
@@ -87,6 +106,22 @@ def assemble_trajectory_package(state: EvidenceState) -> TaskTrajectoryPackage:
         stuck_nodes=stuck_nodes,
         graph_decomposition_log=[round_.graph_delta for round_ in state.rounds],
     )
+
+
+def _epistemic_state_for(proof: AbsenceProof | None) -> str:
+    """Deterministic, no reasoner call involved -- Grounded Fast Repair's
+    whole point is that epistemic_state is grounded fact, never an LLM
+    guess (see NeedAlignmentVerdict's docstring). No matching proof at
+    all -> "open" (may exist, nobody has determined otherwise). A matching
+    proof that is exhaustive and concludes "not_found" -> "absence_
+    supported". Any other matching proof (non-exhaustive, or exhaustive
+    but inconclusive) -> "insufficient_evidence".
+    """
+    if proof is None:
+        return "open"
+    if proof.exhaustive and proof.conclusion == "not_found":
+        return "absence_supported"
+    return "insufficient_evidence"
 
 
 @dataclass
@@ -147,6 +182,99 @@ class RepairSeed:
     # shot", so retry_from_trajectory un-abandons all of these, not just
     # the ones with a structural redecompose action.
     targeted_need_ids: set[str] = field(default_factory=set)
+
+
+def apply_alignment_verdicts(
+    graph: NeedGraph,
+    plan: NeedAlignmentPlan,
+    prior_epistemic_states: dict[str, str],
+) -> tuple[NeedGraph, dict[str, str], set[str], set[str]]:
+    """Grounded Fast Repair's Need Alignment Gate, applied: turns a
+    NeedAlignmentPlan (FastEvolutionReasoner.assess_need_alignment's
+    verdicts) into an aligned copy of `graph` plus the bookkeeping the
+    caller (LocalCoordinator.retry_from_trajectory) needs to seed
+    RecoveryState correctly. `prior_epistemic_states` is
+    `{s.need_id: s.epistemic_state for s in package.stuck_nodes}` -- the
+    grounded values assemble_trajectory_package already computed; this
+    function only ever carries them forward or resets them, never
+    invents one. Returns (aligned_graph, epistemic_states,
+    discarded_misaligned_ids, reframed_need_ids):
+
+    - "keep" (or no verdict at all, same default): node untouched;
+      epistemic_state carries over from `prior_epistemic_states` (or
+      "open" if the need_id has no entry there -- e.g. a resolved gen0
+      node, which assemble_trajectory_package never summarizes, being
+      kept as a plain pass-through graph node).
+    - "reframe": treated as a fresh investigation, not a text edit on
+      stale state (correction 2) -- `node.need` and
+      `node.detail.description`/`missing` become `reframed_need`, and
+      `children`/`depends_on` are cleared (any decomposition done under
+      the old framing answers the wrong question, so a reframed node
+      starts as a fresh leaf). epistemic_state unconditionally resets to
+      "open" (there is, by construction, never an existing proof for
+      wording nothing has searched under yet). Its id is returned in
+      `reframed_need_ids` so the caller also clears its
+      `tried_workers_by_node` entry and any stuck-episode membership --
+      "worker X already tried and failed" and "this need is part of
+      stuck episode Y" are both facts about the *old* framing.
+    - "drop": node is left in the graph (structure/dependents intact,
+      matching how ordinary consolidation "drop" already behaves) but its
+      id is returned in `discarded_misaligned_ids`, NEVER
+      `abandoned_node_ids` -- "this need was never a legitimate question"
+      is a different fact from "we tried and failed", and the latter
+      already feeds recovery-streak/evolution-memory bookkeeping that a
+      misaligned-but-never-attempted need must not pollute. The caller is
+      responsible for excluding `discarded_misaligned_ids` from the
+      frontier (unioned with `abandoned_node_ids` there) without treating
+      it as abandoned for any other purpose. Its epistemic_state is
+      omitted -- meaningless once excluded from the frontier either way.
+    - A "drop" verdict naming the graph's root need (see ROOT_NEED_ID) is
+      coerced to keep -- dropping the root would abandon the whole retry,
+      never a sound verdict regardless of what a reasoner said.
+    - A verdict naming an unknown need_id is ignored.
+    """
+    nodes = dict(graph.nodes)
+    epistemic_states: dict[str, str] = {}
+    discarded_misaligned_ids: set[str] = set()
+    reframed_need_ids: set[str] = set()
+    verdict_by_need_id = {v.need_id: v for v in plan.verdicts}
+
+    for need_id, node in graph.nodes.items():
+        verdict = verdict_by_need_id.get(need_id)
+        action = verdict.verdict if verdict is not None else "keep"
+        if action == "drop" and need_id == ROOT_NEED_ID:
+            action = "keep"
+
+        if action == "keep":
+            epistemic_states[need_id] = prior_epistemic_states.get(need_id, "open")
+            continue
+        if action == "drop":
+            discarded_misaligned_ids.add(need_id)
+            continue
+        # action == "reframe"
+        assert verdict is not None
+        nodes[need_id] = node.model_copy(
+            update={
+                "need": verdict.reframed_need,
+                "detail": node.detail.model_copy(
+                    update={
+                        "description": verdict.reframed_need,
+                        "missing": verdict.reframed_need,
+                    }
+                ),
+                "children": [],
+                "depends_on": [],
+            }
+        )
+        epistemic_states[need_id] = "open"
+        reframed_need_ids.add(need_id)
+
+    return (
+        graph.model_copy(update={"nodes": nodes}),
+        epistemic_states,
+        discarded_misaligned_ids,
+        reframed_need_ids,
+    )
 
 
 def resolve_repair_plan(plan: RepairPlan) -> RepairSeed:

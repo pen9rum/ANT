@@ -15,9 +15,13 @@ from ant.domain import (
     AbsenceProof,
     CodeSymbol,
     Evidence,
+    EvidenceUpgradeVerdict,
     FrontierResult,
     GraphConsolidationDecision,
     GraphConsolidationPlan,
+    GroundedUpdate,
+    NeedAlignmentPlan,
+    NeedAlignmentVerdict,
     NeedGraph,
     NeedNode,
     NeedResolution,
@@ -662,6 +666,73 @@ class OpenAIProvider:
         )
         return NeedResolution(status="partial", refined_need=refined_need)
 
+    def verify_evidence_upgrade(
+        self,
+        *,
+        need: UnresolvedNeed,
+        epistemic_state: str,
+        new_evidence: list[Evidence],
+        question: str,
+    ) -> EvidenceUpgradeVerdict:
+        # Grounded Fast Repair's Evidence Upgrade Gate -- a deliberately
+        # stricter, separate judgment from check_need_resolution's
+        # resolved/partial/unresolved above, which has no concept of
+        # "adjacent, therefore reject". Confirmed live: an already-honest
+        # gen0 hedge ("insufficient evidence" / "not in this repo") gets
+        # overwritten by a confident wrong claim once a fast-repair retry
+        # finds evidence that's topically adjacent but not actually
+        # responsive and check_need_resolution accepts it anyway. This
+        # call is the extra checkpoint specifically for that.
+        if not new_evidence:
+            return EvidenceUpgradeVerdict(approved=False)
+        evidence_text = "\n".join(
+            f"[{index}] {item.path}:{item.line_start}-{item.line_end}\n{item.quote[:900]}"
+            for index, item in enumerate(new_evidence[:8])
+        )
+        prompt = (
+            "This need was previously judged with epistemic_state="
+            f"{epistemic_state!r} -- "
+            "\"open\" means it was genuinely unknown whether an answer even "
+            "exists in this repo; \"absence_supported\" means a prior "
+            "exhaustive search's evidence supports that it does NOT exist; "
+            "\"insufficient_evidence\" means a prior search was inconclusive. "
+            "A later round now claims this need is resolved/partial based on "
+            "the evidence below. Judge strictly: does this evidence DIRECTLY "
+            "establish the specific entity/relation the need actually asks "
+            "about? Answer 'approved' only if it names/shows that exact "
+            "thing -- an adjacent subsystem, a similarly-named symbol, or a "
+            "different mechanism that merely shares vocabulary with the "
+            "question must be rejected (approved=false), even if it looks "
+            "topically related.\n"
+            f"Original question: {question}\n"
+            f"Need: {need.missing or need.description} "
+            f"(need_type={need.need_type}, scope={need.scope})\n"
+            f"Evidence:\n{evidence_text}\n"
+            "Return JSON with key approved (bool) and, only when approved is "
+            "true, keys supported_claim (a one-sentence statement of exactly "
+            "what this evidence establishes) and evidence_ids (list of the "
+            "bracketed indices above, as strings, that directly support it)."
+        )
+        result = self.responses_json(prompt, max_output_tokens=512)
+        data = _loads_json_object(result.text)
+        if data.get("approved") is not True:
+            # Includes a malformed/unparseable response -- a parse failure
+            # must never look like a confident upgrade.
+            return EvidenceUpgradeVerdict(approved=False)
+        supported_claim = data.get("supported_claim")
+        raw_evidence_ids = data.get("evidence_ids")
+        evidence_ids = (
+            [str(item) for item in raw_evidence_ids] if isinstance(raw_evidence_ids, list) else []
+        )
+        if not isinstance(supported_claim, str) or not supported_claim.strip():
+            # "approved" with nothing concrete to point at is not a real
+            # grounded upgrade -- degrade to unapproved rather than
+            # producing a claim-less GroundedUpdate.
+            return EvidenceUpgradeVerdict(approved=False)
+        return EvidenceUpgradeVerdict(
+            approved=True, supported_claim=supported_claim, evidence_ids=evidence_ids
+        )
+
     def plan_round(
         self,
         *,
@@ -863,6 +934,7 @@ class OpenAIProvider:
         active_nodes: dict[str, NeedNode],
         proposals: list[ProposedNode],
         candidate_hints: dict[str, list[str]],
+        enforce_alignment: bool = False,
     ) -> GraphConsolidationPlan:
         # The Graph Organizer: the one place a new need node actually comes
         # into existence (see WorkerReasoner.consolidate_graph's own
@@ -919,7 +991,17 @@ class OpenAIProvider:
             "nearby nodes listed can still be 'create' if it is genuinely "
             "distinct, and one with no nearby nodes listed can still be "
             "'merge'/'subsume' if you judge it to be the same gap.\n"
-            f"Question: {question}\n"
+            + (
+                "This is a Grounded Fast Repair retry: additionally, for "
+                "each proposal, first ask whether resolving it would "
+                "DIRECTLY help answer the original question below -- not "
+                "merely whether it is a reasonable code question on its "
+                "own. If it would not, choose 'drop' regardless of "
+                "novelty or how distinct it is from existing nodes.\n"
+                if enforce_alignment
+                else ""
+            )
+            + f"Question: {question}\n"
             f"Active (unresolved, not abandoned) nodes:\n"
             f"{chr(10).join(active_lines) or '(none)'}\n"
             f"Proposals:\n{chr(10).join(proposal_lines)}\n"
@@ -1032,6 +1114,58 @@ class OpenAIProvider:
         result = self.responses_json(prompt, max_output_tokens=1536)
         data = _loads_json_object(result.text)
         return _parse_repair_plan(data)
+
+    def assess_need_alignment(
+        self, *, question: str, package: TaskTrajectoryPackage
+    ) -> NeedAlignmentPlan:
+        # Grounded Fast Repair's Need Alignment Gate -- runs before
+        # propose_repair, judging only whether each stuck need is still
+        # aimed at the original question, never whether it's answerable
+        # (that's the separate, grounded epistemic_state shown below as
+        # read-only context, and the Evidence Upgrade Gate's job later).
+        if not package.stuck_nodes:
+            return NeedAlignmentPlan()
+        node_lines = [
+            f"[{node.need_id}] {node.need}\n"
+            f"  epistemic_state (grounded, read-only -- do not set or "
+            f"guess this, only use it as context): {node.epistemic_state}\n"
+            f"  depends_on={node.depends_on} children={node.children}"
+            for node in package.stuck_nodes
+        ]
+        prompt = (
+            "A prior attempt at answering this codebase question "
+            "decomposed it into sub-needs -- some got stuck. For each one "
+            "below, judge exactly one thing: if this need, AS CURRENTLY "
+            "WORDED, were fully and correctly resolved, would that "
+            "directly help answer the original question? This is NOT "
+            "asking whether it's a reasonable code question on its own -- "
+            "a need can be a perfectly sensible thing to investigate and "
+            "still be aimed at the wrong sub-question relative to what "
+            "was actually asked (e.g. the original question asks about "
+            "authentication/TLS handling, but the need as worded asks "
+            "about a same-named class's role-resolution behavior instead "
+            "-- a real but unrelated subsystem).\n"
+            "Choose exactly one verdict per need:\n"
+            "- keep: the framing is fine, resolving it as worded would "
+            "help.\n"
+            "- reframe: the framing has drifted onto the wrong "
+            "sub-question -- give reframed_need, wording that points back "
+            "at what the original question actually asks.\n"
+            "- drop: resolving this, even perfectly, would not help "
+            "answer the original question -- it should not be pursued "
+            "further this retry.\n"
+            f"Original question: {question}\n"
+            f"Needs:\n{chr(10).join(node_lines)}\n"
+            "Return JSON with key verdicts: a list of objects with "
+            "need_id, verdict (one of keep/reframe/drop), reframed_need "
+            "(required for reframe, the corrected need text), and "
+            "rationale (brief). Cover every need_id listed above exactly "
+            "once; a need_id you omit defaults to keep."
+        )
+        result = self.responses_json(prompt, max_output_tokens=1536)
+        data = _loads_json_object(result.text)
+        valid_ids = {node.need_id for node in package.stuck_nodes}
+        return _parse_alignment_plan(data, valid_need_ids=valid_ids)
 
     def summarize_task_experience(
         self,
@@ -1225,6 +1359,8 @@ class OpenAIProvider:
         question: str,
         evidence: list[Evidence],
         absence_proofs: list[AbsenceProof] | None = None,
+        prior_answer: str = "",
+        grounded_updates: list[GroundedUpdate] | None = None,
     ) -> str:
         # No evidence[:12] cut here: _select_evidence already did the one
         # relevance judgment call that decides what the synthesizer should
@@ -1239,9 +1375,11 @@ class OpenAIProvider:
             "Answer the codebase question using the evidence below.\n"
             f"{_SYNTHESIS_PRINCIPLES}"
             f"{_completeness_instruction(completeness_text)}"
+            f"{_patch_instruction(prior_answer)}"
             f"Question: {question}\n"
             f"Evidence:\n{evidence_text}\n"
             f"{_completeness_section(completeness_text)}"
+            f"{_patch_section(prior_answer, grounded_updates)}"
         )
         return self.responses_text(prompt, max_output_tokens=SYNTHESIS_MAX_OUTPUT_TOKENS).text
 
@@ -1252,6 +1390,8 @@ class OpenAIProvider:
         worker_ids: list[str],
         evidence: list[Evidence],
         absence_proofs: list[AbsenceProof] | None = None,
+        prior_answer: str = "",
+        grounded_updates: list[GroundedUpdate] | None = None,
     ) -> str:
         evidence_text = "\n".join(_format_evidence_block(item) for item in evidence)
         completeness_text = _completeness_notes(absence_proofs)
@@ -1261,9 +1401,11 @@ class OpenAIProvider:
             "Cross-check evidence across territories and name conflicts or missing links.\n"
             f"{_SYNTHESIS_PRINCIPLES}"
             f"{_completeness_instruction(completeness_text)}"
+            f"{_patch_instruction(prior_answer)}"
             f"Question: {question}\n"
             f"Evidence:\n{evidence_text}\n"
             f"{_completeness_section(completeness_text)}"
+            f"{_patch_section(prior_answer, grounded_updates)}"
         )
         return self.responses_text(prompt, max_output_tokens=SYNTHESIS_MAX_OUTPUT_TOKENS).text
 
@@ -1354,6 +1496,54 @@ def _completeness_instruction(completeness_text: str) -> str:
 
 def _completeness_section(completeness_text: str) -> str:
     return f"Completeness notes:\n{completeness_text}\n" if completeness_text else ""
+
+
+def _patch_instruction(prior_answer: str) -> str:
+    # "" (every gen0/slow-gen1 call, and every fast-repair call before
+    # Grounded Fast Repair existed) means this is a no-op -- byte-identical
+    # prompt to before prior_answer/grounded_updates existed. Non-empty
+    # (only ever a fast-repair retry, carrying prior_state.answer) switches
+    # to patch mode: reword freely, but epistemic commitments (uncertain
+    # stays uncertain, absent stays absent) may only be upgraded to a
+    # confident positive claim where a grounded update below names that
+    # specific claim -- never merely because new evidence exists.
+    if not prior_answer:
+        return ""
+    return (
+        "This is a revision pass, not a fresh answer. A prior answer is "
+        "given below, along with any newly grounded updates a separate "
+        "verification step has approved. You may freely reword the prior "
+        "answer's sentences. You must NOT convert an uncertain, unknown, "
+        "or absent claim in the prior answer into a confident positive "
+        "claim unless a grounded update below specifically names that "
+        "claim -- for every part the grounded updates don't cover, keep "
+        "the prior answer's original epistemic commitment (still "
+        "uncertain, still absent) even while rephrasing it. Do not use "
+        "the surrounding evidence to strengthen a claim beyond what a "
+        "grounded update explicitly supports.\n"
+    )
+
+
+def _patch_section(prior_answer: str, grounded_updates: list[GroundedUpdate] | None) -> str:
+    if not prior_answer:
+        return ""
+    lines = [f"Prior answer:\n{prior_answer}\n"]
+    if grounded_updates:
+        update_lines = [
+            f"- [{update.need_id}] {update.supported_claim}"
+            + (f" (evidence: {', '.join(update.evidence_ids)})" if update.evidence_ids else "")
+            for update in grounded_updates
+        ]
+        lines.append("Newly grounded updates (the ONLY claims you may upgrade):\n" + "\n".join(
+            update_lines
+        ) + "\n")
+    else:
+        lines.append(
+            "Newly grounded updates: (none -- no claim in the prior answer "
+            "was verified strongly enough to upgrade; keep every epistemic "
+            "commitment as the prior answer stated it)\n"
+        )
+    return "".join(lines)
 
 
 def _call_with_hard_timeout(fn, timeout_seconds: float):
@@ -1634,6 +1824,48 @@ def _parse_repair_plan(data: dict) -> RepairPlan:
             )
         )
     return RepairPlan(actions=actions)
+
+
+_ALIGNMENT_VERDICTS = {"keep", "reframe", "drop"}
+
+
+def _parse_alignment_plan(data: dict, *, valid_need_ids: set[str]) -> NeedAlignmentPlan:
+    """Same tolerant-parsing shape as _parse_repair_plan: an unknown
+    need_id, an invalid verdict, or a "reframe" with no usable
+    reframed_need text is dropped, not fatal -- a need_id with no verdict
+    at all defaults to keep (see apply_alignment_verdicts), the same safe
+    default as every other malformed-LLM-output case in this pipeline."""
+    verdicts: list[NeedAlignmentVerdict] = []
+    raw_verdicts = data.get("verdicts")
+    if not isinstance(raw_verdicts, list):
+        return NeedAlignmentPlan(verdicts=verdicts)
+    for raw_verdict in raw_verdicts:
+        if not isinstance(raw_verdict, dict):
+            continue
+        need_id = raw_verdict.get("need_id")
+        verdict = raw_verdict.get("verdict")
+        if (
+            not isinstance(need_id, str)
+            or need_id not in valid_need_ids
+            or verdict not in _ALIGNMENT_VERDICTS
+        ):
+            continue
+        reframed_need = raw_verdict.get("reframed_need")
+        if not isinstance(reframed_need, str):
+            reframed_need = ""
+        if verdict == "reframe" and not reframed_need.strip():
+            # A reframe with nothing to reframe to is not actionable --
+            # drop rather than silently no-op as if it were "keep".
+            continue
+        verdicts.append(
+            NeedAlignmentVerdict(
+                need_id=need_id,
+                verdict=verdict,
+                reframed_need=reframed_need,
+                rationale=str(raw_verdict.get("rationale") or ""),
+            )
+        )
+    return NeedAlignmentPlan(verdicts=verdicts)
 
 
 def _parse_graph_update(raw_node: object) -> NeedNode | None:

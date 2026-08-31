@@ -4,6 +4,7 @@ import re
 
 from ant.domain import (
     Evidence,
+    EvidenceUpgradeVerdict,
     FrontierResult,
     GraphConsolidationDecision,
     GraphConsolidationPlan,
@@ -154,6 +155,21 @@ class MockLLMProvider:
         # method existed.
         return NeedResolution(status="unresolved")
 
+    def verify_evidence_upgrade(
+        self,
+        *,
+        need: UnresolvedNeed,
+        epistemic_state: str,
+        new_evidence: list[Evidence],
+        question: str,
+    ) -> EvidenceUpgradeVerdict:
+        # Deliberately always unapproved, same rationale as
+        # check_need_resolution always returning "unresolved" above: this
+        # mock never accepts an epistemic upgrade on its own, so a
+        # fast-repair retry run against it never fabricates a
+        # GroundedUpdate either.
+        return EvidenceUpgradeVerdict(approved=False)
+
     def plan_round(
         self,
         *,
@@ -188,6 +204,7 @@ class MockLLMProvider:
         active_nodes: dict[str, NeedNode],
         proposals: list[ProposedNode],
         candidate_hints: dict[str, list[str]],
+        enforce_alignment: bool = False,
     ) -> GraphConsolidationPlan:
         # Deterministic stand-in: every proposal becomes a real node,
         # matching this codebase's behavior before consolidation existed

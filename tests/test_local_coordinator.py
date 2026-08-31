@@ -4,16 +4,20 @@ from ant.coordinator import LocalCoordinator
 from ant.coordinator.local import (
     _ESCALATED_NEED_CANDIDATE_LIMIT,
     _FRESH_NEED_CANDIDATE_LIMIT,
+    ProposalCluster,
     RecoveryState,
     StuckEpisode,
     _apply_consolidation_decisions,
     _build_temporary_bridge,
     _candidate_hints_for_proposals,
     _close_resolved_needs,
+    _cluster_pending_proposals,
     _collect_proposals,
+    _expand_cluster_decisions,
     _matches_term,
     _merge_needs,
     _plan_round_with_cycle_validation,
+    _prune_dangling_edges,
     _rank_global_evidence,
     _reopen_referenced_evidence,
     _select_evidence,
@@ -22,13 +26,19 @@ from ant.coordinator.worker_retrieval import build_worker_index
 from ant.domain import (
     CodeSymbol,
     Evidence,
+    EvidenceState,
+    EvidenceUpgradeVerdict,
     FrontierResult,
     GraphConsolidationDecision,
     GraphConsolidationPlan,
+    GroundedUpdate,
+    NeedAlignmentPlan,
+    NeedAlignmentVerdict,
     NeedGraph,
     NeedNode,
     NeedResolution,
     ProposedNode,
+    RecoverySnapshot,
     RepairAction,
     RepairPlan,
     RoundPlan,
@@ -496,7 +506,9 @@ class _PassthroughLookupsReasoner:
     def select_lookups(self, *, need, evidence, candidates):
         return candidates
 
-    def consolidate_graph(self, *, question, active_nodes, proposals, candidate_hints):
+    def consolidate_graph(
+        self, *, question, active_nodes, proposals, candidate_hints, enforce_alignment=False
+    ):
         # Create-everything passthrough, matching MockLLMProvider's own
         # default -- preserves every existing scenario's graph-shape
         # assertions from before Need Graph Consolidation existed. Only a
@@ -554,6 +566,14 @@ class _PassthroughLookupsReasoner:
         # existing scenario's need lifecycle exactly as it was before this
         # method existed (matches MockLLMProvider's own rationale).
         return NeedResolution(status="unresolved")
+
+    def verify_evidence_upgrade(self, *, need, epistemic_state, new_evidence, question):
+        # Deliberately unapproved by default, same rationale as
+        # check_need_resolution always returning "unresolved" above --
+        # never called anyway unless a subclass overrides
+        # check_need_resolution to actually return resolved/partial (see
+        # _AlwaysPrefersBrokenWorkerReasoner for the one that does).
+        return EvidenceUpgradeVerdict(approved=False)
 
     def decide_local_action(self, *, need, evidence, worker_progress, worker):
         # Always "continue": same rationale as MockLLMProvider -- these
@@ -1981,6 +2001,13 @@ class _SuggestsReplacementWorkerReasoner:
             ]
         )
 
+    def assess_need_alignment(self, *, question, package):
+        # Empty plan -- every stuck node defaults to "keep" (see
+        # NeedAlignmentPlan's own "no verdict" default), matching this
+        # test's real point: proving replace_assignment's forced
+        # execution, not exercising alignment judgment.
+        return NeedAlignmentPlan()
+
 
 class _AlwaysPrefersBrokenWorkerReasoner(_PassthroughLookupsReasoner):
     """The retry's own WorkerReasoner: accepts real evidence as resolving a
@@ -1998,6 +2025,17 @@ class _AlwaysPrefersBrokenWorkerReasoner(_PassthroughLookupsReasoner):
 
     def check_need_resolution(self, *, need, new_evidence, question):
         return NeedResolution(status="resolved" if new_evidence else "unresolved")
+
+    def verify_evidence_upgrade(self, *, need, epistemic_state, new_evidence, question):
+        # This test's own point is that root DOES resolve once the
+        # forced replace_assignment runs (see class docstring) -- unlike
+        # the base class's conservative default, this must approve so the
+        # Evidence Upgrade Gate (live for every retry_from_trajectory
+        # call now) doesn't itself block the very resolution this test
+        # exists to prove.
+        return EvidenceUpgradeVerdict(
+            approved=True, supported_claim="worker-fixed found it", evidence_ids=["0"]
+        )
 
     def plan_round(
         self,
@@ -2066,6 +2104,369 @@ def test_retry_from_trajectory_resolves_a_need_the_original_attempt_abandoned(
     assert retried.rounds[0].node_executions[0].worker_ids == ["worker-fixed"]
 
 
+class _RecordsEvidenceUpgradeCallsReasoner(_PassthroughLookupsReasoner):
+    """Scripted per-need verify_evidence_upgrade verdicts (keyed by the
+    need's own description, since the reasoner protocol does not pass
+    need_id), recording each call's epistemic_state argument -- lets a
+    single test assert both what context a call received and how the
+    gate's outcome depends on it."""
+
+    def __init__(self, verdicts: dict[str, EvidenceUpgradeVerdict]) -> None:
+        self.verdicts = verdicts
+        self.calls: list[tuple[str, str]] = []
+
+    def observe(self, *, question, worker_id, territory_id, evidence):
+        return WorkerObservation(worker_id=worker_id, territory_id=territory_id)
+
+    def verify_evidence_upgrade(self, *, need, epistemic_state, new_evidence, question):
+        self.calls.append((need.description, epistemic_state))
+        return self.verdicts[need.description]
+
+
+def test_apply_evidence_upgrade_gate_covers_gen0_and_retry_born_nodes_and_is_inert_unenforced(
+    tmp_path: Path,
+) -> None:
+    reasoner = _RecordsEvidenceUpgradeCallsReasoner(
+        {
+            "gen0 need": EvidenceUpgradeVerdict(
+                approved=True, supported_claim="X directly implements Y", evidence_ids=["0"]
+            ),
+            "retry-born need": EvidenceUpgradeVerdict(approved=False),
+        }
+    )
+    coordinator = LocalCoordinator(tmp_path, [], reasoner=reasoner)
+    # Only the gen0-carried-over need has a seeded epistemic_state -- a
+    # need born mid-retry (e.g. via decomposition) has no entry at all,
+    # per correction 7's "no membership bypass".
+    recovery = RecoveryState(epistemic_states={"gen0-need": "absence_supported"})
+    evidence = [Evidence(path="a.py", line_start=1, line_end=2, quote="x", reason="r")]
+
+    # A gen0-carried-over node: its real seeded epistemic_state reaches
+    # the gate as context, and an approved verdict passes the resolution
+    # through, building a GroundedUpdate directly from the verdict's own
+    # fields (correction 8 -- no reconstruction, no second call).
+    resolution, update = coordinator._apply_evidence_upgrade_gate(
+        resolution=NeedResolution(status="resolved"),
+        need=UnresolvedNeed(description="gen0 need"),
+        need_id="gen0-need",
+        new_evidence=evidence,
+        recovery=recovery,
+        question="q",
+        enforce_alignment=True,
+    )
+    assert resolution.status == "resolved"
+    assert update == GroundedUpdate(
+        need_id="gen0-need",
+        supported_claim="X directly implements Y",
+        evidence_ids=["0"],
+        prior_epistemic_state="absence_supported",
+    )
+
+    # A node with no entry in recovery.epistemic_states at all -- the gate
+    # still fires (no membership check gets in its way), defaulting its
+    # context to "open"; an unapproved verdict reverts the resolution to
+    # unresolved rather than letting an unsupported upgrade through.
+    resolution, update = coordinator._apply_evidence_upgrade_gate(
+        resolution=NeedResolution(status="partial"),
+        need=UnresolvedNeed(description="retry-born need"),
+        need_id="retry-born-need",
+        new_evidence=evidence,
+        recovery=recovery,
+        question="q",
+        enforce_alignment=True,
+    )
+    assert resolution.status == "unresolved"
+    assert update is None
+    assert reasoner.calls == [
+        ("gen0 need", "absence_supported"),
+        ("retry-born need", "open"),
+    ]
+
+    # Outside fast-repair mode, the gate is fully inert: resolution passes
+    # through unchanged and verify_evidence_upgrade is never even called,
+    # regardless of resolution.status.
+    reasoner.calls.clear()
+    resolution, update = coordinator._apply_evidence_upgrade_gate(
+        resolution=NeedResolution(status="resolved"),
+        need=UnresolvedNeed(description="gen0 need"),
+        need_id="gen0-need",
+        new_evidence=evidence,
+        recovery=recovery,
+        question="q",
+        enforce_alignment=False,
+    )
+    assert resolution.status == "resolved"
+    assert update is None
+    assert reasoner.calls == []
+
+
+def _fast_repair_graph_fixture() -> dict[str, NeedNode]:
+    return {
+        "root": NeedNode(
+            need_id="root",
+            need="original question",
+            resolution="resolved",
+            children=["kept-need", "reframe-need", "drop-need"],
+            detail=UnresolvedNeed(description="original question"),
+        ),
+        "kept-need": NeedNode(
+            need_id="kept-need",
+            need="kept as worded",
+            resolution="unresolved",
+            detail=UnresolvedNeed(description="kept as worded"),
+        ),
+        "reframe-need": NeedNode(
+            need_id="reframe-need",
+            need="wrong framing",
+            resolution="unresolved",
+            children=["stale-child"],
+            depends_on=["kept-need"],
+            detail=UnresolvedNeed(description="wrong framing"),
+        ),
+        "stale-child": NeedNode(
+            need_id="stale-child",
+            need="stale child",
+            resolution="unresolved",
+            detail=UnresolvedNeed(description="stale child"),
+        ),
+        "drop-need": NeedNode(
+            need_id="drop-need",
+            need="irrelevant tangent",
+            resolution="unresolved",
+            detail=UnresolvedNeed(description="irrelevant tangent"),
+        ),
+    }
+
+
+class _ReframesOneDropsAnotherReasoner:
+    """Stub FastEvolutionReasoner: keeps kept-need as worded, reframes
+    reframe-need onto new wording, drops drop-need as never having been
+    able to help answer the original question. propose_repair returns an
+    empty RepairPlan on purpose -- this scenario's own point is that the
+    alignment pass (not repair targeting) is what reshapes the graph."""
+
+    def propose_repair(self, *, package):
+        return RepairPlan(actions=[])
+
+    def assess_need_alignment(self, *, question, package):
+        return NeedAlignmentPlan(
+            verdicts=[
+                NeedAlignmentVerdict(need_id="kept-need", verdict="keep"),
+                NeedAlignmentVerdict(
+                    need_id="reframe-need",
+                    verdict="reframe",
+                    reframed_need="the corrected framing",
+                ),
+                NeedAlignmentVerdict(need_id="drop-need", verdict="drop"),
+            ]
+        )
+
+
+class _NeverResolvesAssignsEverythingReasoner(_PassthroughLookupsReasoner):
+    """The retry's own WorkerReasoner: assigns worker-src to every ready
+    need every round but never resolves anything -- keeps this scenario
+    to exactly the graph-shape effects of alignment, with no evidence-
+    upgrade or abandonment machinery in play."""
+
+    def observe(self, *, question, worker_id, territory_id, evidence):
+        return WorkerObservation(worker_id=worker_id, territory_id=territory_id)
+
+    def check_need_resolution(self, *, need, new_evidence, question):
+        return NeedResolution(status="unresolved")
+
+    def plan_round(
+        self,
+        *,
+        question,
+        graph,
+        resolution_results,
+        evidence,
+        workers,
+        memory_hints,
+        frontier,
+        incomplete_parents,
+        cross_repo_experience,
+        validation_feedback="",
+        repair_guidance="",
+        stuck_tried_workers=None,
+        candidate_probes=None,
+    ):
+        return RoundPlan(assignments={need_id: [workers[0].id] for need_id in frontier.ready})
+
+
+def test_retry_from_trajectory_reframes_and_drops_needs_without_abandoning_the_dropped_one(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "mod.py").write_text("def unrelated():\n    pass\n", encoding="utf-8")
+    worker = WorkerCard(
+        id="worker-src", territory_id="src", name="src", root="src", files=["src/mod.py"]
+    )
+    prior_state = EvidenceState(
+        question="original question",
+        answer="a tentative partial answer",
+        final_need_graph=_fast_repair_graph_fixture(),
+        final_recovery_state=RecoverySnapshot(
+            tried_workers_by_node={"reframe-need": ["worker-src"]}
+        ),
+    )
+
+    retried = LocalCoordinator(
+        tmp_path, [worker], reasoner=_NeverResolvesAssignsEverythingReasoner()
+    ).retry_from_trajectory(
+        prior_state, fast_reasoner=_ReframesOneDropsAnotherReasoner(), max_rounds=1
+    )
+
+    # Reframe (correction 2): the node's own wording is rewritten, and its
+    # stale old-framing edges (children/depends_on) are cleared rather
+    # than carried into the new framing.
+    reframed = retried.final_need_graph["reframe-need"]
+    assert reframed.need == "the corrected framing"
+    assert reframed.children == []
+    assert reframed.depends_on == []
+
+    # Drop (correction 5): the node's own structure is untouched (still a
+    # real node, still worded the same) -- only the caller's bookkeeping
+    # changes. It must never land in abandoned_node_ids (a different fact:
+    # "never a legitimate question" vs. "we tried and failed").
+    assert "drop-need" in retried.final_need_graph
+    assert retried.final_need_graph["drop-need"].need == "irrelevant tangent"
+    assert "drop-need" not in retried.final_recovery_state.abandoned_node_ids
+
+    # A discarded-misaligned node is excluded from the frontier entirely
+    # -- no round ever touches it -- and from the surfaced unresolved-
+    # needs list, unlike an ordinary unresolved need (kept-need, or
+    # reframe-need under its NEW wording), which is reported honestly.
+    executed_need_ids = {
+        trace.need_id for round_state in retried.rounds for trace in round_state.node_executions
+    }
+    assert "drop-need" not in executed_need_ids
+    unresolved_descriptions = {need.description for need in retried.unresolved_needs}
+    assert "irrelevant tangent" not in unresolved_descriptions
+    assert "kept as worded" in unresolved_descriptions
+    assert "the corrected framing" in unresolved_descriptions
+    assert "wrong framing" not in unresolved_descriptions
+
+
+class _ProposesAnOffTopicNodeReasoner(_PassthroughLookupsReasoner):
+    """The retry's own WorkerReasoner: round 0 both assigns the one real
+    need AND proposes a brand-new node via graph_updates -- reproducing a
+    need born mid-retry (e.g. via decomposition), not carried over from
+    gen0. consolidate_graph records every enforce_alignment value it was
+    called with and rejects the off-topic proposal specifically because
+    enforce_alignment is set, proving the per-round alignment check (not
+    just the one-time pre-retry pass) is what catches it."""
+
+    def __init__(self) -> None:
+        self.enforce_alignment_values: list[bool] = []
+
+    def observe(self, *, question, worker_id, territory_id, evidence):
+        return WorkerObservation(worker_id=worker_id, territory_id=territory_id)
+
+    def check_need_resolution(self, *, need, new_evidence, question):
+        return NeedResolution(status="unresolved")
+
+    def consolidate_graph(
+        self, *, question, active_nodes, proposals, candidate_hints, enforce_alignment=False
+    ):
+        self.enforce_alignment_values.append(enforce_alignment)
+        return GraphConsolidationPlan(
+            decisions=[
+                GraphConsolidationDecision(
+                    proposal_id=proposal.proposal_id,
+                    action="drop" if enforce_alignment and proposal.need == "off-topic tangent"
+                    else "create",
+                )
+                for proposal in proposals
+            ]
+        )
+
+    def plan_round(
+        self,
+        *,
+        question,
+        graph,
+        resolution_results,
+        evidence,
+        workers,
+        memory_hints,
+        frontier,
+        incomplete_parents,
+        cross_repo_experience,
+        validation_feedback="",
+        repair_guidance="",
+        stuck_tried_workers=None,
+        candidate_probes=None,
+    ):
+        graph_updates = {}
+        if "off-topic-node" not in graph.nodes:
+            graph_updates["off-topic-node"] = NeedNode(
+                need_id="off-topic-node",
+                need="off-topic tangent",
+                detail=UnresolvedNeed(description="off-topic tangent"),
+            )
+        return RoundPlan(
+            assignments={need_id: [workers[0].id] for need_id in frontier.ready},
+            graph_updates=graph_updates,
+        )
+
+
+class _EmptyRepairPlanKeepsEverythingReasoner:
+    """Stub FastEvolutionReasoner: an empty RepairPlan (repair_guidance
+    renders empty text) and every stuck node defaults to keep -- this
+    scenario's own point is that enforce_alignment must still reach
+    consolidate_graph as True regardless (correction 3), not inferred
+    from bool(repair_guidance)."""
+
+    def propose_repair(self, *, package):
+        return RepairPlan(actions=[])
+
+    def assess_need_alignment(self, *, question, package):
+        return NeedAlignmentPlan()
+
+
+def test_retry_from_trajectory_enforces_alignment_mid_retry_with_an_empty_repair_plan(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "mod.py").write_text("def unrelated():\n    pass\n", encoding="utf-8")
+    worker = WorkerCard(
+        id="worker-src", territory_id="src", name="src", root="src", files=["src/mod.py"]
+    )
+    prior_state = EvidenceState(
+        question="original question",
+        answer="a tentative partial answer",
+        final_need_graph={
+            "root": NeedNode(
+                need_id="root",
+                need="original question",
+                resolution="resolved",
+                children=["target-need"],
+                detail=UnresolvedNeed(description="original question"),
+            ),
+            "target-need": NeedNode(
+                need_id="target-need",
+                need="target need",
+                resolution="unresolved",
+                detail=UnresolvedNeed(description="target need"),
+            ),
+        },
+    )
+    reasoner = _ProposesAnOffTopicNodeReasoner()
+
+    retried = LocalCoordinator(tmp_path, [worker], reasoner=reasoner).retry_from_trajectory(
+        prior_state, fast_reasoner=_EmptyRepairPlanKeepsEverythingReasoner(), max_rounds=1
+    )
+
+    # The new node consolidate_graph rejected under enforce_alignment
+    # never becomes a real graph node.
+    assert "off-topic-node" not in retried.final_need_graph
+    # enforce_alignment reached consolidate_graph as True even though
+    # propose_repair returned an empty RepairPlan -- proving it is an
+    # explicit parameter, not inferred from repair_guidance's own text.
+    assert True in reasoner.enforce_alignment_values
+
+
 def _proposal(
     proposal_id: str,
     need: str = "some gap",
@@ -2122,14 +2523,22 @@ def test_apply_consolidation_decisions_create_mints_a_permanent_node() -> None:
     assert result.nodes["proposal-1"].need == "brand new gap"
 
 
-def test_apply_consolidation_decisions_defaults_an_undecided_proposal_to_create() -> None:
+def test_apply_consolidation_decisions_defaults_an_undecided_proposal_to_drop() -> None:
+    # A proposal the graph-admission LLM call never actually reviewed
+    # (most commonly a truncated/malformed response omitting it at scale)
+    # must never silently become a real node -- confirmed live on a real
+    # yt-dlp fast-repair retry that the OLD "defaults to create" behavior
+    # is exactly what let hundreds of never-reviewed worker-observed
+    # duplicates through. A still-real gap gets re-observed and
+    # re-proposed in a later round regardless -- dropping here is not a
+    # permanent loss.
     graph = NeedGraph(nodes={})
     proposals = [_proposal("proposal-1", "no decision reached")]
     plan = GraphConsolidationPlan(decisions=[])
 
     result = _apply_consolidation_decisions(graph, proposals, plan)
 
-    assert set(result.nodes) == {"proposal-1"}
+    assert set(result.nodes) == set()
 
 
 def test_apply_consolidation_decisions_merge_produces_no_new_id_and_enriches_target() -> None:
@@ -2325,6 +2734,56 @@ def test_apply_consolidation_decisions_drops_a_child_ref_to_a_dropped_proposal()
     assert result.nodes["root"].children == []
 
 
+def test_prune_dangling_edges_drops_a_child_ref_with_no_matching_node() -> None:
+    # Regression test: confirmed live on a real yt-dlp run --
+    # plan_round's graph_updates keys and an existing node's children list
+    # are two independently-generated JSON fields in the same response,
+    # and nothing enforces they name the exact same string (e.g. a
+    # hyphen/underscore mismatch). _apply_consolidation_decisions'
+    # proposal_id-remap fix only catches mismatches it can recognize as
+    # referring to a known proposal -- this is the general safety net
+    # that runs after it every round: any children/depends_on/related_to
+    # entry naming an id that isn't an actual graph.nodes key is dropped,
+    # full stop, regardless of why it went stale.
+    root = NeedNode(
+        need_id="root",
+        need="root need",
+        detail=UnresolvedNeed(description="root need"),
+        children=["root.child-real", "root.child_ghost"],
+        depends_on=["also-ghost"],
+        related_to=["still-ghost"],
+    )
+    child = NeedNode(
+        need_id="root.child-real",
+        need="real child",
+        detail=UnresolvedNeed(description="real child"),
+    )
+    graph = NeedGraph(nodes={"root": root, "root.child-real": child})
+
+    result = _prune_dangling_edges(graph)
+
+    assert result.nodes["root"].children == ["root.child-real"]
+    assert result.nodes["root"].depends_on == []
+    assert result.nodes["root"].related_to == []
+    assert result.nodes["root.child-real"] == child
+
+
+def test_prune_dangling_edges_is_a_no_op_when_everything_already_resolves() -> None:
+    root = NeedNode(
+        need_id="root",
+        need="root need",
+        detail=UnresolvedNeed(description="root need"),
+        children=["child"],
+    )
+    child = NeedNode(need_id="child", need="child", detail=UnresolvedNeed(description="child"))
+    graph = NeedGraph(nodes={"root": root, "child": child})
+
+    result = _prune_dangling_edges(graph)
+
+    assert result.nodes["root"].children == ["child"]
+    assert result is graph
+
+
 def test_candidate_hints_for_proposals_degrades_gracefully_with_no_embedder(monkeypatch) -> None:
     monkeypatch.setattr("ant.coordinator.local.get_shared_embedder", lambda: None)
     active_nodes = {
@@ -2335,3 +2794,236 @@ def test_candidate_hints_for_proposals_degrades_gracefully_with_no_embedder(monk
     proposals = [_proposal("proposal-1", "some new gap")]
 
     assert _candidate_hints_for_proposals(active_nodes, proposals) == {}
+
+
+def test_cluster_pending_proposals_groups_exact_normalized_duplicates_with_no_embedder(
+    monkeypatch,
+) -> None:
+    # Regression test: several workers independently observing the same
+    # gap, worded with only whitespace/case differences, must cluster
+    # together even with no embedder available -- this pass is free and
+    # unambiguous, it must never depend on the embedder being present.
+    monkeypatch.setattr("ant.coordinator.local.get_shared_embedder", lambda: None)
+    proposals = [
+        _proposal("p1", "  Find HLS parser   behavior"),
+        _proposal("p2", "find hls parser behavior"),
+        _proposal("p3", "a completely different gap"),
+    ]
+
+    clusters = _cluster_pending_proposals(proposals)
+
+    by_representative = {c.representative.proposal_id: c.member_ids for c in clusters}
+    assert by_representative == {"p1": ["p1", "p2"], "p3": ["p3"]}
+
+
+def test_cluster_pending_proposals_is_a_noop_with_no_embedder_and_distinct_text(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr("ant.coordinator.local.get_shared_embedder", lambda: None)
+    proposals = [_proposal("p1", "gap one"), _proposal("p2", "gap two")]
+
+    clusters = _cluster_pending_proposals(proposals)
+
+    assert {c.representative.proposal_id: c.member_ids for c in clusters} == {
+        "p1": ["p1"],
+        "p2": ["p2"],
+    }
+
+
+class _FakeEmbedder:
+    def __init__(self, vectors_by_text: dict[str, list[float]]) -> None:
+        self.vectors_by_text = vectors_by_text
+
+    def embed(self, texts: list[str]) -> list[list[float]]:
+        return [self.vectors_by_text[text] for text in texts]
+
+
+def test_cluster_pending_proposals_groups_near_duplicates_via_embedding_similarity(
+    monkeypatch,
+) -> None:
+    # Three workers each independently observe "the same gap" worded
+    # differently enough that exact-text dedup alone would miss it --
+    # confirmed live as the actual failure mode on a real yt-dlp
+    # fast-repair retry (hundreds of worker_observed proposals, most
+    # never merged). p1/p2 are near-identical embeddings (same cluster);
+    # p3 is orthogonal (its own cluster).
+    embedder = _FakeEmbedder(
+        {
+            "trace hls manifest extraction": [1.0, 0.0],
+            "understand m3u8 parsing path": [0.999, 0.045],
+            "something about the downloader retry logic": [0.0, 1.0],
+        }
+    )
+    monkeypatch.setattr("ant.coordinator.local.get_shared_embedder", lambda: embedder)
+    proposals = [
+        _proposal("p1", "trace hls manifest extraction"),
+        _proposal("p2", "understand m3u8 parsing path"),
+        _proposal("p3", "something about the downloader retry logic"),
+    ]
+
+    clusters = _cluster_pending_proposals(proposals)
+
+    by_representative = {c.representative.proposal_id: sorted(c.member_ids) for c in clusters}
+    assert by_representative == {"p1": ["p1", "p2"], "p3": ["p3"]}
+
+
+def test_cluster_pending_proposals_keeps_dissimilar_embeddings_separate(monkeypatch) -> None:
+    embedder = _FakeEmbedder(
+        {
+            "gap one": [1.0, 0.0],
+            "gap two": [0.0, 1.0],
+        }
+    )
+    monkeypatch.setattr("ant.coordinator.local.get_shared_embedder", lambda: embedder)
+    proposals = [_proposal("p1", "gap one"), _proposal("p2", "gap two")]
+
+    clusters = _cluster_pending_proposals(proposals)
+
+    assert {c.representative.proposal_id: c.member_ids for c in clusters} == {
+        "p1": ["p1"],
+        "p2": ["p2"],
+    }
+
+
+def test_expand_cluster_decisions_fans_a_create_verdict_out_as_merge_into_the_representative() -> (
+    None
+):
+    cluster = ProposalCluster(
+        representative=_proposal("p1", "trace hls manifest extraction"),
+        member_ids=["p1", "p2", "p3"],
+    )
+    plan = GraphConsolidationPlan(
+        decisions=[GraphConsolidationDecision(proposal_id="p1", action="create")]
+    )
+
+    expanded = _expand_cluster_decisions([cluster], plan, NeedGraph(nodes={}))
+
+    by_id = {d.proposal_id: d for d in expanded.decisions}
+    assert by_id["p1"].action == "create"
+    assert by_id["p2"].action == "merge"
+    assert by_id["p2"].target_node_id == "p1"
+    assert by_id["p3"].action == "merge"
+    assert by_id["p3"].target_node_id == "p1"
+
+
+def test_expand_cluster_decisions_fans_a_merge_verdict_out_identically() -> None:
+    graph = NeedGraph(
+        nodes={
+            "existing-gap": NeedNode(
+                need_id="existing-gap",
+                need="existing",
+                detail=UnresolvedNeed(description="existing"),
+            )
+        }
+    )
+    cluster = ProposalCluster(
+        representative=_proposal("p1", "a reworded version of the existing gap"),
+        member_ids=["p1", "p2"],
+    )
+    plan = GraphConsolidationPlan(
+        decisions=[
+            GraphConsolidationDecision(
+                proposal_id="p1", action="merge", target_node_id="existing-gap"
+            )
+        ]
+    )
+
+    expanded = _expand_cluster_decisions([cluster], plan, graph)
+
+    by_id = {d.proposal_id: d for d in expanded.decisions}
+    assert by_id["p1"].action == "merge"
+    assert by_id["p1"].target_node_id == "existing-gap"
+    # A member of the SAME cluster merges into the same existing target,
+    # not into the representative itself (the representative never became
+    # a new node in this branch).
+    assert by_id["p2"].action == "merge"
+    assert by_id["p2"].target_node_id == "existing-gap"
+
+
+def test_expand_cluster_decisions_treats_an_invalid_merge_target_like_apply_will() -> None:
+    # Mirrors _apply_consolidation_decisions' own "merge/subsume with no
+    # real target falls back to create" rule -- a member must merge into
+    # whatever the representative will ACTUALLY resolve to (its own new
+    # id), not into the invalid target literally named in the decision,
+    # or applying this plan would mint one node per member instead of one
+    # node total.
+    cluster = ProposalCluster(
+        representative=_proposal("p1", "gap"), member_ids=["p1", "p2"]
+    )
+    plan = GraphConsolidationPlan(
+        decisions=[
+            GraphConsolidationDecision(
+                proposal_id="p1", action="merge", target_node_id="does-not-exist"
+            )
+        ]
+    )
+
+    expanded = _expand_cluster_decisions([cluster], plan, NeedGraph(nodes={}))
+
+    by_id = {d.proposal_id: d for d in expanded.decisions}
+    assert by_id["p2"].action == "merge"
+    assert by_id["p2"].target_node_id == "p1"
+
+
+def test_expand_cluster_decisions_leaves_every_member_undecided_with_no_verdict() -> None:
+    cluster = ProposalCluster(
+        representative=_proposal("p1", "gap"), member_ids=["p1", "p2", "p3"]
+    )
+    plan = GraphConsolidationPlan(decisions=[])
+
+    expanded = _expand_cluster_decisions([cluster], plan, NeedGraph(nodes={}))
+
+    assert expanded.decisions == []
+
+
+def test_consolidate_and_commit_merges_duplicate_proposals_before_the_reasoner_sees_them(
+    tmp_path: Path, monkeypatch
+) -> None:
+    # Integration-level regression test for the real yt-dlp cost/scale
+    # bug: several near-duplicate proposals from the same round must
+    # collapse to ONE representative before consolidate_graph is ever
+    # called, and the final graph must end up with exactly one real node
+    # for them, not one per proposal.
+    embedder = _FakeEmbedder(
+        {
+            "trace hls manifest extraction": [1.0, 0.0],
+            "understand m3u8 parsing path": [0.999, 0.045],
+            "an unrelated gap": [0.0, 1.0],
+        }
+    )
+    monkeypatch.setattr("ant.coordinator.local.get_shared_embedder", lambda: embedder)
+
+    seen_proposal_counts: list[int] = []
+
+    class _RecordsProposalCountReasoner(_PassthroughLookupsReasoner):
+        def observe(self, *, question, worker_id, territory_id, evidence):
+            return WorkerObservation(worker_id=worker_id, territory_id=territory_id)
+
+        def consolidate_graph(
+            self, *, question, active_nodes, proposals, candidate_hints, enforce_alignment=False
+        ):
+            seen_proposal_counts.append(len(proposals))
+            return GraphConsolidationPlan(
+                decisions=[
+                    GraphConsolidationDecision(proposal_id=p.proposal_id, action="create")
+                    for p in proposals
+                ]
+            )
+
+    coordinator = LocalCoordinator(
+        tmp_path, [], reasoner=_RecordsProposalCountReasoner()
+    )
+    proposals = [
+        _proposal("p1", "trace hls manifest extraction"),
+        _proposal("p2", "understand m3u8 parsing path"),
+        _proposal("p3", "an unrelated gap"),
+    ]
+
+    result_graph = coordinator._consolidate_and_commit(
+        "question", NeedGraph(nodes={}), proposals, RecoveryState()
+    )
+
+    # The reasoner only ever saw 2 proposals (the two distinct clusters'
+    # representatives), not the raw 3.
+    assert seen_proposal_counts == [2]
+    assert set(result_graph.nodes) == {"p1", "p3"}

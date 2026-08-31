@@ -468,6 +468,14 @@ class AbsenceProof(BaseModel):
     tools: list[str] = Field(default_factory=list)
     exhaustive: bool = False
     conclusion: str = "inconclusive"
+    # The specific NeedNode this proof was computed for, when it genuinely
+    # is about one need (e.g. _absence_proofs, which iterates per
+    # unresolved need) -- left "" when a proof is more of a question-level/
+    # global check (e.g. _verify_inheritance_completeness's single AST-wide
+    # subclass scan) that isn't naturally owned by one need. Lets
+    # assemble_trajectory_package deterministically compute a
+    # StuckNodeSummary's epistemic_state by lookup, never by guessing.
+    need_id: str = ""
 
 
 def as_posix(path: Path) -> str:
@@ -498,6 +506,13 @@ class StuckNodeSummary(BaseModel):
     evidence_claims: list[str] = Field(default_factory=list)
     is_abandoned: bool = False
     stuck_episode_id: str = ""
+    # "open" (may exist, not found yet) | "absence_supported" (searched
+    # broadly, evidence supports it does NOT exist) | "insufficient_evidence"
+    # (can't tell). Computed deterministically by assemble_trajectory_package
+    # via lookup against the source EvidenceState.absence_proofs by need_id
+    # -- never LLM-decided, so a repair reasoner can only ever read this as
+    # grounded context, never invent it (see Grounded Fast Repair).
+    epistemic_state: str = "open"
 
 
 class TaskTrajectoryPackage(BaseModel):
@@ -538,3 +553,83 @@ class RepairAction(BaseModel):
 
 class RepairPlan(BaseModel):
     actions: list[RepairAction] = Field(default_factory=list)
+
+
+class NeedAlignmentVerdict(BaseModel):
+    """One unresolved need's verdict from FastEvolutionReasoner.
+    assess_need_alignment(), the Grounded Fast Repair "does this need
+    still belong to the original question" gate -- run before
+    propose_repair, on every stuck node in a task's trajectory, and again
+    (via WorkerReasoner.consolidate_graph's enforce_alignment flag) on
+    every new node a fast-repair retry's own rounds propose.
+
+    - "keep": this need, as currently framed, would directly help answer
+      the original question if resolved. No change.
+    - "reframe": the need is aimed at the wrong sub-question (drifted
+      framing) -- `reframed_need` replaces its text. Treated as a fresh
+      investigation: epistemic_state resets to "open" and any state
+      accumulated under the old framing (children/depends_on edges,
+      tried_workers_by_node, stuck-episode membership) is cleared by
+      apply_alignment_verdicts/retry_from_trajectory, never carried
+      forward under the new framing.
+    - "drop": resolving this need, even perfectly, would not help answer
+      the original question -- discard it. Distinct from "abandoned"
+      (tried and failed); a dropped need was never a legitimate question
+      to begin with, so it must never feed recovery-streak/evolution-
+      memory bookkeeping the way an abandoned one does.
+
+    Never sets epistemic_state -- that field is grounded (computed
+    deterministically from real AbsenceProof records, see
+    StuckNodeSummary), not something a reasoner call gets to invent.
+    """
+
+    need_id: str
+    verdict: str  # "keep" | "reframe" | "drop"
+    reframed_need: str = ""  # new need text -- only meaningful when verdict == "reframe"
+    rationale: str = ""
+
+
+class NeedAlignmentPlan(BaseModel):
+    verdicts: list[NeedAlignmentVerdict] = Field(default_factory=list)
+
+
+class GroundedUpdate(BaseModel):
+    """One leaf need's verified epistemic upgrade during a fast-repair
+    retry -- the ONLY channel through which AnswerSynthesizer.synthesize's
+    patch mode is allowed to convert a gen0 uncertain/absent claim into a
+    confident positive one. Produced only when
+    WorkerReasoner.verify_evidence_upgrade approves the upgrade (see
+    EvidenceUpgradeVerdict); everywhere a GroundedUpdate doesn't name a
+    claim, synthesis must preserve prior_answer's original epistemic
+    commitment even while rewording it.
+    """
+
+    need_id: str
+    supported_claim: str
+    # String indices into the evidence pool, same convention as
+    # UnresolvedNeed.evidence_ids -- not full Evidence objects, so this
+    # stays a light pointer synthesis can dereference against the same
+    # evidence list it already has.
+    evidence_ids: list[str] = Field(default_factory=list)
+    # "open" | "absence_supported" | "insufficient_evidence" -- what this
+    # need's epistemic_state was immediately before this upgrade.
+    prior_epistemic_state: str = "open"
+
+
+class EvidenceUpgradeVerdict(BaseModel):
+    """WorkerReasoner.verify_evidence_upgrade's return value. Fires for
+    every leaf need transitioning to resolved/partial during a fast-repair
+    retry (gen0-carried-over or newly born this retry alike -- see
+    LocalCoordinator._apply_evidence_upgrade_gate), asking one question:
+    does this round's new evidence DIRECTLY establish the originally-
+    requested entity/relation -- not an adjacent subsystem, a similarly-
+    named symbol, or a different mechanism sharing vocabulary. A False (or
+    malformed-response-degraded-to-False) verdict reverts the round's
+    resolution back to unresolved, preserving whatever epistemic
+    commitment the need already had rather than accepting an unsupported
+    upgrade.
+    """
+
+    approved: bool
+    supported_claim: str = ""  # only meaningful when approved
+    evidence_ids: list[str] = Field(default_factory=list)  # only meaningful when approved

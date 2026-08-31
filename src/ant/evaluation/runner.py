@@ -46,10 +46,22 @@ def run_batch(
     max_rounds: int = 6,
     synthesize: str = "none",
     judge: str = "heuristic",
+    state_dump_dir: Path | None = None,
+    state_dump_prefix: str = "",
 ) -> list[BatchResult]:
+    """`state_dump_dir`/`state_dump_prefix`: when given, also writes each
+    example's full EvidenceState JSON to
+    `state_dump_dir / f"{state_dump_prefix}{example.id}.json"` -- the same
+    per-question trace convention this project's own gen0/slow-gen1/
+    fast-gen1 comparison runs have always used for manual trace auditing
+    (e.g. feeding a saved gen0 trace into `retry_from_trajectory`). None by
+    default, so the plain `eval` CLI command's behavior is unchanged.
+    """
     provider = OpenAIProvider() if synthesize == "openai" else None
     global_memory = GlobalMemoryStore()
     out_path.parent.mkdir(parents=True, exist_ok=True)
+    if state_dump_dir is not None:
+        state_dump_dir.mkdir(parents=True, exist_ok=True)
     # Built once over this batch's own reference answers, then reused for
     # every example's F1 -- see build_reference_idf's docstring for why a
     # per-question corpus of one document would defeat the point.
@@ -86,6 +98,8 @@ def run_batch(
                     judge=judge,
                     global_memory=global_memory,
                     idf=idf,
+                    state_dump_dir=state_dump_dir,
+                    state_dump_prefix=state_dump_prefix,
                 )
             except Exception as exc:  # noqa: BLE001 - one bad example must not sink the batch
                 # A single malformed model response (or any other failure)
@@ -120,6 +134,8 @@ def _run_example(
     judge: str,
     global_memory: GlobalMemoryStore,
     idf: dict[str, float] | None = None,
+    state_dump_dir: Path | None = None,
+    state_dump_prefix: str = "",
 ) -> BatchResult:
     started_at = time.time()
     example_index = (
@@ -151,6 +167,10 @@ def _run_example(
     )
     state = coordinator.ask(example.question, max_rounds=max_rounds)
     trace_id = store.save_trace(state)
+    if state_dump_dir is not None:
+        (state_dump_dir / f"{state_dump_prefix}{example.id}.json").write_text(
+            json.dumps(state.model_dump(), indent=2), encoding="utf-8"
+        )
     prediction = state.answer or _fallback_prediction(state.evidence)
     score = judge_answer(
         question=example.question,

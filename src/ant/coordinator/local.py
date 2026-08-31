@@ -9,6 +9,7 @@ import numpy as np
 
 from ant.coordinator.graph_analyzer import compute_frontier, find_cycles
 from ant.coordinator.repair import (
+    apply_alignment_verdicts,
     assemble_trajectory_package,
     build_retry_starting_state,
     render_repair_guidance,
@@ -23,6 +24,7 @@ from ant.domain import (
     GraphConsolidationDecision,
     GraphConsolidationPlan,
     GraphDelta,
+    GroundedUpdate,
     NeedGraph,
     NeedNode,
     NeedResolution,
@@ -117,6 +119,14 @@ _PROBE_ANCHOR_LIMIT = 3
 # only starts narrowing once a task's graph actually grows past it.
 _CONSOLIDATION_CANDIDATE_LIMIT = 5
 
+# Cosine similarity (normalized embeddings) above which two of THIS SAME
+# round's own proposals are treated as the same underlying gap for
+# intra-batch clustering (see _cluster_pending_proposals) -- deliberately
+# stricter than typical retrieval thresholds, since a false-positive merge
+# here silently discards a proposal the graph-admission LLM call never even
+# saw, not just a slightly-worse-ranked retrieval result.
+_PENDING_CLUSTER_SIMILARITY_THRESHOLD = 0.92
+
 
 @dataclass
 class StuckEpisode:
@@ -185,6 +195,41 @@ class RecoveryState:
     # closure-check pass, and surfaced honestly in the final
     # unresolved_needs output instead of silently vanishing.
     abandoned_node_ids: set[str] = field(default_factory=set)
+    # Grounded Fast Repair: need_ids a NeedAlignmentVerdict judged would
+    # never help answer the original question, discarded before round 0
+    # (see ant.coordinator.repair.apply_alignment_verdicts). Deliberately
+    # NOT abandoned_node_ids -- "this need was never a legitimate
+    # question" is a different fact from "we tried and failed", and
+    # abandoned_node_ids already feeds recovery-streak/evolution-memory
+    # bookkeeping that a never-attempted need must not pollute. Excluded
+    # from the frontier the same way (see _exclude_abandoned's call
+    # sites), but never touches streaks, episodes, or GlobalMemoryStore.
+    # Empty for every non-repair ask() call.
+    discarded_misaligned_node_ids: set[str] = field(default_factory=set)
+    # Grounded Fast Repair: need_id -> "open" | "absence_supported" |
+    # "insufficient_evidence", the grounded epistemic standing a leaf need
+    # had at the start of a fast-repair retry (see
+    # StuckNodeSummary.epistemic_state / apply_alignment_verdicts). Only
+    # ever populated by retry_from_trajectory; empty for every gen0/
+    # slow-gen1 call. A need_id with no entry here (including one born
+    # during the retry itself) is treated as "open" by
+    # _apply_evidence_upgrade_gate's context lookup, never as "not
+    # covered by the gate" -- see that function's own docstring for why
+    # the gate's trigger condition does not key off membership in this
+    # dict.
+    epistemic_states: dict[str, str] = field(default_factory=dict)
+
+    @property
+    def excluded_node_ids(self) -> set[str]:
+        """Every need_id that must never appear in a frontier shown to
+        plan_round() -- abandoned (tried and failed) union discarded-
+        misaligned (Grounded Fast Repair's alignment gate said it would
+        never help answer the original question). Both are excluded from
+        the frontier identically; only abandoned_node_ids feeds recovery-
+        streak/evolution-memory bookkeeping elsewhere (see
+        discarded_misaligned_node_ids' own docstring for why they must
+        stay two separate sets rather than one)."""
+        return self.abandoned_node_ids | self.discarded_misaligned_node_ids
 
 
 def _recovery_snapshot(recovery: RecoveryState) -> RecoverySnapshot:
@@ -248,6 +293,8 @@ class LocalCoordinator:
         repair_guidance: str = "",
         forced_first_round_assignments: dict[str, list[str]] | None = None,
         forced_first_round_global_search_ids: set[str] | None = None,
+        prior_answer: str = "",
+        enforce_alignment: bool = False,
     ) -> EvidenceState:
         # max_rounds is a blunt outer safety ceiling only -- the real
         # per-node/per-subgraph stopping logic is the Dependency Graph
@@ -269,6 +316,18 @@ class LocalCoordinator:
         # entire enforcement mechanism -- a repair plan's execution-policy
         # actions run exactly once, deterministically, before the
         # Orchestrator regains its ordinary per-round freedom.
+        #
+        # prior_answer/enforce_alignment are Grounded Fast Repair's two
+        # remaining knobs, both set ONLY by retry_from_trajectory, both
+        # ""/False (i.e. today's exact behavior) for every other caller:
+        # prior_answer, when non-empty, switches synthesize()/
+        # synthesize_coalition() into patch mode (see _patch_instruction
+        # in openai_provider.py) instead of full regeneration;
+        # enforce_alignment, when True, makes every _consolidate_and_commit
+        # call this round loop makes additionally reject a new-node
+        # proposal that drifts from `question` (not just a duplicate), and
+        # makes every leaf resolution this round loop produces pass
+        # through _apply_evidence_upgrade_gate before being accepted.
         evidence: list[Evidence] = list(initial_evidence) if initial_evidence is not None else []
         seen_worker_ids: set[str] = set()
         search = LocalSearchTool(self.repo_root, index_path=self.index_path)
@@ -286,6 +345,12 @@ class LocalCoordinator:
         recovery = initial_recovery if initial_recovery is not None else RecoveryState()
         observed_needs: list[UnresolvedNeed] = []
         incomplete_parents: list[str] = []
+        # Grounded Fast Repair: accumulates across every round of this
+        # ask() call, appended to only by _apply_evidence_upgrade_gate on
+        # an approved verdict -- stays empty (and therefore inert) unless
+        # enforce_alignment is True. Threaded to synthesize()'s patch mode
+        # at the very end, alongside prior_answer.
+        grounded_updates: list[GroundedUpdate] = []
 
         if initial_graph is not None:
             graph = initial_graph
@@ -295,7 +360,7 @@ class LocalCoordinator:
             )
             graph = NeedGraph(nodes={"root": root})
         resolution_results: dict[str, NeedResolution] = {}
-        frontier = _exclude_abandoned(compute_frontier(graph), recovery.abandoned_node_ids)
+        frontier = _exclude_abandoned(compute_frontier(graph), recovery.excluded_node_ids)
         _reconcile_stuck_episodes(recovery, frontier.stuck_subgraphs)
         rounds: list[PlanningRound] = []
 
@@ -375,7 +440,7 @@ class LocalCoordinator:
             # must never itself count as this round's progress -- only
             # what execution actually produces should.
             pre_execution_frontier = _exclude_abandoned(
-                compute_frontier(graph), recovery.abandoned_node_ids
+                compute_frontier(graph), recovery.excluded_node_ids
             )
             pre_resolution_status = {
                 need_id: node.resolution for need_id, node in graph.nodes.items()
@@ -425,6 +490,17 @@ class LocalCoordinator:
                 resolution = self.reasoner.check_need_resolution(
                     need=node.detail, new_evidence=new_evidence, question=question
                 )
+                resolution, grounded_update = self._apply_evidence_upgrade_gate(
+                    resolution=resolution,
+                    need=node.detail,
+                    need_id=need_id,
+                    new_evidence=new_evidence,
+                    recovery=recovery,
+                    question=question,
+                    enforce_alignment=enforce_alignment,
+                )
+                if grounded_update is not None:
+                    grounded_updates.append(grounded_update)
                 resolution_results[need_id] = resolution
                 node.resolution = resolution.status
                 if resolution.status == "partial" and resolution.refined_need is not None:
@@ -478,6 +554,17 @@ class LocalCoordinator:
                     resolution = self.reasoner.check_need_resolution(
                         need=node.detail, new_evidence=new_evidence, question=question
                     )
+                    resolution, grounded_update = self._apply_evidence_upgrade_gate(
+                        resolution=resolution,
+                        need=node.detail,
+                        need_id=need_id,
+                        new_evidence=new_evidence,
+                        recovery=recovery,
+                        question=question,
+                        enforce_alignment=enforce_alignment,
+                    )
+                    if grounded_update is not None:
+                        grounded_updates.append(grounded_update)
                     resolution_results[need_id] = resolution
                     node.resolution = resolution.status
                     node_executions.append(
@@ -592,6 +679,17 @@ class LocalCoordinator:
                 resolution = self.reasoner.check_need_resolution(
                     need=node.detail, new_evidence=new_evidence, question=question
                 )
+                resolution, grounded_update = self._apply_evidence_upgrade_gate(
+                    resolution=resolution,
+                    need=node.detail,
+                    need_id=need_id,
+                    new_evidence=new_evidence,
+                    recovery=recovery,
+                    question=question,
+                    enforce_alignment=enforce_alignment,
+                )
+                if grounded_update is not None:
+                    grounded_updates.append(grounded_update)
                 resolution_results[need_id] = resolution
                 node.resolution = resolution.status
                 node_executions.append(
@@ -618,7 +716,10 @@ class LocalCoordinator:
             # explicit decision still defaults to "create" -- see
             # _apply_consolidation_decisions), so nothing carries over.
             proposals = _collect_proposals(orchestrator_new_nodes, observed_needs)
-            graph = self._consolidate_and_commit(question, graph, proposals, recovery)
+            graph = self._consolidate_and_commit(
+                question, graph, proposals, recovery, enforce_alignment=enforce_alignment
+            )
+            graph = _prune_dangling_edges(graph)
             observed_needs = []
 
             # Closure check: a parent whose children just all resolved.
@@ -638,7 +739,7 @@ class LocalCoordinator:
             # closure-check pass to evaluate anyway -- it's picked up on
             # its own merits in a later round once it might have children.
             for node in list(graph.nodes.values()):
-                if node.need_id in recovery.abandoned_node_ids:
+                if node.need_id in recovery.excluded_node_ids:
                     continue
                 if (
                     node.children
@@ -673,7 +774,7 @@ class LocalCoordinator:
                             new_incomplete_parents.remove(node.need_id)
             incomplete_parents = new_incomplete_parents
 
-            post_frontier = _exclude_abandoned(compute_frontier(graph), recovery.abandoned_node_ids)
+            post_frontier = _exclude_abandoned(compute_frontier(graph), recovery.excluded_node_ids)
             newly_ready = set(post_frontier.ready) - set(pre_execution_frontier.ready)
             touched_this_round = {trace.need_id for trace in node_executions}
 
@@ -762,7 +863,7 @@ class LocalCoordinator:
                     graph_delta=graph_delta,
                 )
             )
-            frontier = _exclude_abandoned(post_frontier, recovery.abandoned_node_ids)
+            frontier = _exclude_abandoned(post_frontier, recovery.excluded_node_ids)
             _reconcile_stuck_episodes(recovery, frontier.stuck_subgraphs)
 
         # Inheritance is a global structural fact, not a territory-scoped one:
@@ -785,12 +886,27 @@ class LocalCoordinator:
         # crowding out genuinely distinct evidence the run had also found.
         evidence = _dedupe_evidence([*evidence, *inheritance_evidence])
 
-        unresolved_needs = [
-            _with_source_worker_fallback(node, recovery)
+        # Keyed by need_id (not just a flat list) so _absence_proofs can
+        # tag each proof with the specific node it's about -- built
+        # independently of the flat unresolved_needs list below, since
+        # that list is about to be extended with _coverage_needs'/
+        # _close_resolved_needs' own synthetic entries, which never had a
+        # real graph need_id to begin with (see _absence_proofs' own
+        # docstring on why those must not get a guessed owner).
+        unresolved_nodes_by_id = {
+            node.need_id: _with_source_worker_fallback(node, recovery)
             for node in graph.nodes.values()
-            if node.resolution != "resolved"
+            # Grounded Fast Repair: a discarded-misaligned node is not a
+            # real gap in the task (it was judged irrelevant to the
+            # original question) -- excluded from the surfaced list
+            # entirely, leaf or not, unlike an abandoned node (which IS a
+            # genuine gap the coordinator gave up on and must be reported
+            # honestly rather than silently vanishing).
+            if node.need_id not in recovery.discarded_misaligned_node_ids
+            and node.resolution != "resolved"
             and (not node.children or node.need_id in recovery.abandoned_node_ids)
-        ]
+        }
+        unresolved_needs = list(unresolved_nodes_by_id.values())
         unresolved_needs = unresolved_needs + _coverage_needs(
             question, evidence, unresolved_needs, self.workers
         )
@@ -818,7 +934,7 @@ class LocalCoordinator:
                 )
             )
 
-        absence_proofs = _absence_proofs(question, rounds, unresolved_needs, self.workers)
+        absence_proofs = _absence_proofs(question, rounds, unresolved_nodes_by_id, self.workers)
         if inheritance_proof is not None:
             absence_proofs.append(inheritance_proof)
 
@@ -833,10 +949,16 @@ class LocalCoordinator:
                     worker_ids=coalition_workers,
                     evidence=evidence,
                     absence_proofs=absence_proofs,
+                    prior_answer=prior_answer,
+                    grounded_updates=grounded_updates,
                 )
             else:
                 answer = self.synthesizer.synthesize(
-                    question=question, evidence=evidence, absence_proofs=absence_proofs
+                    question=question,
+                    evidence=evidence,
+                    absence_proofs=absence_proofs,
+                    prior_answer=prior_answer,
+                    grounded_updates=grounded_updates,
                 )
         usage = (
             self.synthesizer.drain_usage() if isinstance(self.synthesizer, UsageReporter) else None
@@ -867,22 +989,60 @@ class LocalCoordinator:
         here reads a reference answer or judge score, only what
         `prior_state` already recorded about its own attempt. Nothing else
         calls this method; it is opt-in, never part of ask()'s own flow.
+
+        Grounded Fast Repair: Need Alignment (gates ①+②) runs first, on
+        `prior_state`'s own graph, before propose_repair even sees it --
+        so repair targeting (which worker to force, what to merge) always
+        reasons about the CORRECTED framing, never a drifted one. The
+        rest of ask() (enforce_alignment=True) keeps applying the same
+        alignment test to every node the retry's own rounds propose, and
+        gates every leaf resolution behind direct-evidence verification
+        (see WorkerReasoner.consolidate_graph's enforce_alignment
+        parameter and LocalCoordinator._apply_evidence_upgrade_gate).
         """
         package = assemble_trajectory_package(prior_state)
-        plan = fast_reasoner.propose_repair(package=package)
+        alignment_plan = fast_reasoner.assess_need_alignment(
+            question=prior_state.question, package=package
+        )
+        prior_epistemic_states = {
+            node.need_id: node.epistemic_state for node in package.stuck_nodes
+        }
+        aligned_graph, epistemic_states, discarded_misaligned_ids, reframed_need_ids = (
+            apply_alignment_verdicts(
+                NeedGraph(nodes=prior_state.final_need_graph),
+                alignment_plan,
+                prior_epistemic_states,
+            )
+        )
+        aligned_state = prior_state.model_copy(
+            update={"final_need_graph": aligned_graph.nodes}
+        )
+        # Recomputed from the ALIGNED graph, not reused from `package`
+        # above, so propose_repair sees reframed need text and never sees
+        # a dropped need as a live stuck node at all.
+        aligned_package = assemble_trajectory_package(aligned_state)
+
+        plan = fast_reasoner.propose_repair(package=aligned_package)
         seed = resolve_repair_plan(plan)
-        initial_graph, initial_evidence = build_retry_starting_state(prior_state, seed)
+        initial_graph, initial_evidence = build_retry_starting_state(aligned_state, seed)
 
         prior_tried_workers = prior_state.final_recovery_state.tried_workers_by_node
         initial_recovery = RecoveryState(
             tried_workers_by_node={
-                need_id: set(worker_ids) for need_id, worker_ids in prior_tried_workers.items()
+                need_id: set(worker_ids)
+                for need_id, worker_ids in prior_tried_workers.items()
+                # A reframed need is a fresh investigation (correction 2)
+                # -- "worker X already tried and failed" is a fact about
+                # the OLD framing, must not carry forward onto the new one.
+                if need_id not in reframed_need_ids
             },
             abandoned_node_ids={
                 need_id
                 for need_id in prior_state.final_recovery_state.abandoned_node_ids
-                if need_id not in seed.targeted_need_ids
+                if need_id not in seed.targeted_need_ids and need_id not in reframed_need_ids
             },
+            discarded_misaligned_node_ids=discarded_misaligned_ids,
+            epistemic_states=epistemic_states,
         )
 
         return self.ask(
@@ -891,9 +1051,11 @@ class LocalCoordinator:
             initial_graph=initial_graph,
             initial_evidence=initial_evidence,
             initial_recovery=initial_recovery,
-            repair_guidance=render_repair_guidance(package, seed),
+            repair_guidance=render_repair_guidance(aligned_package, seed),
             forced_first_round_assignments=seed.forced_assignments or None,
             forced_first_round_global_search_ids=seed.forced_global_search_ids or None,
+            prior_answer=prior_state.answer,
+            enforce_alignment=True,
         )
 
     def _run_selected_workers(
@@ -1088,33 +1250,122 @@ class LocalCoordinator:
             probes[need_id] = worker_probes
         return probes
 
+    def _apply_evidence_upgrade_gate(
+        self,
+        *,
+        resolution: NeedResolution,
+        need: UnresolvedNeed,
+        need_id: str,
+        new_evidence: list[Evidence],
+        recovery: RecoveryState,
+        question: str,
+        enforce_alignment: bool,
+    ) -> tuple[NeedResolution, GroundedUpdate | None]:
+        """Grounded Fast Repair's Evidence Upgrade Gate: called right
+        after check_need_resolution, before its verdict is committed to
+        the node -- a False/no-op result must land before node.resolution/
+        node.detail get overwritten with an unsupported "partial" refined
+        need, not after.
+
+        No-op (resolution passed through unchanged, no GroundedUpdate)
+        unless `enforce_alignment` is True (i.e. this is a Grounded Fast
+        Repair retry) AND `resolution.status` is "resolved"/"partial" --
+        an "unresolved" verdict needs no gate, it already preserves
+        whatever epistemic commitment the need had. When it does run, it
+        covers gen0-carried-over AND retry-born leaf needs identically
+        (`recovery.epistemic_states.get(need_id, "open")` -- a need never
+        seeded there, e.g. one born mid-retry, is simply "open", not
+        exempt from the gate).
+
+        An unapproved verdict reverts `resolution` to unresolved,
+        preserving the need's prior epistemic commitment instead of
+        accepting an unsupported upgrade. An approved verdict passes
+        `resolution` through unchanged and returns a GroundedUpdate for
+        the caller to accumulate -- the only channel through which
+        synthesize()'s patch mode may later strengthen this need's
+        claim in the final answer.
+        """
+        if not enforce_alignment or resolution.status not in ("resolved", "partial"):
+            return resolution, None
+        epistemic_state = recovery.epistemic_states.get(need_id, "open")
+        verdict = self.reasoner.verify_evidence_upgrade(
+            need=need,
+            epistemic_state=epistemic_state,
+            new_evidence=new_evidence,
+            question=question,
+        )
+        if not verdict.approved:
+            return NeedResolution(status="unresolved"), None
+        return resolution, GroundedUpdate(
+            need_id=need_id,
+            supported_claim=verdict.supported_claim,
+            evidence_ids=verdict.evidence_ids,
+            prior_epistemic_state=epistemic_state,
+        )
+
     def _consolidate_and_commit(
         self,
         question: str,
         graph: NeedGraph,
         proposals: list[ProposedNode],
         recovery: RecoveryState,
+        enforce_alignment: bool = False,
     ) -> NeedGraph:
         """Need Graph Consolidation: the one place a *new* node actually
         comes into existence (see WorkerReasoner.consolidate_graph's own
         docstring). A no-op when this round proposed nothing -- no LLM
         call spent on an empty buffer.
+
+        `enforce_alignment` is forwarded straight to
+        WorkerReasoner.consolidate_graph -- True only inside a Grounded
+        Fast Repair retry (see LocalCoordinator.ask), where it makes
+        consolidation additionally reject a proposal that drifts from
+        the original question, not just a duplicate. This is what keeps
+        a node born mid-retry from drifting the same way a gen0 node
+        could -- the one-time pre-retry NeedAlignmentPlan pass alone
+        would not catch it.
+
+        Intra-batch consolidation runs first (see
+        _cluster_pending_proposals): only one representative per cluster
+        of this round's own near-duplicate proposals ever reaches the LLM
+        graph-admission call, and _expand_cluster_decisions fans its
+        verdict back out afterward -- confirmed necessary on a real
+        yt-dlp fast-repair retry where a single round's raw proposal
+        count (hundreds, several workers each independently observing the
+        same gap) silently truncated consolidate_graph's own response.
         """
         if not proposals:
             return graph
         active_nodes = {
             node_id: node
             for node_id, node in graph.nodes.items()
-            if node.resolution != "resolved" and node_id not in recovery.abandoned_node_ids
+            if node.resolution != "resolved" and node_id not in recovery.excluded_node_ids
         }
-        candidate_hints = _candidate_hints_for_proposals(active_nodes, proposals)
+        clusters = _cluster_pending_proposals(proposals)
+        representatives = [cluster.representative for cluster in clusters]
+        candidate_hints = _candidate_hints_for_proposals(active_nodes, representatives)
         consolidation_plan = self.reasoner.consolidate_graph(
             question=question,
             active_nodes=active_nodes,
-            proposals=proposals,
+            proposals=representatives,
             candidate_hints=candidate_hints,
+            enforce_alignment=enforce_alignment,
         )
-        return _apply_consolidation_decisions(graph, proposals, consolidation_plan)
+        expanded_plan = _expand_cluster_decisions(clusters, consolidation_plan, graph)
+        # Representative before its own members, per cluster, so pass 1 of
+        # _apply_consolidation_decisions always mints/resolves a
+        # representative's own node before a member tries to merge into it
+        # (both live in the same batch, applied in list order).
+        # cluster.member_ids always starts with the representative's own
+        # id (see ProposalCluster's docstring/construction), so iterating
+        # it directly already yields representative-then-members order.
+        proposals_by_id = {proposal.proposal_id: proposal for proposal in proposals}
+        ordered_proposals = [
+            proposals_by_id[proposal_id]
+            for cluster in clusters
+            for proposal_id in cluster.member_ids
+        ]
+        return _apply_consolidation_decisions(graph, ordered_proposals, expanded_plan)
 
     @staticmethod
     def _query_from_needs(question: str, needs: list[UnresolvedNeed]) -> str:
@@ -1742,15 +1993,27 @@ def _normalize_coverage_needs(
 def _absence_proofs(
     question: str,
     rounds: list[PlanningRound],
-    needs: list[UnresolvedNeed],
+    needs: dict[str, UnresolvedNeed],
     workers: list[WorkerCard],
 ) -> list[AbsenceProof]:
-    negative_needs = [
-        need
-        for need in needs
+    """`needs` is keyed by the originating NeedNode's own need_id (not a
+    flat list) specifically so each produced AbsenceProof can be tagged
+    with `need_id` -- see AbsenceProof's own docstring and
+    ant.coordinator.repair._epistemic_state_for, which is the sole
+    consumer that cares. One proof per matching need (not one combined
+    proof unioning every matching need's relevant_symbols, as this
+    function did before Grounded Fast Repair needed a real per-need
+    owner) -- searched_worker_ids/searched_territories/searched_paths/
+    tools/exhaustive reflect the whole task's execution and are
+    therefore identical across every proof this call produces; only
+    relevant_symbols and need_id differ per need.
+    """
+    negative_needs = {
+        need_id: need
+        for need_id, need in needs.items()
         if need.kind == "coverage_gap"
         and need.need_type in {"negative_presence", "implementation_location"}
-    ]
+    }
     if not negative_needs:
         return []
     searched_workers = list(
@@ -1779,25 +2042,28 @@ def _absence_proofs(
             for action in observation.actions
         }
     )
+    searched_territories = sorted(
+        {
+            workers_by_id[item].territory_id
+            for item in searched_workers
+            if item in workers_by_id
+        }
+    )
+    exhaustive = bool(workers) and set(searched_workers) == set(workers_by_id)
+    conclusion = "not_found" if searched_workers else "inconclusive"
     return [
         AbsenceProof(
             query=question,
-            relevant_symbols=sorted(
-                {symbol for need in negative_needs for symbol in need.relevant_symbols}
-            ),
+            need_id=need_id,
+            relevant_symbols=sorted(need.relevant_symbols),
             searched_worker_ids=searched_workers,
-            searched_territories=sorted(
-                {
-                    workers_by_id[item].territory_id
-                    for item in searched_workers
-                    if item in workers_by_id
-                }
-            ),
+            searched_territories=searched_territories,
             searched_paths=searched_paths,
             tools=tools,
-            exhaustive=bool(workers) and set(searched_workers) == set(workers_by_id),
-            conclusion="not_found" if searched_workers else "inconclusive",
+            exhaustive=exhaustive,
+            conclusion=conclusion,
         )
+        for need_id, need in negative_needs.items()
     ]
 
 
@@ -2018,6 +2284,184 @@ def _collect_proposals(
     return proposals
 
 
+@dataclass
+class ProposalCluster:
+    """One group of this round's own proposals judged (deterministically,
+    never by an LLM) to be the same underlying gap -- see
+    _cluster_pending_proposals. `representative` is the only member the
+    graph-admission LLM call (consolidate_graph) actually sees;
+    `member_ids` is lossless (every original proposal_id, representative's
+    own included first) so _expand_cluster_decisions can fan the
+    representative's verdict back out to the rest afterward.
+    """
+
+    representative: ProposedNode
+    member_ids: list[str]
+
+
+def _normalize_proposal_text(text: str) -> str:
+    return " ".join(text.strip().lower().split())
+
+
+def _cluster_pending_proposals(proposals: list[ProposedNode]) -> list[ProposalCluster]:
+    """Intra-batch consolidation: groups THIS ROUND's own proposals that
+    are near-duplicates of EACH OTHER, before any of them ever reaches the
+    LLM-judged graph-admission step (WorkerReasoner.consolidate_graph).
+    Confirmed live on a real yt-dlp fast-repair retry: several workers
+    assigned to the same stuck subgraph each independently observe "the
+    same gap," worded slightly differently, and Need Graph Consolidation's
+    own dedup judgment does not reliably catch all of them once a single
+    round's proposal batch grows into the hundreds -- consolidate_graph's
+    prompt/response both scale with batch size, and its max_output_tokens
+    is fixed, so a large-enough batch's response silently truncates,
+    leaving most proposals with no decision at all. Clustering here first
+    shrinks what the LLM ever has to judge (hundreds of raw observations
+    down to a few dozen distinct gaps), which is a structural fix for that
+    failure mode, not just a cheaper one.
+
+    Deliberately NOT an LLM call -- two free, deterministic passes:
+    1. Exact/normalized-text dedup (case/whitespace-insensitive) -- free,
+       unambiguous, always correct.
+    2. Embedding-similarity clustering (connected components over a cosine
+       similarity graph at _PENDING_CLUSTER_SIMILARITY_THRESHOLD) among
+       what's left, when a shared embedder is available.
+    A no-op (one singleton cluster per proposal, in original order) when
+    there is no shared embedder or fewer than two distinct texts --
+    degrades gracefully to today's one-proposal-per-cluster behavior,
+    matching dense_search's own "never block on a missing embedder"
+    posture.
+    """
+    if not proposals:
+        return []
+    groups_by_text: dict[str, list[ProposedNode]] = {}
+    order: list[str] = []
+    for proposal in proposals:
+        key = _normalize_proposal_text(proposal.need)
+        if key not in groups_by_text:
+            groups_by_text[key] = []
+            order.append(key)
+        groups_by_text[key].append(proposal)
+    normalized_groups = [groups_by_text[key] for key in order]
+
+    if len(normalized_groups) <= 1:
+        return [
+            ProposalCluster(
+                representative=group[0], member_ids=[p.proposal_id for p in group]
+            )
+            for group in normalized_groups
+        ]
+
+    embedder = get_shared_embedder()
+    if embedder is None:
+        return [
+            ProposalCluster(
+                representative=group[0], member_ids=[p.proposal_id for p in group]
+            )
+            for group in normalized_groups
+        ]
+    vectors = embedder.embed([group[0].need for group in normalized_groups])
+    if not vectors:
+        return [
+            ProposalCluster(
+                representative=group[0], member_ids=[p.proposal_id for p in group]
+            )
+            for group in normalized_groups
+        ]
+
+    array = np.asarray(vectors, dtype=np.float32)
+    norms = np.linalg.norm(array, axis=1, keepdims=True)
+    norms[norms == 0] = 1.0
+    normed = array / norms
+    similarity = normed @ normed.T
+
+    n = len(normalized_groups)
+    parent = list(range(n))
+
+    def find(i: int) -> int:
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+
+    def union(i: int, j: int) -> None:
+        root_i, root_j = find(i), find(j)
+        if root_i != root_j:
+            parent[root_j] = root_i
+
+    for i in range(n):
+        for j in range(i + 1, n):
+            if similarity[i, j] >= _PENDING_CLUSTER_SIMILARITY_THRESHOLD:
+                union(i, j)
+
+    members_by_root: dict[int, list[ProposedNode]] = {}
+    for i, group in enumerate(normalized_groups):
+        members_by_root.setdefault(find(i), []).extend(group)
+
+    return [
+        ProposalCluster(representative=members[0], member_ids=[p.proposal_id for p in members])
+        for members in members_by_root.values()
+    ]
+
+
+def _expand_cluster_decisions(
+    clusters: list[ProposalCluster],
+    plan: GraphConsolidationPlan,
+    graph: NeedGraph,
+) -> GraphConsolidationPlan:
+    """Fans WorkerReasoner.consolidate_graph's per-representative verdict
+    back out to every proposal_id it stood in for -- a cluster member
+    never itself reached the LLM, so it inherits its representative's
+    verdict verbatim, with one adjustment: a representative that mints a
+    brand-new node (create/attach/relate, or a merge/subsume whose
+    target_node_id turns out not to be a real node -- see
+    _apply_consolidation_decisions' own "falls back to create" rule, which
+    this mirrors so a member's synthesized target always matches what the
+    representative will ACTUALLY resolve to) means its members are now
+    duplicates of THAT new node specifically, not of whatever the
+    representative's raw decision literally named -- so members merge
+    into the representative's own new id. A representative with no
+    decision at all (the graph-admission response never mentioned it --
+    still possible for a very large cluster count, just far less likely
+    now that clustering already shrank the batch) leaves every member
+    undecided too, deferring to _apply_consolidation_decisions' own
+    never-auto-create default for an unjudged proposal.
+    """
+    decisions_by_id = {decision.proposal_id: decision for decision in plan.decisions}
+    expanded: list[GraphConsolidationDecision] = []
+    for cluster in clusters:
+        representative_id = cluster.representative.proposal_id
+        decision = decisions_by_id.get(representative_id)
+        if decision is not None:
+            expanded.append(decision)
+        if decision is None:
+            continue
+        mints_new_node = decision.action in ("create", "attach", "relate") or (
+            decision.action in ("merge", "subsume") and decision.target_node_id not in graph.nodes
+        )
+        for member_id in cluster.member_ids:
+            if member_id == representative_id:
+                continue
+            if mints_new_node:
+                expanded.append(
+                    GraphConsolidationDecision(
+                        proposal_id=member_id,
+                        action="merge",
+                        target_node_id=representative_id,
+                        rationale=f"intra-batch duplicate of {representative_id}",
+                    )
+                )
+            else:
+                expanded.append(
+                    GraphConsolidationDecision(
+                        proposal_id=member_id,
+                        action=decision.action,
+                        target_node_id=decision.target_node_id,
+                        rationale=f"intra-batch duplicate, same cluster as {representative_id}",
+                    )
+                )
+    return GraphConsolidationPlan(decisions=expanded)
+
+
 def _candidate_hints_for_proposals(
     active_nodes: dict[str, NeedNode],
     proposals: list[ProposedNode],
@@ -2074,10 +2518,17 @@ def _apply_consolidation_decisions(
     permanent node for create/attach/relate, or resolve to an existing
     target for merge/subsume, applying that enrichment immediately since
     it only ever touches a pre-existing node) and record it in `remap`.
-    A proposal with no decision at all defaults to "create" (same safe
-    fallback MockLLMProvider always returns); a merge/subsume whose
-    target_node_id isn't a real node also falls back to "create" rather
-    than silently losing the proposal.
+    A proposal with no decision at all defaults to "drop", never "create"
+    -- a proposal the graph-admission LLM call never actually reviewed
+    (a truncated/malformed response omitting it, most commonly) must
+    never silently become a real node either; it simply isn't admitted
+    this round; a worker-observed need that's still a real gap gets
+    re-observed and re-proposed in a later round regardless. A merge/
+    subsume that WAS explicitly decided but whose target_node_id isn't a
+    real node still falls back to "create" -- that is a real, reviewed
+    verdict with a malformed target, not an unreviewed proposal, and
+    silently losing it would be the actual data loss this whole function
+    exists to avoid.
 
     Pass 2 -- now that `remap` is complete, resolve every proposal_id
     reference through it, in EVERY node's children/depends_on/related_to
@@ -2103,7 +2554,7 @@ def _apply_consolidation_decisions(
 
     for proposal in proposals:
         decision = decisions_by_id.get(proposal.proposal_id)
-        action = decision.action if decision else "create"
+        action = decision.action if decision else "drop"
         target = decision.target_node_id if decision else ""
 
         if action == "drop":
@@ -2172,6 +2623,10 @@ def _apply_consolidation_decisions(
 
     for proposal, decision in minted:
         node_id = remap[proposal.proposal_id]
+        # decision is never None here -- an undecided proposal now drops
+        # before ever being minted (see pass 1's "drop" default above), so
+        # only a proposal with a real create/attach/relate/fallback
+        # decision ever reaches this loop.
         action = decision.action if decision else "create"
 
         parent_id = None
@@ -2193,6 +2648,45 @@ def _apply_consolidation_decisions(
             nodes[parent_id] = parent.model_copy(update={"children": [*parent.children, node_id]})
 
     return graph.model_copy(update={"nodes": nodes})
+
+
+def _prune_dangling_edges(graph: NeedGraph) -> NeedGraph:
+    """Safety net run every round right after _consolidate_and_commit:
+    drops any children/depends_on/related_to reference that doesn't
+    resolve to a real node in the graph. _apply_consolidation_decisions
+    already resolves same-round proposal_id references through its own
+    remap, but that only accounts for reference MISMATCHES it can
+    recognize as such -- confirmed live on a real yt-dlp run that it is
+    not exhaustive: the Orchestrator emits graph_updates' new-node keys
+    and an existing node's children list as two independently-generated
+    JSON fields in the same plan_round response, and nothing enforces
+    they name the exact same string (e.g. a hyphen/underscore mismatch).
+    That produced a child id with no matching proposal_id and no matching
+    existing node either, which crashed the closure check with KeyError
+    once _apply_consolidation_decisions had already run and found nothing
+    to fix. This function is the general invariant enforcement instead of
+    chasing each individual mismatch source: after every round, every
+    node's children/depends_on/related_to must name only ids that are
+    actually keys in graph.nodes, full stop.
+    """
+    nodes = graph.nodes
+    updates: dict[str, NeedNode] = {}
+    for need_id, node in nodes.items():
+        children = [ref for ref in node.children if ref in nodes]
+        depends_on = [ref for ref in node.depends_on if ref in nodes]
+        related_to = [ref for ref in node.related_to if ref in nodes]
+        changed = (
+            children != node.children
+            or depends_on != node.depends_on
+            or related_to != node.related_to
+        )
+        if changed:
+            updates[need_id] = node.model_copy(
+                update={"children": children, "depends_on": depends_on, "related_to": related_to}
+            )
+    if not updates:
+        return graph
+    return graph.model_copy(update={"nodes": {**nodes, **updates}})
 
 
 def _evidence_key(item: Evidence) -> tuple[str, int, int, str]:

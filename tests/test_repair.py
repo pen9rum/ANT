@@ -1,13 +1,19 @@
 from ant.coordinator.repair import (
+    ROOT_NEED_ID,
+    apply_alignment_verdicts,
     assemble_trajectory_package,
     build_retry_starting_state,
     render_repair_guidance,
     resolve_repair_plan,
 )
 from ant.domain import (
+    AbsenceProof,
     Evidence,
     EvidenceState,
     GraphDelta,
+    NeedAlignmentPlan,
+    NeedAlignmentVerdict,
+    NeedGraph,
     NeedNode,
     NodeExecutionTrace,
     PlanningRound,
@@ -319,3 +325,175 @@ def test_build_retry_starting_state_resets_progress_for_redecompose_targets() ->
 
     assert graph.nodes["stuck-need"].progress == "not_stuck"
     assert graph.nodes["stuck-need"].rounds_without_progress == 0
+
+
+def test_assemble_trajectory_package_computes_epistemic_state_deterministically() -> None:
+    # No reasoner/LLM call involved at all -- purely a lookup against the
+    # state's own absence_proofs by need_id (see AbsenceProof.need_id and
+    # _epistemic_state_for). This is the fix for Grounded Fast Repair's
+    # first review correction: epistemic_state must be grounded fact,
+    # never an LLM guess.
+    state = _synthetic_state()
+    state = state.model_copy(
+        update={
+            "absence_proofs": [
+                AbsenceProof(
+                    query="root question",
+                    need_id="stuck-need",
+                    exhaustive=True,
+                    conclusion="not_found",
+                ),
+                AbsenceProof(
+                    query="root question",
+                    need_id="blocked-need",
+                    exhaustive=False,
+                    conclusion="inconclusive",
+                ),
+                # A proof with no need_id at all (e.g. a question-level
+                # completeness check like _verify_inheritance_completeness)
+                # must not be guessed onto any need -- matches nothing.
+                AbsenceProof(query="root question", exhaustive=True, conclusion="not_found"),
+            ]
+        }
+    )
+
+    package = assemble_trajectory_package(state)
+
+    by_id = {node.need_id: node for node in package.stuck_nodes}
+    assert by_id["stuck-need"].epistemic_state == "absence_supported"
+    assert by_id["blocked-need"].epistemic_state == "insufficient_evidence"
+
+
+def test_assemble_trajectory_package_epistemic_state_defaults_to_open_with_no_proof() -> None:
+    package = assemble_trajectory_package(_synthetic_state())
+    assert all(node.epistemic_state == "open" for node in package.stuck_nodes)
+
+
+def _graph_with(*nodes: NeedNode) -> NeedGraph:
+    return NeedGraph(nodes={node.need_id: node for node in nodes})
+
+
+def test_apply_alignment_verdicts_keep_carries_epistemic_state_over_unchanged() -> None:
+    graph = _graph_with(
+        NeedNode(need_id="a", need="need a", detail=UnresolvedNeed(description="need a"))
+    )
+    plan = NeedAlignmentPlan(
+        verdicts=[NeedAlignmentVerdict(need_id="a", verdict="keep")]
+    )
+
+    aligned, epistemic_states, discarded, reframed = apply_alignment_verdicts(
+        graph, plan, {"a": "absence_supported"}
+    )
+
+    assert aligned.nodes["a"].need == "need a"
+    assert epistemic_states == {"a": "absence_supported"}
+    assert discarded == set()
+    assert reframed == set()
+
+
+def test_apply_alignment_verdicts_no_verdict_defaults_to_keep() -> None:
+    graph = _graph_with(
+        NeedNode(need_id="a", need="need a", detail=UnresolvedNeed(description="need a"))
+    )
+
+    aligned, epistemic_states, discarded, reframed = apply_alignment_verdicts(
+        graph, NeedAlignmentPlan(), {"a": "insufficient_evidence"}
+    )
+
+    assert aligned.nodes["a"].need == "need a"
+    assert epistemic_states == {"a": "insufficient_evidence"}
+    assert discarded == set()
+
+
+def test_apply_alignment_verdicts_reframe_rewrites_text_clears_edges_and_resets_to_open() -> None:
+    node = NeedNode(
+        need_id="a",
+        need="role resolution inheritance",
+        detail=UnresolvedNeed(description="role resolution inheritance", missing="old missing"),
+        children=["a-child"],
+        depends_on=["a-dep"],
+    )
+    graph = _graph_with(
+        node,
+        NeedNode(need_id="a-child", need="child", detail=UnresolvedNeed(description="child")),
+        NeedNode(need_id="a-dep", need="dep", detail=UnresolvedNeed(description="dep")),
+    )
+    plan = NeedAlignmentPlan(
+        verdicts=[
+            NeedAlignmentVerdict(
+                need_id="a", verdict="reframe", reframed_need="TLS/auth inheritance"
+            )
+        ]
+    )
+
+    aligned, epistemic_states, discarded, reframed = apply_alignment_verdicts(
+        graph, plan, {"a": "absence_supported"}
+    )
+
+    reframed_node = aligned.nodes["a"]
+    assert reframed_node.need == "TLS/auth inheritance"
+    assert reframed_node.detail.description == "TLS/auth inheritance"
+    assert reframed_node.detail.missing == "TLS/auth inheritance"
+    # A reframed need is a fresh investigation (correction 2): old-framing
+    # edges are cleared, not carried into the new framing.
+    assert reframed_node.children == []
+    assert reframed_node.depends_on == []
+    # Never inherits the old framing's proof -- resets to open
+    # unconditionally, regardless of what prior_epistemic_states said.
+    assert epistemic_states["a"] == "open"
+    assert reframed == {"a"}
+    assert discarded == set()
+
+
+def test_apply_alignment_verdicts_drop_discards_without_abandoning() -> None:
+    graph = _graph_with(
+        NeedNode(need_id="a", need="need a", detail=UnresolvedNeed(description="need a"))
+    )
+    plan = NeedAlignmentPlan(verdicts=[NeedAlignmentVerdict(need_id="a", verdict="drop")])
+
+    aligned, epistemic_states, discarded, reframed = apply_alignment_verdicts(
+        graph, plan, {"a": "open"}
+    )
+
+    # Node structure is left alone (matches ordinary consolidation "drop"
+    # behavior) -- only the caller's bookkeeping changes.
+    assert "a" in aligned.nodes
+    assert discarded == {"a"}
+    assert "a" not in epistemic_states
+    assert reframed == set()
+
+
+def test_apply_alignment_verdicts_coerces_a_root_drop_to_keep() -> None:
+    graph = _graph_with(
+        NeedNode(
+            need_id=ROOT_NEED_ID,
+            need="original question",
+            detail=UnresolvedNeed(description="original question"),
+        )
+    )
+    plan = NeedAlignmentPlan(
+        verdicts=[NeedAlignmentVerdict(need_id=ROOT_NEED_ID, verdict="drop")]
+    )
+
+    aligned, epistemic_states, discarded, reframed = apply_alignment_verdicts(
+        graph, plan, {ROOT_NEED_ID: "open"}
+    )
+
+    assert discarded == set()
+    assert epistemic_states[ROOT_NEED_ID] == "open"
+
+
+def test_apply_alignment_verdicts_ignores_an_unknown_need_id() -> None:
+    graph = _graph_with(
+        NeedNode(need_id="a", need="need a", detail=UnresolvedNeed(description="need a"))
+    )
+    plan = NeedAlignmentPlan(
+        verdicts=[NeedAlignmentVerdict(need_id="does-not-exist", verdict="drop")]
+    )
+
+    aligned, epistemic_states, discarded, reframed = apply_alignment_verdicts(
+        graph, plan, {"a": "open"}
+    )
+
+    assert discarded == set()
+    assert epistemic_states == {"a": "open"}

@@ -15,6 +15,7 @@ from ant.evaluation import (
     load_examples,
     load_repo_specs,
     run_batch,
+    run_gen_compare,
 )
 from ant.evolution import evolve_workers
 from ant.generation import generate_worker_cards
@@ -186,6 +187,59 @@ def eval_command(
     )
     typer.echo(f"Wrote {len(results)} results to {out}.")
     typer.echo(f"Wrote summary to {report_path}: {summary.model_dump_json()}")
+
+
+@app.command("gen-compare")
+def gen_compare(
+    dataset: str,
+    repo: Path = Path("."),
+    index_path: Path = INDEX_OPTION,
+    run_id: str | None = None,
+    run_dir: Path | None = None,
+    split: str = "test",
+    limit: int | None = None,
+    max_rounds: int = MAX_ROUNDS_OPTION,
+    fast_max_rounds: int | None = None,
+    judge: str = "heuristic",
+    gen0: bool = typer.Option(True, "--gen0/--no-gen0"),
+    slow_gen1: bool = typer.Option(True, "--slow-gen1/--no-slow-gen1"),
+    fast_gen1: bool = typer.Option(True, "--fast-gen1/--no-fast-gen1"),
+) -> None:
+    """Unified gen0 -> slow-gen1 (colony evolution) -> fast-gen1
+    (task-conditioned retry) comparison over one dataset. Every stage's
+    per-question EvidenceState JSON is saved under the run directory
+    (gen0-<id>.json, slow-gen1-<id>.json, fast-gen1-<id>.json, plus a
+    *-results.jsonl per stage) and one summary.json aggregates each stage's
+    per-question EvalScore -- the same on-disk shape every prior gen0/gen1
+    comparison run of this project's own ad-hoc scripts produced by hand,
+    now from one committed, reusable command.
+
+    Each of --gen0/--slow-gen1/--fast-gen1 can be switched off independently
+    (all four combinations that make sense: everything, gen0 only, slow-gen1
+    only, fast-gen1 only) -- e.g. `--no-gen0 --no-slow-gen1` re-runs only
+    fast-gen1 against this same --run-dir's already-saved gen0 traces, so a
+    fix that only touches fast-gen1's own code path doesn't require paying
+    for gen0/slow-gen1 again. A skipped stage's numbers are still read back
+    from this run_dir's own earlier *-results.jsonl into the summary, if one
+    is already there.
+    """
+    resolved_run_dir = _resolve_run_dir(run_id=run_id, run_dir=run_dir)
+    examples = load_examples(dataset, split=split, limit=limit)
+    result = run_gen_compare(
+        examples=examples,
+        repo_root=repo.resolve(),
+        index_path=index_path,
+        run_dir=resolved_run_dir,
+        max_rounds=max_rounds,
+        fast_max_rounds=fast_max_rounds,
+        judge=judge,
+        run_gen0=gen0,
+        run_slow_gen1=slow_gen1,
+        run_fast_gen1=fast_gen1,
+    )
+    summary_path = resolved_run_dir / "summary.json"
+    summary_path.write_text(json.dumps(result.model_dump(), indent=2), encoding="utf-8")
+    typer.echo(f"Wrote summary to {summary_path}")
 
 
 @app.command("report")
