@@ -49,6 +49,33 @@ WORKER_CARDS_KEY = "cards"
 REPO_INDEX_KEY = "repo"
 
 
+def shared_repo_dense_dir(repo_root: Path) -> Path:
+    """Where the repo-wide chunk-level embedding cache (REPO_INDEX_KEY)
+    lives for a given checkout -- keyed by the repo's own resolved path,
+    not by whichever worker-card index directory (e.g. .ant/sweqa/<name>)
+    happens to be analyzing it right now.
+
+    Chunk embeddings are a pure function of file content: which worker/
+    territory carving currently exists, or how many routes colony memory
+    has recorded, has no bearing on what a file's own text embeds to. Two
+    different .ant/sweqa/<name> index directories over the SAME repo
+    checkout (e.g. two experiment variants, or a freshly rebuilt "clean
+    gen0" after a previous one accumulated routes) used to each maintain
+    their own copy under <index_dir>/dense/, so every fresh gen0 rebuild
+    re-embedded the whole repo from scratch even though nothing about the
+    repo's own file content had changed -- confirmed painful live on
+    yt-dlp (1174 files / 8240 chunks, ~9x qibo) after two same-session
+    rebuilds each re-paid the full embedding cost. Storing this under the
+    repo checkout itself, matching where `ant index`'s own default
+    --index=.ant already lives when run from inside a repo, means it
+    naturally survives any number of worker-card index rebuilds for that
+    same checkout -- only a genuinely new/changed file ever needs
+    re-embedding, never "the whole repo, because some other index
+    directory was reset."
+    """
+    return repo_root.resolve() / ".ant" / "dense"
+
+
 @dataclass(frozen=True)
 class EmbeddingEntry:
     path: str

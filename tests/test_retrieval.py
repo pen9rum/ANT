@@ -13,6 +13,7 @@ from ant.retrieval.dense import (
     build_and_cache_in_background,
     build_embedding_index,
     build_worker_card_index,
+    shared_repo_dense_dir,
     warm_dense_cache,
 )
 from ant.retrieval.relevance import extract_terms, score_evidence
@@ -408,3 +409,45 @@ def test_dense_search_never_returns_evidence_outside_the_calling_workers_files(
     hits = tool.dense_search("set_seed", ["src/a.py"])
 
     assert [hit.path for hit in hits] == ["src/a.py"]
+
+
+def test_dense_search_shares_its_cache_across_different_index_path_directories(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Regression test for the caching-architecture fix: confirmed live on
+    # yt-dlp that two different worker-card index directories over the
+    # SAME repo checkout (e.g. a freshly rebuilt "clean gen0" after a
+    # previous one accumulated colony-memory routes) each re-embedded the
+    # whole repo from scratch under their own index_path/dense/, even
+    # though the repo's own file content -- what chunk embeddings actually
+    # depend on -- never changed. The fix: the chunk-level cache is keyed
+    # by repo_root alone (shared_repo_dense_dir), not by index_path, so a
+    # second, differently-pathed LocalSearchTool over the same repo_root
+    # must see the first one's already-built cache instead of re-embedding.
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "a.py").write_text("def f():\n    return 1\n", encoding="utf-8")
+
+    embedder = _FakeEmbedder()
+    monkeypatch.setattr(local_module, "get_shared_embedder", lambda: embedder)
+
+    first_index_path = tmp_path / ".ant-experiment-one"
+    first_index_path.mkdir()
+    first_tool = LocalSearchTool(tmp_path, index_path=first_index_path)
+    assert first_tool.dense_search("anything", ["src/a.py"]) == []
+    for _ in range(50):
+        if shared_repo_dense_dir(tmp_path).exists():
+            break
+        time.sleep(0.05)
+
+    # A second, DIFFERENT index_path (simulating a freshly rebuilt worker-
+    # card index directory) over the same repo_root must find the
+    # already-built cache immediately -- no uncached-file [] round trip,
+    # and it must NOT be written under this second index_path at all.
+    second_index_path = tmp_path / ".ant-experiment-two"
+    second_index_path.mkdir()
+    second_tool = LocalSearchTool(tmp_path, index_path=second_index_path)
+
+    hits = second_tool.dense_search("anything", ["src/a.py"])
+
+    assert [hit.path for hit in hits] == ["src/a.py"]
+    assert not (second_index_path / "dense").exists()

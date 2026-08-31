@@ -19,10 +19,11 @@ FLAT_CONTAINERS = {"examples", "example", "demos", "demo", "samples", "sample"}
 
 
 def discover_territories(repo: RepoEnvironment) -> list[Territory]:
+    package_name = _normalize_name(repo.root.name)
     grouped: dict[str, list[str]] = defaultdict(list)
     for path in repo.iter_files():
         relative = path.relative_to(repo.root)
-        root = _natural_root(relative)
+        root = _natural_root(relative, package_name)
         grouped[root].append(as_posix(relative))
 
     grouped = _merge_tiny_groups(grouped)
@@ -48,13 +49,27 @@ def _territory_id(root: str, index: int) -> str:
     return normalized or f"territory-{index}"
 
 
-def _natural_root(relative: Path) -> str:
+def _normalize_name(name: str) -> str:
+    return "".join(ch for ch in name.lower() if ch.isalnum())
+
+
+def _natural_root(relative: Path, package_name: str) -> str:
     parts = relative.parts
     if len(parts) <= 1:
         return ""
     if parts[0] in FLAT_CONTAINERS:
         return "/".join(parts[:2]) if len(parts) > 2 else "/".join(parts[:-1])
-    if parts[0] not in GENERIC_CONTAINERS:
+    # A top-level directory named after the repo itself (numba/numba,
+    # pennylane/pennylane, yt-dlp/yt_dlp, ...) is exactly as generic/
+    # uninformative as src/lib/pkg -- extremely common Python layout where
+    # the "package name" IS the top-level container, not a real subsystem
+    # boundary. Confirmed live: without this, yt-dlp's entire yt_dlp/
+    # package (1082 files across extractor/, downloader/, compat/,
+    # postprocessor/, ...) collapsed into one territory, silently
+    # defeating any comparison that depends on ANT's territory-routing
+    # actually having more than one meaningful worker to route between.
+    is_generic = parts[0] in GENERIC_CONTAINERS or _normalize_name(parts[0]) == package_name
+    if not is_generic:
         return parts[0]
     if len(parts) <= 3:
         return "/".join(parts[:-1])

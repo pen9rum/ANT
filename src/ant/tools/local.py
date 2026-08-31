@@ -22,6 +22,7 @@ from ant.retrieval.dense import (
     EmbeddingIndex,
     build_and_cache_in_background,
     get_shared_embedder,
+    shared_repo_dense_dir,
 )
 from ant.retrieval.relevance import extract_terms, is_stem_match, score_evidence
 from ant.tools.symbol_index import SymbolDefinition, SymbolIndex, build_symbol_index
@@ -47,7 +48,9 @@ class LocalSearchTool:
     # Keyed by REPO_INDEX_KEY only -- one shared, repo-wide embedding index,
     # not one per worker file scope (see ant.retrieval.dense's module
     # docstring). In-process cache only; the disk-backed cache under
-    # index_path/dense/ is what survives across process runs.
+    # shared_repo_dense_dir(repo_root) is what survives across process runs
+    # (and across however many worker-card index directories analyze this
+    # same repo checkout).
     _embedding_index_cache: dict[str, EmbeddingIndex | None] = field(
         default_factory=dict,
         init=False,
@@ -274,10 +277,11 @@ class LocalSearchTool:
         than block this round's query on it, an uncached file returns []
         immediately (or whatever's already cached, filtered to `files`) and
         the build runs on a background thread, cached to disk under
-        index_path/dense/ for every later call (from any process) to pick
-        up once it lands. A query is never worse off than "dense retrieval
-        wasn't available yet for these files" -- it can never become "this
-        query now waits N minutes."
+        shared_repo_dense_dir(repo_root) for every later call (from any
+        process, and any worker-card index directory over the same repo
+        checkout) to pick up once it lands. A query is never worse off than
+        "dense retrieval wasn't available yet for these files" -- it can
+        never become "this query now waits N minutes."
 
         Results are restricted to `files` via EmbeddingIndex.search's
         `paths` filter even though the underlying index spans the whole
@@ -294,7 +298,7 @@ class LocalSearchTool:
         if embedder is None:
             return []
 
-        dense_dir = self.index_path / "dense"
+        dense_dir = shared_repo_dense_dir(self.repo_root)
         if REPO_INDEX_KEY not in self._embedding_index_cache:
             loaded = EmbeddingIndex.load(dense_dir, REPO_INDEX_KEY)
             self._embedding_index_cache[REPO_INDEX_KEY] = loaded
