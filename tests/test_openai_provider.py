@@ -1229,6 +1229,39 @@ def test_synthesize_patch_mode_instructs_against_narrating_the_revision(monkeypa
     assert "never mention that this is a revision" not in captured["prompt"]
 
 
+def test_synthesize_patch_mode_instructs_minimal_edit_not_regeneration(monkeypatch) -> None:
+    # Regression test for a real, confirmed failure on two independent
+    # yt-dlp questions: patch mode's old "as if it were a fresh,
+    # standalone response" framing pushed the model to regenerate the
+    # WHOLE answer in a more confident, more condensed voice -- silently
+    # dropping gen0's own explicit "Missing Links / Limitations" caveats
+    # that no grounded update ever touched, even though the underlying
+    # facts and evidence were unchanged (one case: evidence was an exact
+    # superset of gen0's own). The prompt must instead frame the prior
+    # answer as the canonical base and ask for the smallest edit, with
+    # caveats/limitations preserved by default.
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    provider = OpenAIProvider(model="gpt-4.1")
+    captured: dict[str, str] = {}
+
+    def fake_responses_text(prompt: str, max_output_tokens: int = 512):
+        captured["prompt"] = prompt
+        return type("Result", (), {"text": "answer"})()
+
+    provider.responses_text = fake_responses_text  # type: ignore[method-assign]
+
+    provider.synthesize(
+        question="q",
+        evidence=[],
+        prior_answer="gen0's own prior answer",
+    )
+
+    assert "canonical base" in captured["prompt"]
+    assert "smallest edits" in captured["prompt"]
+    assert "limitations" in captured["prompt"]
+    assert "fresh, standalone response" not in captured["prompt"]
+
+
 def test_responses_json_falls_back_to_empty_object_when_repair_also_fails(
     monkeypatch,
 ) -> None:

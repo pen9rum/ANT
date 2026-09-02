@@ -1649,28 +1649,46 @@ def _patch_instruction(prior_answer: str) -> str:
     # Grounded Fast Repair existed) means this is a no-op -- byte-identical
     # prompt to before prior_answer/grounded_updates existed. Non-empty
     # (only ever a fast-repair retry, carrying prior_state.answer) switches
-    # to patch mode: reword freely, but epistemic commitments (uncertain
-    # stays uncertain, absent stays absent) may only be upgraded to a
-    # confident positive claim where a grounded update below names that
-    # specific claim -- never merely because new evidence exists.
+    # to patch mode: minimal edit onto a canonical base, not regeneration
+    # -- epistemic commitments (uncertain stays uncertain, absent stays
+    # absent) may only be upgraded to a confident positive claim where a
+    # grounded update below names that specific claim -- never merely
+    # because new evidence exists.
+    #
+    # Minimal-edit framing (not "write a fresh standalone response") is
+    # deliberate, not stylistic: confirmed live on two independent yt-dlp
+    # regressions (identical or superset evidence vs. gen0, score still
+    # dropped) that "sound like a fresh answer" pushed the model to
+    # regenerate the WHOLE answer in a more confident, more condensed
+    # voice -- and in doing so silently dropped gen0's own explicit
+    # "Missing Links / Limitations" sections (caveats about what the
+    # evidence does NOT show) that no grounded update ever touched. Both
+    # cases had the correct facts; what was lost was gen0's own honesty
+    # about what it *didn't* know, which the judge's own
+    # completeness/reasoning criteria was rewarding. Preserving that
+    # content by default, not just the strictly-factual claims, is the
+    # fix.
     if not prior_answer:
         return ""
     return (
-        "This is a revision pass, not a fresh answer. A prior answer is "
-        "given below, along with any newly grounded updates a separate "
-        "verification step has approved. You may freely reword the prior "
-        "answer's sentences. You must NOT convert an uncertain, unknown, "
-        "or absent claim in the prior answer into a confident positive "
-        "claim unless a grounded update below specifically names that "
-        "claim -- for every part the grounded updates don't cover, keep "
-        "the prior answer's original epistemic commitment (still "
-        "uncertain, still absent) even while rephrasing it. Do not use "
-        "the surrounding evidence to strengthen a claim beyond what a "
-        "grounded update explicitly supports.\n"
-        "Output ONLY the answer itself, exactly as if it were a fresh, "
-        "standalone response to the question below -- never mention that "
-        "this is a revision, a patch, a re-check, or that anything was "
-        "reworded/verified/cross-checked; the reader has no prior answer "
+        "Treat the previous answer below as the canonical base, not a "
+        "draft to regenerate -- this is a targeted patch onto an existing "
+        "answer, not a fresh response to the question. Make the smallest "
+        "edits necessary to incorporate only the explicitly approved "
+        "evidence upgrades listed below. Preserve all unaffected content "
+        "exactly as written, especially caveats, uncertainty, limitations, "
+        "unresolved-evidence disclosures, and scope qualifications -- do "
+        "not rewrite, shorten, or drop any of these just because a "
+        "grounded update elsewhere doesn't mention them. Do not increase "
+        "certainty anywhere unless a grounded update below specifically "
+        "supports it. The one exception: if a grounded update directly "
+        "closes a specific gap the prior answer flagged as missing, "
+        "uncertain, or unresolved, that specific caveat may be removed or "
+        "updated to reflect the new confident claim -- but nothing else "
+        "nearby should change as a result.\n"
+        "Output ONLY the answer itself -- never mention that this is a "
+        "revision, a patch, a re-check, or that anything was reworded/"
+        "verified/cross-checked/preserved; the reader has no prior answer "
         "to compare against and must not be able to tell this instruction "
         "exists.\n"
     )
