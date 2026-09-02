@@ -248,6 +248,18 @@ def _run_fast_gen1(
     workers = IndexStore(gen0_index).load_workers()
     idf = build_reference_idf(example.answer for example in examples)
     scores: dict[str, EvalScore] = {}
+    # Read once, not per-example: when the monotonic gate (see
+    # LocalCoordinator.ask's own docstring) leaves prior_state.answer
+    # completely untouched, re-judging byte-identical text is pure
+    # judge-sampling noise, not signal -- confirmed live on a real
+    # yt-dlp run, 6/10 questions hit this gate, and the SAME text scored
+    # up to +-4 points apart across the two independent judge calls (f1,
+    # a deterministic metric, was identical both times; only the LLM
+    # judge's own rubric scores moved). Reusing gen0's own already-judged
+    # score for these removes that noise from the fast-gen1 column
+    # entirely, at zero extra judge cost.
+    gen0_results_path = run_dir / "gen0-results.jsonl"
+    gen0_scores = _scores_by_id(gen0_results_path) if gen0_results_path.exists() else {}
     out_path = run_dir / "fast-gen1-results.jsonl"
     with out_path.open("w", encoding="utf-8") as handle:
         for example in examples:
@@ -265,7 +277,12 @@ def _run_fast_gen1(
                 json.dumps(state.model_dump(), indent=2), encoding="utf-8"
             )
             prediction = state.answer or _fallback_prediction(state.evidence)
-            score = judge_answer(
+            reused_gen0_score = (
+                gen0_scores.get(example.id)
+                if state.answer and state.answer == prior_state.answer
+                else None
+            )
+            score = reused_gen0_score or judge_answer(
                 question=example.question,
                 prediction=prediction,
                 expected=example.answer,
