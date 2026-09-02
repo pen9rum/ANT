@@ -13,6 +13,7 @@ from ant.coordinator.local import (
     _close_resolved_needs,
     _cluster_pending_proposals,
     _collect_proposals,
+    _dedupe_evidence,
     _expand_cluster_decisions,
     _matches_term,
     _merge_needs,
@@ -1515,6 +1516,532 @@ def test_final_evidence_pool_is_deduped_even_without_any_inheritance_evidence(
     )
 
 
+def test_dedupe_evidence_unions_need_ids_instead_of_keeping_only_the_first_seen() -> None:
+    # Regression test for per-claim evidence retention (Grounded Fast
+    # Repair): the same (path, lines, quote) chunk can legitimately be
+    # gathered once per need it answers -- keeping only the first
+    # duplicate's need_ids would let a later need's real association with
+    # this exact chunk silently disappear, breaking the "an untouched
+    # need's evidence must survive" invariant for any need whose only
+    # supporting occurrence happened to arrive second.
+    first = Evidence(
+        path="src/mod.py", line_start=1, line_end=2, quote="def f():", reason="r",
+        need_ids=["need-a"],
+    )
+    second = Evidence(
+        path="src/mod.py", line_start=1, line_end=2, quote="def f():", reason="r",
+        need_ids=["need-b"],
+    )
+
+    deduped = _dedupe_evidence([first, second])
+
+    assert len(deduped) == 1
+    assert set(deduped[0].need_ids) == {"need-a", "need-b"}
+
+
+class _GroundsOnlyOneNamedNeedReasoner(_PassthroughLookupsReasoner):
+    """Assigns the sole worker to every ready need each round, but only
+    ever grounds the ONE need whose description is `grounded_description`
+    via verify_evidence_upgrade -- every other assigned need's evidence
+    upgrade is rejected (the round loop still records it as executed, so
+    it still counts as "reopened" for _reopened_need_ids, just never
+    grounded). check_need_resolution stays "unresolved" for everything
+    (deliberately -- these tests exercise the decoupled gate: a need can
+    ground a specific claim while investigation itself never closes, see
+    _apply_evidence_upgrade_gate's own docstring), which the gate no
+    longer treats as a reason to skip verification. Lets a test put a
+    real GroundedUpdate into ask()'s grounded_updates (required to even
+    reach the per-claim partition branch -- see the monotonic gate this
+    sits behind) while keeping a SEPARATE need under test un-grounded.
+    Records every select_evidence call's own input pool so a test can
+    assert exactly what the final display-budget cut was, and was not,
+    shown."""
+
+    def __init__(self, grounded_description: str) -> None:
+        self.grounded_description = grounded_description
+        self.select_evidence_calls: list[list[Evidence]] = []
+
+    def observe(self, *, question, worker_id, territory_id, evidence):
+        return WorkerObservation(worker_id=worker_id, territory_id=territory_id)
+
+    def check_need_resolution(self, *, need, new_evidence, question):
+        return NeedResolution(status="unresolved")
+
+    def verify_evidence_upgrade(self, *, need, epistemic_state, new_evidence, question):
+        return EvidenceUpgradeVerdict(
+            approved=need.description == self.grounded_description,
+            supported_claim="grounded this retry",
+            evidence_ids=["0"],
+        )
+
+    def select_evidence(self, *, question, evidence, limit):
+        self.select_evidence_calls.append(list(evidence))
+        return [str(index) for index in range(len(evidence))][:limit], []
+
+    def plan_round(
+        self,
+        *,
+        question,
+        graph,
+        resolution_results,
+        evidence,
+        workers,
+        memory_hints,
+        frontier,
+        incomplete_parents,
+        cross_repo_experience,
+        validation_feedback="",
+        repair_guidance="",
+        stuck_tried_workers=None,
+        candidate_probes=None,
+    ):
+        return RoundPlan(assignments={need_id: [workers[0].id] for need_id in frontier.ready})
+
+
+class _RecordsFinalEvidenceSynthesizer:
+    """Stub AnswerSynthesizer that records the exact evidence list it was
+    handed for final synthesis, so a test can assert what per-claim
+    retention did and did not let through -- not just what ask() itself
+    returns (which is the same list, but recording the call directly
+    proves synthesis genuinely saw it, not merely that it survived some
+    unrelated post-processing)."""
+
+    def __init__(self) -> None:
+        self.synthesize_evidence: list[Evidence] | None = None
+
+    def synthesize(self, **kwargs):
+        self.synthesize_evidence = kwargs["evidence"]
+        return "a freshly synthesized answer"
+
+    def synthesize_coalition(self, **kwargs):
+        self.synthesize_evidence = kwargs["evidence"]
+        return "a freshly synthesized coalition answer"
+
+
+class _ReturnsBlankTextSynthesizer:
+    """Stub AnswerSynthesizer that always returns an empty string -- models
+    a real gen0 trace where evidence was gathered but none of it was
+    actually relevant (routing landed entirely on doc/example files for a
+    question about actual source code) and synthesize() produced "" rather
+    than an honest hedge."""
+
+    def synthesize(self, **kwargs):
+        return ""
+
+    def synthesize_coalition(self, **kwargs):
+        return ""
+
+
+class _NeverAssignsAnyWorkerReasoner(_PassthroughLookupsReasoner):
+    """Every round's plan_round assigns nothing -- evidence stays
+    completely empty for the whole task, exercising the "nothing to
+    synthesize from at all" abstention path (as opposed to "synthesized,
+    but got blank text back")."""
+
+    def observe(self, *, question, worker_id, territory_id, evidence):
+        return WorkerObservation(worker_id=worker_id, territory_id=territory_id)
+
+    def plan_round(
+        self,
+        *,
+        question,
+        graph,
+        resolution_results,
+        evidence,
+        workers,
+        memory_hints,
+        frontier,
+        incomplete_parents,
+        cross_repo_experience,
+        validation_feedback="",
+        repair_guidance="",
+        stuck_tried_workers=None,
+        candidate_probes=None,
+    ):
+        return RoundPlan(assignments={})
+
+
+class _AssignsWhateverIsReadyReasoner(_PassthroughLookupsReasoner):
+    """Plain, non-fast-repair reasoner: assigns the sole worker to every
+    ready need each round, keeps everything select_evidence sees. Used to
+    get real evidence gathered and through to synthesis without any of
+    the enforce_alignment-specific machinery."""
+
+    def observe(self, *, question, worker_id, territory_id, evidence):
+        return WorkerObservation(worker_id=worker_id, territory_id=territory_id)
+
+    def plan_round(
+        self,
+        *,
+        question,
+        graph,
+        resolution_results,
+        evidence,
+        workers,
+        memory_hints,
+        frontier,
+        incomplete_parents,
+        cross_repo_experience,
+        validation_feedback="",
+        repair_guidance="",
+        stuck_tried_workers=None,
+        candidate_probes=None,
+    ):
+        return RoundPlan(assignments={need_id: [workers[0].id] for need_id in frontier.ready})
+
+
+def test_ask_abstains_instead_of_returning_a_blank_answer_when_no_evidence_survives(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "mod.py").write_text("def unrelated():\n    pass\n", encoding="utf-8")
+    worker = WorkerCard(
+        id="worker-src", territory_id="src", name="src", root="src", files=["src/mod.py"]
+    )
+
+    result = LocalCoordinator(
+        tmp_path,
+        [worker],
+        reasoner=_NeverAssignsAnyWorkerReasoner(),
+        synthesizer=_RecordsFinalEvidenceSynthesizer(),
+    ).ask("some question nothing ever gets assigned to", max_rounds=1)
+
+    assert result.answer != ""
+    assert "does not directly and reliably answer" in result.answer
+
+
+def test_ask_leaves_answer_blank_when_no_synthesizer_is_configured(tmp_path: Path) -> None:
+    # Regression test: run_batch's own heuristic-only mode (no OpenAIProvider
+    # passed) deliberately never attempts synthesis, and its own
+    # _fallback_prediction(state.evidence) relies on `state.answer` staying
+    # "" (falsy) to know to substitute the raw evidence text for scoring --
+    # the abstention fallback must not fire when there was never a real
+    # synthesizer to abstain FROM in the first place.
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "mod.py").write_text("def unrelated():\n    pass\n", encoding="utf-8")
+    worker = WorkerCard(
+        id="worker-src", territory_id="src", name="src", root="src", files=["src/mod.py"]
+    )
+
+    result = LocalCoordinator(
+        tmp_path, [worker], reasoner=_NeverAssignsAnyWorkerReasoner()
+    ).ask("some question nothing ever gets assigned to", max_rounds=1)
+
+    assert result.answer == ""
+
+
+def test_ask_abstains_instead_of_returning_a_blank_answer_when_synthesis_itself_returns_blank(
+    tmp_path: Path,
+) -> None:
+    # Regression test for a real gen0 trace: 16 evidence items gathered
+    # (from doc/sphinxext and examples/, not the actual source module the
+    # question asked about), and synthesize() returned "" rather than an
+    # honest "insufficient evidence" hedge.
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "mod.py").write_text(
+        "def some_symbol():\n    pass\n", encoding="utf-8"
+    )
+    worker = WorkerCard(
+        id="worker-src",
+        territory_id="src",
+        name="src",
+        root="src",
+        files=["src/mod.py"],
+        searchable_terms=["some_symbol"],
+    )
+
+    result = LocalCoordinator(
+        tmp_path,
+        [worker],
+        reasoner=_AssignsWhateverIsReadyReasoner(),
+        synthesizer=_ReturnsBlankTextSynthesizer(),
+    ).ask("find some_symbol", max_rounds=1)
+
+    assert result.answer != ""
+    assert "does not directly and reliably answer" in result.answer
+
+
+def test_ask_preserves_untouched_evidence_when_a_sibling_need_is_grounded_this_retry(
+    tmp_path: Path,
+) -> None:
+    # Regression test for the seaborn `regression.py` loss (-14 points):
+    # a need nothing this retry ever reopened must have its evidence
+    # survive completely untouched, even though a SIBLING need earning a
+    # real GroundedUpdate this same retry pushes ask() past the monotonic
+    # gate and into the partition-then-select branch.
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "mod.py").write_text(
+        "def reopened_target():\n    pass\n", encoding="utf-8"
+    )
+    worker = WorkerCard(
+        id="worker-src", territory_id="src", name="src", root="src", files=["src/mod.py"]
+    )
+    graph = NeedGraph(
+        nodes={
+            "root": NeedNode(
+                need_id="root",
+                need="original question",
+                resolution="resolved",
+                children=["untouched-need", "reopened-need"],
+                detail=UnresolvedNeed(description="original question"),
+            ),
+            "untouched-need": NeedNode(
+                need_id="untouched-need",
+                need="untouched need",
+                resolution="resolved",
+                detail=UnresolvedNeed(description="untouched need"),
+            ),
+            "reopened-need": NeedNode(
+                need_id="reopened-need",
+                need="find reopened_target",
+                resolution="unresolved",
+                detail=UnresolvedNeed(description="find reopened_target"),
+            ),
+        }
+    )
+    untouched_evidence = Evidence(
+        path="src/untouched.py",
+        line_start=1,
+        line_end=1,
+        quote="def untouched_target():",
+        reason="gen0's own evidence for the untouched need",
+        need_ids=["untouched-need"],
+    )
+    # The reasoner's own verify_evidence_upgrade approval is keyed off this
+    # exact description -- and the worker must actually find real evidence
+    # for `find reopened_target` (matching `reopened_target()` in mod.py
+    # above) or _apply_evidence_upgrade_gate's `not new_evidence` guard
+    # skips verification entirely, same as any need with zero evidence_gain.
+    reasoner = _GroundsOnlyOneNamedNeedReasoner(grounded_description="find reopened_target")
+    synthesizer = _RecordsFinalEvidenceSynthesizer()
+
+    result = LocalCoordinator(
+        tmp_path, [worker], reasoner=reasoner, synthesizer=synthesizer
+    ).ask(
+        "original question",
+        max_rounds=1,
+        initial_graph=graph,
+        initial_evidence=[untouched_evidence],
+        prior_answer="gen0's own verbatim answer",
+        enforce_alignment=True,
+    )
+
+    assert any(
+        item.path == "src/untouched.py" and item.need_ids == ["untouched-need"]
+        for item in result.evidence
+    )
+    # The untouched association bypassed _select_evidence's judgment
+    # entirely -- it never appears in any pool the reasoner was asked to
+    # select from.
+    for pool in reasoner.select_evidence_calls:
+        assert all(item.path != "src/untouched.py" for item in pool)
+
+
+def test_ask_keeps_a_reopened_associations_need_id_intact_when_it_is_grounded_this_retry(
+    tmp_path: Path,
+) -> None:
+    # An item whose ONLY association is a reopened need that DID produce
+    # a GroundedUpdate this retry must survive with that need_id intact --
+    # proving the grounded-verifier signal, not _select_evidence's own
+    # relevance judgment, is what re-validates a reopened association.
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "mod.py").write_text(
+        "def reopened_target():\n    pass\n", encoding="utf-8"
+    )
+    worker = WorkerCard(
+        id="worker-src", territory_id="src", name="src", root="src", files=["src/mod.py"]
+    )
+    graph = NeedGraph(
+        nodes={
+            "root": NeedNode(
+                need_id="root",
+                need="original question",
+                resolution="resolved",
+                children=["reopened-need"],
+                detail=UnresolvedNeed(description="original question"),
+            ),
+            "reopened-need": NeedNode(
+                need_id="reopened-need",
+                need="find reopened_target",
+                resolution="unresolved",
+                detail=UnresolvedNeed(description="find reopened_target"),
+            ),
+        }
+    )
+    reopened_evidence = Evidence(
+        path="src/reopened.py",
+        line_start=1,
+        line_end=1,
+        quote="def reopened_target():",
+        reason="prior evidence for the reopened need, up for re-verification",
+        need_ids=["reopened-need"],
+    )
+    # Must actually find real evidence for `find reopened_target` this
+    # retry (matching mod.py above), or the gate's `not new_evidence`
+    # guard skips verification and grounded_updates stays empty --
+    # falling through the monotonic gate instead of the partition branch
+    # this test exists to exercise.
+    reasoner = _GroundsOnlyOneNamedNeedReasoner(grounded_description="find reopened_target")
+
+    result = LocalCoordinator(tmp_path, [worker], reasoner=reasoner).ask(
+        "original question",
+        max_rounds=1,
+        initial_graph=graph,
+        initial_evidence=[reopened_evidence],
+        prior_answer="gen0's own verbatim answer",
+        enforce_alignment=True,
+    )
+
+    assert any(
+        item.path == "src/reopened.py" and item.need_ids == ["reopened-need"]
+        for item in result.evidence
+    )
+
+
+def test_ask_excludes_a_reopened_association_never_grounded_before_select_evidence_runs(
+    tmp_path: Path,
+) -> None:
+    # An item whose ONLY association is a reopened need that produced NO
+    # GroundedUpdate this retry must be excluded from the final evidence,
+    # and must never even reach _select_evidence -- a coarse relevance
+    # judgment cannot substitute for real grounding (the qibo -24 point
+    # regression: the final _select_evidence call, judging the whole
+    # mixed pool fresh, picked the wrong evidence over what was correctly
+    # routed-to but never itself verified).
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "mod.py").write_text(
+        "def grounds_target():\n    pass\n\n\ndef reopened_target():\n    pass\n",
+        encoding="utf-8",
+    )
+    worker = WorkerCard(
+        id="worker-src", territory_id="src", name="src", root="src", files=["src/mod.py"]
+    )
+    graph = NeedGraph(
+        nodes={
+            "root": NeedNode(
+                need_id="root",
+                need="original question",
+                resolution="resolved",
+                children=["grounds-need", "reopened-need"],
+                detail=UnresolvedNeed(description="original question"),
+            ),
+            "grounds-need": NeedNode(
+                need_id="grounds-need",
+                need="find grounds_target",
+                resolution="unresolved",
+                detail=UnresolvedNeed(description="find grounds_target"),
+            ),
+            "reopened-need": NeedNode(
+                need_id="reopened-need",
+                need="find reopened_target",
+                resolution="unresolved",
+                detail=UnresolvedNeed(description="find reopened_target"),
+            ),
+        }
+    )
+    ungrounded_evidence = Evidence(
+        path="src/reopened_only.py",
+        line_start=1,
+        line_end=1,
+        quote="def reopened_target():",
+        reason="old evidence for the reopened need, never reverified",
+        need_ids=["reopened-need"],
+    )
+    # `grounds-need` must actually find real evidence (matching
+    # `grounds_target()` in mod.py above) so grounded_updates is non-empty
+    # and the trace reaches the partition branch this test targets --
+    # `reopened-need` deliberately investigates real evidence too (its own
+    # matching symbol above) but is never approved, exercising the exact
+    # "found evidence, need's association still excluded" pattern.
+    reasoner = _GroundsOnlyOneNamedNeedReasoner(grounded_description="find grounds_target")
+
+    result = LocalCoordinator(tmp_path, [worker], reasoner=reasoner).ask(
+        "original question",
+        max_rounds=1,
+        initial_graph=graph,
+        initial_evidence=[ungrounded_evidence],
+        prior_answer="gen0's own verbatim answer",
+        enforce_alignment=True,
+    )
+
+    assert all(item.path != "src/reopened_only.py" for item in result.evidence)
+    for pool in reasoner.select_evidence_calls:
+        assert all(item.path != "src/reopened_only.py" for item in pool)
+
+
+def test_ask_reduces_shared_evidence_to_its_untouched_need_id_when_its_sibling_is_ungrounded(
+    tmp_path: Path,
+) -> None:
+    # The shared-evidence rescue: an item supporting both a reopened need
+    # with NO GroundedUpdate and an untouched need must still survive in
+    # the final evidence pool, with need_ids reduced to just the
+    # untouched need -- proving the untouched claim's support cannot be
+    # deleted by its reopened sibling's own fate.
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "mod.py").write_text(
+        "def grounds_target():\n    pass\n\n\ndef reopened_target():\n    pass\n",
+        encoding="utf-8",
+    )
+    worker = WorkerCard(
+        id="worker-src", territory_id="src", name="src", root="src", files=["src/mod.py"]
+    )
+    graph = NeedGraph(
+        nodes={
+            "root": NeedNode(
+                need_id="root",
+                need="original question",
+                resolution="resolved",
+                children=["grounds-need", "reopened-need", "untouched-need"],
+                detail=UnresolvedNeed(description="original question"),
+            ),
+            "grounds-need": NeedNode(
+                need_id="grounds-need",
+                need="find grounds_target",
+                resolution="unresolved",
+                detail=UnresolvedNeed(description="find grounds_target"),
+            ),
+            "reopened-need": NeedNode(
+                need_id="reopened-need",
+                need="find reopened_target",
+                resolution="unresolved",
+                detail=UnresolvedNeed(description="find reopened_target"),
+            ),
+            "untouched-need": NeedNode(
+                need_id="untouched-need",
+                need="untouched need",
+                resolution="resolved",
+                detail=UnresolvedNeed(description="untouched need"),
+            ),
+        }
+    )
+    shared_evidence = Evidence(
+        path="src/shared.py",
+        line_start=1,
+        line_end=1,
+        quote="def shared_target():",
+        reason="supports both the reopened and the untouched need",
+        need_ids=["reopened-need", "untouched-need"],
+    )
+    # `grounds-need` must actually find real evidence (matching
+    # `grounds_target()` in mod.py above) so grounded_updates is non-empty
+    # and the trace reaches the partition branch this test targets.
+    reasoner = _GroundsOnlyOneNamedNeedReasoner(grounded_description="find grounds_target")
+
+    result = LocalCoordinator(tmp_path, [worker], reasoner=reasoner).ask(
+        "original question",
+        max_rounds=1,
+        initial_graph=graph,
+        initial_evidence=[shared_evidence],
+        prior_answer="gen0's own verbatim answer",
+        enforce_alignment=True,
+    )
+
+    assert any(
+        item.path == "src/shared.py" and item.need_ids == ["untouched-need"]
+        for item in result.evidence
+    )
+
+
 def test_closure_check_survives_a_partial_verdict_creating_a_gap_node(tmp_path: Path) -> None:
     # Regression test: a "partial" closure verdict inserts a new gap node
     # straight into graph.nodes (local.py's closure-check block) while
@@ -2173,8 +2700,11 @@ def test_apply_evidence_upgrade_gate_covers_gen0_and_retry_born_nodes_and_is_ine
 
     # A node with no entry in recovery.epistemic_states at all -- the gate
     # still fires (no membership check gets in its way), defaulting its
-    # context to "open"; an unapproved verdict reverts the resolution to
-    # unresolved rather than letting an unsupported upgrade through.
+    # context to "open"; an unapproved verdict is a pure no-op -- it must
+    # NOT revert the resolution check_need_resolution already produced
+    # (Evidence admissibility != need completion: this gate only ever
+    # decides whether a GroundedUpdate exists, never resolved/partial/
+    # unresolved, which stays check_need_resolution's sole call).
     resolution, update = coordinator._apply_evidence_upgrade_gate(
         resolution=NeedResolution(status="partial"),
         need=UnresolvedNeed(description="retry-born need"),
@@ -2184,7 +2714,7 @@ def test_apply_evidence_upgrade_gate_covers_gen0_and_retry_born_nodes_and_is_ine
         question="q",
         enforce_alignment=True,
     )
-    assert resolution.status == "unresolved"
+    assert resolution.status == "partial"
     assert update is None
     assert reasoner.calls == [
         ("gen0 need", "absence_supported"),
@@ -2205,6 +2735,75 @@ def test_apply_evidence_upgrade_gate_covers_gen0_and_retry_born_nodes_and_is_ine
         enforce_alignment=False,
     )
     assert resolution.status == "resolved"
+    assert update is None
+    assert reasoner.calls == []
+
+
+def test_apply_evidence_upgrade_gate_can_ground_a_still_unresolved_need(tmp_path: Path) -> None:
+    # The core new capability this decoupling exists for -- a direct
+    # regression test for the live seaborn trace that motivated it: a
+    # worker found fit_poly's own direct call into bootstrap(), a
+    # specific, directly-supported claim -- but the broader `boot_method`
+    # need itself never reached resolved/partial (still missing the full
+    # picture), so check_need_resolution correctly keeps it unresolved
+    # (investigation should continue). Under the OLD coupled gate, an
+    # "unresolved" resolution.status short-circuited the gate entirely,
+    # so this specific, correct claim could never produce a GroundedUpdate
+    # and was silently unusable in the final answer. It must now.
+    reasoner = _RecordsEvidenceUpgradeCallsReasoner(
+        {"boot_method": EvidenceUpgradeVerdict(
+            approved=True,
+            supported_claim="fit_poly calls algo.bootstrap directly",
+            evidence_ids=["0"],
+        )}
+    )
+    coordinator = LocalCoordinator(tmp_path, [], reasoner=reasoner)
+    evidence = [
+        Evidence(path="seaborn/regression.py", line_start=1, line_end=2, quote="x", reason="r")
+    ]
+
+    resolution, update = coordinator._apply_evidence_upgrade_gate(
+        resolution=NeedResolution(status="unresolved"),
+        need=UnresolvedNeed(description="boot_method"),
+        need_id="boot_method",
+        new_evidence=evidence,
+        recovery=RecoveryState(),
+        question="q",
+        enforce_alignment=True,
+    )
+
+    # Investigation state is untouched -- still unresolved, so the round
+    # loop keeps searching -- while the claim itself is grounded.
+    assert resolution.status == "unresolved"
+    assert update == GroundedUpdate(
+        need_id="boot_method",
+        supported_claim="fit_poly calls algo.bootstrap directly",
+        evidence_ids=["0"],
+        prior_epistemic_state="open",
+    )
+
+
+def test_apply_evidence_upgrade_gate_skips_the_verifier_call_with_no_new_evidence(
+    tmp_path: Path,
+) -> None:
+    # Nothing new to verify needs no verification call -- avoids a
+    # pointless LLM call every round for a need with zero evidence_gain,
+    # now that the gate is no longer implicitly guarded by
+    # resolution.status ever reaching resolved/partial.
+    reasoner = _RecordsEvidenceUpgradeCallsReasoner({})
+    coordinator = LocalCoordinator(tmp_path, [], reasoner=reasoner)
+
+    resolution, update = coordinator._apply_evidence_upgrade_gate(
+        resolution=NeedResolution(status="unresolved"),
+        need=UnresolvedNeed(description="some need"),
+        need_id="n1",
+        new_evidence=[],
+        recovery=RecoveryState(),
+        question="q",
+        enforce_alignment=True,
+    )
+
+    assert resolution.status == "unresolved"
     assert update is None
     assert reasoner.calls == []
 

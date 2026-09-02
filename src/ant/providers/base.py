@@ -64,10 +64,17 @@ class WorkerReasoner(Protocol):
     ) -> EvidenceUpgradeVerdict:
         """Grounded Fast Repair's Evidence Upgrade Gate: called only during
         a fast-repair `ask()` call (`enforce_alignment=True`), for every
-        leaf need whose `check_need_resolution` verdict this round is
-        "resolved"/"partial" -- gen0-carried-over or born during this same
-        retry alike, no distinction (see LocalCoordinator.
-        _apply_evidence_upgrade_gate). `epistemic_state` is
+        leaf need with any new_evidence this round -- gen0-carried-over or
+        born during this same retry alike, no distinction, and regardless
+        of what `check_need_resolution` decided this round (see
+        LocalCoordinator._apply_evidence_upgrade_gate). Deliberately
+        decoupled from that resolved/partial/unresolved verdict: a need
+        can stay unresolved (investigation should keep going) while a
+        specific piece of its new evidence is still directly, verifiably
+        supported and therefore safe to admit into the answer --
+        `check_need_resolution` decides whether to keep searching; this
+        decides whether a specific claim may be used. Evidence
+        admissibility != need completion. `epistemic_state` is
         `RecoveryState.epistemic_states.get(need_id, "open")` -- the
         need's grounded standing immediately before this round (an "open"
         need born this retry with no prior proof either way, a gen0 need
@@ -78,7 +85,7 @@ class WorkerReasoner(Protocol):
         establish the entity/relation the need actually asks about -- not
         an adjacent subsystem, a similarly-named symbol, or a different
         mechanism that merely shares vocabulary. Confirmed live this is
-        the dominant fast-repair failure mode: a correct, honest gen0
+        a dominant fast-repair failure mode: a correct, honest gen0
         hedge ("insufficient evidence" / "not in this repo") gets
         replaced by a confident wrong claim once the retry finds
         something adjacent-but-irrelevant and `check_need_resolution`
@@ -87,15 +94,16 @@ class WorkerReasoner(Protocol):
 
         A False `approved` (including on a malformed/unparseable
         response -- never let a parse failure look like a confident
-        upgrade) makes the coordinator revert this round's resolution
-        back to unresolved, so the need keeps whatever epistemic
-        commitment it already had rather than accepting an unsupported
-        upgrade. A True `approved` must include `supported_claim` and
-        `evidence_ids` (string indices into the evidence pool, same
-        convention as UnresolvedNeed.evidence_ids) -- these become a
-        GroundedUpdate, the only channel through which
-        AnswerSynthesizer.synthesize's patch mode may strengthen
-        `prior_answer`'s wording for this need.
+        upgrade) is a pure no-op: no GroundedUpdate, and `resolution` is
+        left exactly as `check_need_resolution` produced it -- this gate
+        never overrides that verdict in either direction. A True
+        `approved` must include `supported_claim` and `evidence_ids`
+        (string indices into the evidence pool, same convention as
+        UnresolvedNeed.evidence_ids) -- these become a GroundedUpdate,
+        the only channel through which AnswerSynthesizer.synthesize's
+        patch mode may strengthen `prior_answer`'s wording for this need,
+        and the only signal `ask()`'s per-claim evidence retention
+        partition treats as "this reopened need's evidence may survive."
         """
         ...
 
@@ -561,6 +569,7 @@ class AnswerSynthesizer(Protocol):
         absence_proofs: list[AbsenceProof] | None = None,
         prior_answer: str = "",
         grounded_updates: list[GroundedUpdate] | None = None,
+        preserved_claims: list[str] | None = None,
     ) -> str:
         """`prior_answer` == "" (every gen0/slow-gen1 call, and every
         fast-repair call before this parameter existed) means full,
@@ -575,6 +584,16 @@ class AnswerSynthesizer(Protocol):
         everywhere `grounded_updates` says nothing, the original epistemic
         commitment (still uncertain, still absent) must survive even
         while its sentence is rephrased.
+
+        `preserved_claims`: descriptions of needs this retry never
+        reopened at all (per-claim evidence retention, see
+        LocalCoordinator.ask's final-synthesis block) -- a reinforcing
+        signal on top of the evidence partition that already keeps their
+        supporting evidence out of `_select_evidence`'s judgment entirely.
+        Named explicitly here so a correctly-preserved claim can't still
+        lose narrative attention to newly-added evidence during synthesis
+        itself; reword freely, but the underlying fact/citation for these
+        must not change.
         """
         ...
 
@@ -587,9 +606,10 @@ class AnswerSynthesizer(Protocol):
         absence_proofs: list[AbsenceProof] | None = None,
         prior_answer: str = "",
         grounded_updates: list[GroundedUpdate] | None = None,
+        preserved_claims: list[str] | None = None,
     ) -> str:
-        """Same `prior_answer`/`grounded_updates` patch-mode contract as
-        `synthesize` -- see its docstring."""
+        """Same `prior_answer`/`grounded_updates`/`preserved_claims`
+        patch-mode contract as `synthesize` -- see its docstring."""
         ...
 
 

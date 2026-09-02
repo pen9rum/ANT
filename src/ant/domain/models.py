@@ -60,6 +60,16 @@ class Evidence(BaseModel):
     worker_id: str = ""
     symbols: list[str] = Field(default_factory=list)
     dense_score: float = 0.0
+    # Which leaf need(s) this item was gathered for -- stamped at
+    # collection time (LocalCoordinator._run_selected_workers) for every
+    # ask() call, gen0/slow-gen1/fast-gen1 alike, so a later fast-repair
+    # retry always has real provenance to work with even for evidence
+    # gen0 itself gathered. gen0/slow-gen1 never read or branch on this
+    # field; only a fast-repair retry's own per-claim evidence retention
+    # (enforce_alignment-gated, see local.py's final-synthesis block)
+    # consumes it. Many-to-many, not a single owner: the same code region
+    # can legitimately answer more than one sub-question.
+    need_ids: list[str] = Field(default_factory=list)
 
 
 class WorkerAction(BaseModel):

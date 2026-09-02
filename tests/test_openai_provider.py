@@ -921,6 +921,48 @@ def test_verify_evidence_upgrade_rejects_approved_true_with_no_supported_claim()
     assert verdict.approved is False
 
 
+def test_verify_evidence_upgrade_shows_every_new_evidence_item_no_count_cap() -> None:
+    # Regression test for a real sphinx trace: a round's own new_evidence
+    # can easily exceed 8 items once multiple workers or a coalition
+    # contribute to the same round, and the need's own exact-match
+    # answer (the literal import statement its description asked for by
+    # name) landed at position 24 -- a fixed [:8] slice silently never
+    # showed it to this verifier at all, not rejected, invisible. Must
+    # show every item, same "zero relevance-based truncation" precedent
+    # as select_evidence's own docstring.
+    provider = OpenAIProvider(model="gpt-4.1")
+    captured = {}
+
+    def fake_responses_json(prompt, max_output_tokens=512):
+        captured["prompt"] = prompt
+        return type("Result", (), {"text": '{"approved": false}'})()
+
+    provider.responses_json = fake_responses_json  # type: ignore[method-assign]
+
+    new_evidence = [
+        Evidence(path=f"src/noise_{index}.py", line_start=1, line_end=2, quote="noise", reason="r")
+        for index in range(23)
+    ] + [
+        Evidence(
+            path="src/decisive.py",
+            line_start=10,
+            line_end=12,
+            quote="from sphinx.util import logging",
+            reason="r",
+        )
+    ]
+
+    provider.verify_evidence_upgrade(
+        need=UnresolvedNeed(description="need"),
+        epistemic_state="open",
+        new_evidence=new_evidence,
+        question="q",
+    )
+
+    assert "[23] src/decisive.py" in captured["prompt"]
+    assert "from sphinx.util import logging" in captured["prompt"]
+
+
 def test_verify_evidence_upgrade_returns_unapproved_with_no_new_evidence() -> None:
     provider = OpenAIProvider(model="gpt-4.1")
     provider.responses_json = lambda prompt, max_output_tokens=512: type(  # type: ignore[method-assign]

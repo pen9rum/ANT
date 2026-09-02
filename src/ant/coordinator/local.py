@@ -330,6 +330,8 @@ class LocalCoordinator:
         forced_first_round_global_search_ids: set[str] | None = None,
         prior_answer: str = "",
         enforce_alignment: bool = False,
+        coverage_gap_node_ids: list[str] | None = None,
+        targeted_need_ids: set[str] | None = None,
     ) -> EvidenceState:
         # max_rounds is a blunt outer safety ceiling only -- the real
         # per-node/per-subgraph stopping logic is the Dependency Graph
@@ -361,8 +363,11 @@ class LocalCoordinator:
         # enforce_alignment, when True, makes every _consolidate_and_commit
         # call this round loop makes additionally reject a new-node
         # proposal that drifts from `question` (not just a duplicate), and
-        # makes every leaf resolution this round loop produces pass
-        # through _apply_evidence_upgrade_gate before being accepted.
+        # runs every round's new evidence through _apply_evidence_upgrade_gate
+        # -- a claim-level admissibility check, independent of whatever
+        # check_need_resolution decided about the need's own
+        # resolved/partial/unresolved status this round (see that gate's
+        # own docstring: Evidence admissibility != need completion).
         evidence: list[Evidence] = list(initial_evidence) if initial_evidence is not None else []
         seen_worker_ids: set[str] = set()
         search = LocalSearchTool(self.repo_root, index_path=self.index_path)
@@ -497,7 +502,14 @@ class LocalCoordinator:
 
                 query = self._query_from_needs(question, [node.detail])
                 observations, round_needs = self._run_selected_workers(
-                    selected, query, question, search, worker_config, evidence, seen_worker_ids
+                    selected,
+                    query,
+                    question,
+                    search,
+                    worker_config,
+                    evidence,
+                    seen_worker_ids,
+                    need_id=need_id,
                 )
                 coalition_formed = len(selected) > 1
                 if coalition_formed:
@@ -586,7 +598,9 @@ class LocalCoordinator:
                         self._query_from_needs(question, [node.detail]), all_files, limit=8
                     )
                     new_evidence = [
-                        item for item in hits if _evidence_key(item) not in pre_round_evidence_keys
+                        item.model_copy(update={"need_ids": [need_id]})
+                        for item in hits
+                        if _evidence_key(item) not in pre_round_evidence_keys
                     ]
                     evidence.extend(new_evidence)
                     resolution_check_need = _resolution_check_need(
@@ -689,6 +703,7 @@ class LocalCoordinator:
                         worker_config,
                         evidence,
                         seen_worker_ids,
+                        need_id=need_id,
                     )
                     worker_ids_used = [bridge.id]
                     # bridge.id is deliberately NOT written to
@@ -1020,8 +1035,73 @@ class LocalCoordinator:
             # is unaffected.
             answer = prior_answer
         else:
-            ranked_evidence = _rank_global_evidence(evidence, question)
-            evidence = _select_evidence(self.reasoner, question, ranked_evidence, search)
+            preserved_claim_descriptions: list[str] | None = None
+            if enforce_alignment:
+                # Per-claim evidence retention: an association with a need
+                # this retry never reopened is preserved unconditionally,
+                # full stop -- it never even reaches _select_evidence's
+                # judgment. An association with a REOPENED need is kept
+                # only if that need actually produced a GroundedUpdate
+                # this retry (the existing Evidence Upgrade Gate, not
+                # _select_evidence, is the real claim-support verifier --
+                # _select_evidence only ever asks "is this chunk worth
+                # showing at all", a display-budget cut, never "does this
+                # chunk support this specific need"). Confirmed live this
+                # distinction matters: a qibo retry correctly routed a
+                # Question Coverage node to the right worker, but the
+                # final _select_evidence call, judging the whole mixed
+                # pool fresh with no memory of what was already grounded,
+                # still picked the wrong evidence over it (-24 points); a
+                # seaborn retry silently lost gen0's own already-good
+                # evidence for an untouched need the same way (-14
+                # points). An item shared between a reopened and an
+                # untouched need keeps its untouched association
+                # regardless of the reopened one's fate -- a rejection (or
+                # simply no GroundedUpdate) for the reopened claim must
+                # never delete support for the untouched one.
+                reopened = _reopened_need_ids(
+                    rounds, coverage_gap_node_ids or [], targeted_need_ids or set()
+                )
+                grounded_this_retry = {update.need_id for update in grounded_updates}
+
+                def _is_untouched(item: Evidence) -> bool:
+                    return bool(item.need_ids) and not (set(item.need_ids) & reopened)
+
+                preserved = [item for item in evidence if _is_untouched(item)]
+                contested = [item for item in evidence if not _is_untouched(item)]
+                revalidated: list[Evidence] = []
+                for item in contested:
+                    kept_ids = {
+                        nid
+                        for nid in item.need_ids
+                        if nid not in reopened or nid in grounded_this_retry
+                    }
+                    if kept_ids:
+                        revalidated.append(
+                            item
+                            if kept_ids == set(item.need_ids)
+                            else item.model_copy(update={"need_ids": sorted(kept_ids)})
+                        )
+                ranked_evidence = _rank_global_evidence(revalidated, question)
+                selected = _select_evidence(self.reasoner, question, ranked_evidence, search)
+                evidence = _dedupe_evidence([*preserved, *selected])
+                # Reinforcing addition on top of the evidence partition
+                # above (which is what actually prevents the loss): name
+                # the untouched needs explicitly in the patch prompt, so a
+                # correctly-preserved claim can't still lose narrative
+                # attention to newly-added evidence during synthesis
+                # itself.
+                preserved_need_ids = {
+                    need_id for item in preserved for need_id in item.need_ids
+                }
+                preserved_claim_descriptions = [
+                    graph.nodes[need_id].detail.description
+                    for need_id in sorted(preserved_need_ids)
+                    if need_id in graph.nodes
+                ] or None
+            else:
+                ranked_evidence = _rank_global_evidence(evidence, question)
+                evidence = _select_evidence(self.reasoner, question, ranked_evidence, search)
             if self.synthesizer and evidence:
                 coalition_workers = _last_coalition_workers(rounds)
                 if coalition_workers:
@@ -1032,6 +1112,7 @@ class LocalCoordinator:
                         absence_proofs=absence_proofs,
                         prior_answer=prior_answer,
                         grounded_updates=grounded_updates,
+                        preserved_claims=preserved_claim_descriptions,
                     )
                 else:
                     answer = self.synthesizer.synthesize(
@@ -1040,7 +1121,31 @@ class LocalCoordinator:
                         absence_proofs=absence_proofs,
                         prior_answer=prior_answer,
                         grounded_updates=grounded_updates,
+                        preserved_claims=preserved_claim_descriptions,
                     )
+        if self.synthesizer and not answer.strip():
+            # A blank final answer is never a legitimate output once a real
+            # synthesizer was actually in play -- it arises either when
+            # `evidence` ended up empty (nothing to synthesize from at all,
+            # e.g. routing never reached the right part of the repo) or
+            # when the synthesizer had evidence but judged none of it
+            # directly responsive and produced empty text rather than
+            # saying so (confirmed live: a real gen0 trace had 16 evidence
+            # items, none of them relevant -- all from doc/tutorial-builder
+            # and example scripts, none from the actual source module the
+            # question was about -- and synthesize() returned "" instead of
+            # an honest hedge). An explicit abstention is strictly more
+            # useful than silence in both cases, and this applies uniformly
+            # to every caller with a synthesizer configured (gen0,
+            # slow-gen1, fast-gen1 alike), not just Grounded Fast Repair.
+            # Guarded on `self.synthesizer`: a coordinator with none (e.g.
+            # run_batch's own heuristic-only mode) never attempts synthesis
+            # at all, and "" there is the deliberate signal
+            # _fallback_prediction's caller already relies on -- not a bug.
+            answer = (
+                "The available evidence does not directly and reliably answer this "
+                "question -- no claim could be confidently supported from what was found."
+            )
         usage = (
             self.synthesizer.drain_usage() if isinstance(self.synthesizer, UsageReporter) else None
         )
@@ -1185,6 +1290,8 @@ class LocalCoordinator:
             forced_first_round_global_search_ids=seed.forced_global_search_ids or None,
             prior_answer=prior_state.answer,
             enforce_alignment=True,
+            coverage_gap_node_ids=coverage_gap_node_ids,
+            targeted_need_ids=seed.targeted_need_ids,
         )
 
     def _run_selected_workers(
@@ -1196,6 +1303,7 @@ class LocalCoordinator:
         worker_config: WorkerRunConfig,
         evidence: list[Evidence],
         seen_worker_ids: set[str],
+        need_id: str = "",
     ) -> tuple[list[WorkerObservation], list[UnresolvedNeed]]:
         """Runs each selected worker in turn, mutating `evidence` and
         `seen_worker_ids` in place as it goes rather than batching updates
@@ -1203,6 +1311,16 @@ class LocalCoordinator:
         and an escalation tactic reusing this helper later in the same
         task -- sees what earlier workers already found this round, exactly
         as the original inline round loop did.
+
+        `need_id`: stamped onto every Evidence item gathered this call as
+        its provenance (see Evidence.need_ids' own docstring) -- runs for
+        every ask() call, gen0/slow-gen1/fast-gen1 alike, so a later
+        fast-repair retry always has real per-claim provenance to work
+        with, even for evidence gen0 itself gathered. gen0/slow-gen1 never
+        read this field. Optional/empty for callers with no single owning
+        need (e.g. a global-fallback search not scoped to one leaf) --
+        an untagged item simply can't be preserved by fast-repair's
+        per-claim retention later and falls back to today's behavior.
         """
         observations: list[WorkerObservation] = []
         round_needs: list[UnresolvedNeed] = []
@@ -1214,7 +1332,13 @@ class LocalCoordinator:
                 config=worker_config,
             )
             worker_evidence = [
-                item.model_copy(update={"worker_id": worker.id}) for item in observation.evidence
+                item.model_copy(
+                    update={
+                        "worker_id": worker.id,
+                        "need_ids": [need_id] if need_id else [],
+                    }
+                )
+                for item in observation.evidence
             ]
             observation.evidence = worker_evidence
             evidence.extend(worker_evidence)
@@ -1390,31 +1514,52 @@ class LocalCoordinator:
         question: str,
         enforce_alignment: bool,
     ) -> tuple[NeedResolution, GroundedUpdate | None]:
-        """Grounded Fast Repair's Evidence Upgrade Gate: called right
-        after check_need_resolution, before its verdict is committed to
-        the node -- a False/no-op result must land before node.resolution/
-        node.detail get overwritten with an unsupported "partial" refined
-        need, not after.
+        """Grounded Fast Repair's Evidence Upgrade Gate: claim-level
+        evidence ADMISSIBILITY, deliberately decoupled from
+        check_need_resolution's need-level COMPLETION judgment above --
+        two different questions that used to share one threshold
+        (`resolution.status in ("resolved", "partial")`), which meant a
+        need stuck at "unresolved" could never contribute a single
+        verified claim to the final answer even when a specific piece of
+        its new evidence was, on its own, directly and correctly
+        supported. Confirmed live on a real seaborn trace: a worker found
+        `fit_poly`'s direct call into `bootstrap()` -- textbook-clean
+        supporting evidence for "how does bootstrap resampling flow
+        through the regression CI pipeline" -- but the broader
+        `boot_method` need itself never reached "resolved" (still missing
+        the full picture), so the coupled gate discarded the evidence
+        entirely instead of admitting just that claim. An audit across
+        three repos found this is not an edge case: 16/18 fast-repair
+        retries that did any real re-synthesis hit "found new evidence
+        for a need, need never reached resolved/partial, evidence
+        excluded" at least once.
 
-        No-op (resolution passed through unchanged, no GroundedUpdate)
-        unless `enforce_alignment` is True (i.e. this is a Grounded Fast
-        Repair retry) AND `resolution.status` is "resolved"/"partial" --
-        an "unresolved" verdict needs no gate, it already preserves
-        whatever epistemic commitment the need had. When it does run, it
-        covers gen0-carried-over AND retry-born leaf needs identically
-        (`recovery.epistemic_states.get(need_id, "open")` -- a need never
-        seeded there, e.g. one born mid-retry, is simply "open", not
-        exempt from the gate).
+        `resolution` passes through this gate completely untouched in
+        every case -- this method only ever decides whether new_evidence
+        produces a GroundedUpdate, never whether resolution is
+        resolved/partial/unresolved (that remains check_need_resolution's
+        sole responsibility; investigation continues or stops purely on
+        its own verdict, independent of what this gate approves). No-op
+        (no GroundedUpdate) unless `enforce_alignment` is True (i.e. this
+        is a Grounded Fast Repair retry) AND there is new_evidence to
+        judge this round -- nothing new to verify needs no verification
+        call. Covers gen0-carried-over AND retry-born leaf needs
+        identically (`recovery.epistemic_states.get(need_id, "open")` --
+        a need never seeded there, e.g. one born mid-retry, is simply
+        "open", not exempt from the gate), and runs regardless of
+        whether check_need_resolution called this same round judged the
+        need resolved, partial, or still unresolved.
 
-        An unapproved verdict reverts `resolution` to unresolved,
-        preserving the need's prior epistemic commitment instead of
-        accepting an unsupported upgrade. An approved verdict passes
-        `resolution` through unchanged and returns a GroundedUpdate for
-        the caller to accumulate -- the only channel through which
-        synthesize()'s patch mode may later strengthen this need's
-        claim in the final answer.
+        An approved verdict returns a GroundedUpdate for the caller to
+        accumulate -- the only channel through which synthesize()'s patch
+        mode may later strengthen this need's claim in the final answer,
+        and the only source `_reopened_need_ids`'s partition logic (see
+        `ask()`) treats as "this reopened need's evidence may survive
+        into the answer." An unapproved verdict is a pure no-op: no
+        GroundedUpdate, and `resolution` is returned exactly as passed
+        in.
         """
-        if not enforce_alignment or resolution.status not in ("resolved", "partial"):
+        if not enforce_alignment or not new_evidence:
             return resolution, None
         epistemic_state = recovery.epistemic_states.get(need_id, "open")
         verdict = self.reasoner.verify_evidence_upgrade(
@@ -1424,7 +1569,7 @@ class LocalCoordinator:
             question=question,
         )
         if not verdict.approved:
-            return NeedResolution(status="unresolved"), None
+            return resolution, None
         return resolution, GroundedUpdate(
             need_id=need_id,
             supported_claim=verdict.supported_claim,
@@ -2899,22 +3044,52 @@ def _evidence_key(item: Evidence) -> tuple[str, int, int, str]:
     return (item.path, item.line_start, item.line_end, item.quote)
 
 
+def _reopened_need_ids(
+    rounds: list[PlanningRound],
+    coverage_gap_node_ids: list[str],
+    targeted_need_ids: set[str],
+) -> set[str]:
+    """Which need_ids this fast-repair retry actually reopened -- pure,
+    deterministic, no new LLM call. A need counts as reopened if it
+    received real worker execution this retry (search activity actually
+    happened against it), if it's a newly-injected Question Coverage gap
+    node (reopened by construction -- see _inject_coverage_gap_nodes), or
+    if it was explicitly targeted by the repair plan (seed.
+    targeted_need_ids). Everything else is untouched this retry, and its
+    evidence must be preserved -- see the final-synthesis block in ask()
+    for how this feeds the per-claim evidence retention gate.
+    """
+    executed = {
+        trace.need_id for round_state in rounds for trace in round_state.node_executions
+    }
+    return executed | set(coverage_gap_node_ids) | targeted_need_ids
+
+
 def _dedupe_evidence(evidence: list[Evidence]) -> list[Evidence]:
     # See the matching note on autonomous._dedupe: keep the first-seen copy
     # of a (path, lines, quote) duplicate, but merge a later duplicate's
     # dense_score forward rather than silently dropping it, so a chunk two
     # different workers/rounds both surfaced -- one lexically, one via
     # dense_search -- doesn't lose the dense signal to whichever copy
-    # happened to arrive first.
+    # happened to arrive first. need_ids is unioned the same way -- the
+    # same code region can legitimately be gathered for more than one
+    # need (once per round it's independently surfaced), and fast-repair's
+    # per-claim evidence retention (see local.py's final-synthesis block)
+    # depends on this union being complete: keeping only the first
+    # duplicate's need_ids would let a later need's real association with
+    # this exact chunk silently disappear.
     index_by_key: dict[tuple[str, int, int, str], int] = {}
     deduped: list[Evidence] = []
     for item in evidence:
         key = _evidence_key(item)
         if key in index_by_key:
             existing = deduped[index_by_key[key]]
-            if item.dense_score > existing.dense_score:
+            if item.dense_score > existing.dense_score or item.need_ids:
                 deduped[index_by_key[key]] = existing.model_copy(
-                    update={"dense_score": item.dense_score}
+                    update={
+                        "dense_score": max(item.dense_score, existing.dense_score),
+                        "need_ids": sorted(set(existing.need_ids) | set(item.need_ids)),
+                    }
                 )
             continue
         index_by_key[key] = len(deduped)
@@ -3018,6 +3193,14 @@ def _reopen_referenced_evidence(
     search: LocalSearchTool,
     context_lines: int = 30,
 ) -> list[Evidence]:
+    """Preserves `source.need_ids` on the reopened region -- a fresh
+    `search.read_region()` object defaults to none of its own, and
+    without copying the source's forward, a chunk that already carried
+    real per-claim provenance (see Evidence.need_ids) would silently lose
+    it the moment coalition cross-check widens its context, later
+    misreading it as never-tagged in ask()'s per-claim evidence
+    retention partition.
+    """
     reopened: list[Evidence] = []
     seen: set[tuple[str, int]] = set()
     for need in needs:
@@ -3042,6 +3225,7 @@ def _reopen_referenced_evidence(
                     update={
                         "worker_id": source.worker_id,
                         "reason": f"Reopened for coalition cross-check: {source.reason}".strip(),
+                        "need_ids": list(source.need_ids),
                     }
                 )
             )
@@ -3058,7 +3242,12 @@ def _reopen_evidence_by_index(
     _select_evidence's own expand requests. Kept separate from
     _reopen_referenced_evidence above (which dedupes by source location
     across several needs' evidence_ids) since this one resolves a single
-    selection call's own flagged indices.
+    selection call's own flagged indices. Also preserves `source.need_ids`
+    on the reopened region for the same reason as that function's own
+    docstring: an item can only reach this expand step after already
+    surviving ask()'s per-claim retention partition, and losing its
+    need_ids here would erase that already-settled provenance right
+    before the item lands in the final answer.
     """
     reopened: dict[int, Evidence] = {}
     for raw_index in indices:
@@ -3077,6 +3266,7 @@ def _reopen_evidence_by_index(
             update={
                 "worker_id": source.worker_id,
                 "reason": f"Reopened for deeper context: {source.reason}".strip(),
+                "need_ids": list(source.need_ids),
             }
         )
     return reopened

@@ -696,9 +696,21 @@ class OpenAIProvider:
         # call is the extra checkpoint specifically for that.
         if not new_evidence:
             return EvidenceUpgradeVerdict(approved=False)
+        # No count cap on `new_evidence`, matching select_evidence's own
+        # "zero relevance-based truncation" precedent (see that method's
+        # docstring) -- a fixed [:8] slice here silently hid an item from
+        # this verifier whenever a round's own new_evidence exceeded 8
+        # (routine once multiple workers or a coalition contribute to the
+        # same round), regardless of how directly that item answered the
+        # need. Confirmed live on a real sphinx trace: the exact import
+        # statement the need's own description asked for by name landed
+        # at position 24 of that round's new_evidence and was silently
+        # never shown to this verifier at all -- not rejected, invisible.
+        # Per-item `[:900]` truncation (unchanged) keeps any one round's
+        # prompt bounded the same way select_evidence's own pool is.
         evidence_text = "\n".join(
             f"[{index}] {item.path}:{item.line_start}-{item.line_end}\n{item.quote[:900]}"
-            for index, item in enumerate(new_evidence[:8])
+            for index, item in enumerate(new_evidence)
         )
         prompt = (
             "This need was previously judged with epistemic_state="
@@ -707,8 +719,10 @@ class OpenAIProvider:
             "exists in this repo; \"absence_supported\" means a prior "
             "exhaustive search's evidence supports that it does NOT exist; "
             "\"insufficient_evidence\" means a prior search was inconclusive. "
-            "A later round now claims this need is resolved/partial based on "
-            "the evidence below. Judge strictly: does this evidence DIRECTLY "
+            "New evidence was just gathered for this need (whether or not the "
+            "need itself is considered fully answered yet is irrelevant here -- "
+            "judge only the evidence below on its own). Judge strictly: does "
+            "this evidence DIRECTLY "
             "establish the specific entity/relation the need actually asks "
             "about? Answer 'approved' only if it names/shows that exact "
             "thing -- an adjacent subsystem, a similarly-named symbol, or a "
@@ -1459,6 +1473,7 @@ class OpenAIProvider:
         absence_proofs: list[AbsenceProof] | None = None,
         prior_answer: str = "",
         grounded_updates: list[GroundedUpdate] | None = None,
+        preserved_claims: list[str] | None = None,
     ) -> str:
         # No evidence[:12] cut here: _select_evidence already did the one
         # relevance judgment call that decides what the synthesizer should
@@ -1477,7 +1492,7 @@ class OpenAIProvider:
             f"Question: {question}\n"
             f"Evidence:\n{evidence_text}\n"
             f"{_completeness_section(completeness_text)}"
-            f"{_patch_section(prior_answer, grounded_updates)}"
+            f"{_patch_section(prior_answer, grounded_updates, preserved_claims)}"
         )
         return self.responses_text(prompt, max_output_tokens=SYNTHESIS_MAX_OUTPUT_TOKENS).text
 
@@ -1490,6 +1505,7 @@ class OpenAIProvider:
         absence_proofs: list[AbsenceProof] | None = None,
         prior_answer: str = "",
         grounded_updates: list[GroundedUpdate] | None = None,
+        preserved_claims: list[str] | None = None,
     ) -> str:
         evidence_text = "\n".join(_format_evidence_block(item) for item in evidence)
         completeness_text = _completeness_notes(absence_proofs)
@@ -1503,7 +1519,7 @@ class OpenAIProvider:
             f"Question: {question}\n"
             f"Evidence:\n{evidence_text}\n"
             f"{_completeness_section(completeness_text)}"
-            f"{_patch_section(prior_answer, grounded_updates)}"
+            f"{_patch_section(prior_answer, grounded_updates, preserved_claims)}"
         )
         return self.responses_text(prompt, max_output_tokens=SYNTHESIS_MAX_OUTPUT_TOKENS).text
 
@@ -1628,7 +1644,11 @@ def _patch_instruction(prior_answer: str) -> str:
     )
 
 
-def _patch_section(prior_answer: str, grounded_updates: list[GroundedUpdate] | None) -> str:
+def _patch_section(
+    prior_answer: str,
+    grounded_updates: list[GroundedUpdate] | None,
+    preserved_claims: list[str] | None = None,
+) -> str:
     if not prior_answer:
         return ""
     lines = [f"Prior answer:\n{prior_answer}\n"]
@@ -1646,6 +1666,18 @@ def _patch_section(prior_answer: str, grounded_updates: list[GroundedUpdate] | N
             "Newly grounded updates: (none -- no claim in the prior answer "
             "was verified strongly enough to upgrade; keep every epistemic "
             "commitment as the prior answer stated it)\n"
+        )
+    if preserved_claims:
+        # Reinforcing signal on top of the evidence partition that already
+        # keeps this evidence out of _select_evidence's judgment entirely
+        # (see LocalCoordinator.ask's final-synthesis block) -- named here
+        # explicitly so these claims can't still lose narrative attention
+        # to newly-added evidence during synthesis itself.
+        claim_lines = "\n".join(f"- {claim}" for claim in preserved_claims)
+        lines.append(
+            "Untouched this retry (the ONLY claims you may reword, never "
+            "change the underlying fact or citation for):\n"
+            f"{claim_lines}\n"
         )
     return "".join(lines)
 
