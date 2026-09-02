@@ -685,6 +685,21 @@ class LocalCoordinator:
                             need_reduction=0,
                         )
                     )
+                    # Every other node_executions.append() site sets this
+                    # need_id's own entry in resolution_results right
+                    # alongside its own trace -- this is the one branch
+                    # that skipped it (nothing new happened, so nothing
+                    # "to record"), but touched_this_round below is built
+                    # from node_executions alone, and _resolution_advanced
+                    # unconditionally indexes resolution_results for every
+                    # touched need_id. Confirmed live: a real yt-dlp trace
+                    # crashed with KeyError the first time a need hit this
+                    # exact skip branch, because nothing else in this round
+                    # happened to also touch it through a path that does
+                    # set the entry. node.resolution is already this need's
+                    # current, real status (unchanged by this no-op) --
+                    # not a placeholder.
+                    resolution_results[need_id] = NeedResolution(status=node.resolution)
                     continue
                 if tactic == "temporary_bridge":
                     tried_worker_ids: set[str] = set()

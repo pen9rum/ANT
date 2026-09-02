@@ -2572,6 +2572,112 @@ def test_ask_tags_the_global_fallback_special_tactics_evidence_with_need_ids(
     assert all(item.need_ids == ["root"] for item in state.evidence)
 
 
+def test_ask_does_not_crash_when_a_different_episode_member_hits_an_already_tried_tactic(
+    tmp_path: Path,
+) -> None:
+    # Regression test for a real crash on a fresh yt-dlp gen0/fast-gen1
+    # run (KeyError: 'need2'): `episode.used_special_tactics` is tracked
+    # per EPISODE, not per need_id, and a stuck episode can have several
+    # member need_ids. Round 0: need_a (a real member) executes
+    # global_fallback for real -- this also sets resolution_results
+    # ["need_a"] via the normal per-need epilogue, and marks
+    # "global_fallback" used for the WHOLE episode. Round 1: need_b (a
+    # DIFFERENT member of the SAME episode, touched for the very first
+    # time) gets proposed the same already-used tactic -- hits the
+    # "already tried, skip" branch (`if tactic in
+    # episode.used_special_tactics`), which appends a NodeExecutionTrace
+    # but, unlike every other node_executions.append() site, never sets
+    # need_b's own entry in resolution_results. touched_this_round is
+    # built from node_executions alone, and _resolution_advanced
+    # unconditionally indexes resolution_results for every touched
+    # need_id -- need_b has no entry at all (its only prior state was
+    # never set), so this raised KeyError and crashed the whole run.
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "findme.py").write_text(
+        "def target_function():\n    pass\n", encoding="utf-8"
+    )
+    worker = WorkerCard(
+        id="worker-src",
+        territory_id="src",
+        name="src",
+        root="src",
+        searchable_terms=["target_function"],
+        files=["src/findme.py"],
+    )
+    graph = NeedGraph(
+        nodes={
+            "need_a": NeedNode(
+                need_id="need_a",
+                need="Where is target_function defined? (a)",
+                detail=UnresolvedNeed(description="Where is target_function defined? (a)"),
+            ),
+            "need_b": NeedNode(
+                need_id="need_b",
+                need="Where is target_function defined? (b)",
+                detail=UnresolvedNeed(description="Where is target_function defined? (b)"),
+            ),
+        }
+    )
+
+    class _RunsOneMemberThenTheOtherReasoner(_PassthroughLookupsReasoner):
+        def __init__(self) -> None:
+            self.round_index = 0
+
+        def observe(self, *, question, worker_id, territory_id, evidence):
+            return WorkerObservation(worker_id=worker_id, territory_id=territory_id)
+
+        def check_need_resolution(self, *, need, new_evidence, question):
+            return NeedResolution(status="unresolved")
+
+        def plan_round(
+            self,
+            *,
+            question,
+            graph,
+            resolution_results,
+            evidence,
+            workers,
+            memory_hints,
+            frontier,
+            incomplete_parents,
+            cross_repo_experience,
+            validation_feedback="",
+            repair_guidance="",
+            stuck_tried_workers=None,
+            candidate_probes=None,
+        ):
+            # Round 0: need_a executes the tactic for real. Round 1:
+            # need_b (never touched before) is proposed the SAME
+            # already-used tactic for the first time -- by round index,
+            # not frontier state (need_a is still "ready" in round 1 too,
+            # one quiet round short of leaving the frontier).
+            target = "need_a" if self.round_index == 0 else "need_b"
+            self.round_index += 1
+            return RoundPlan(special_tactics={target: "global_fallback"})
+
+    recovery = RecoveryState(
+        stuck_episodes={
+            "ep1": StuckEpisode(episode_id="ep1", members={"need_a", "need_b"})
+        },
+        episode_by_need_id={"need_a": "ep1", "need_b": "ep1"},
+    )
+
+    state = LocalCoordinator(
+        tmp_path, [worker], reasoner=_RunsOneMemberThenTheOtherReasoner()
+    ).ask(
+        "Where is target_function defined?",
+        max_rounds=2,
+        initial_graph=graph,
+        initial_recovery=recovery,
+    )
+
+    need_b_executions = [
+        ne for ne in state.rounds[1].node_executions if ne.need_id == "need_b"
+    ]
+    assert len(need_b_executions) == 1
+    assert need_b_executions[0].evidence_gain == 0
+
+
 class _StubbornlyReassignsTriedWorkerReasoner(_PassthroughLookupsReasoner):
     """Never escalates a stuck need on its own -- keeps proposing a plain
     reassignment of the same single known worker for ready AND
