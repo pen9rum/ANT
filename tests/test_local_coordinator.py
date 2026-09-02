@@ -2399,6 +2399,75 @@ def test_ask_does_not_double_execute_global_fallback_when_orchestrator_also_pick
     assert root_executions[0].special_tactic == "global_fallback"
 
 
+def test_ask_tags_the_global_fallback_special_tactics_evidence_with_need_ids(
+    tmp_path: Path,
+) -> None:
+    # Regression test: the Orchestrator's own special_tactics-chosen
+    # "global_fallback" (distinct from forced_first_round_global_search_ids,
+    # which already tagged its own hits) built its Evidence items straight
+    # from search.search()'s raw output and extended `evidence` with them
+    # untagged -- need_ids stayed [] forever, so per-claim evidence
+    # retention could never preserve this need's association with this
+    # evidence even if the need was later grounded (an untagged item can
+    # neither be "preserved" -- requires non-empty need_ids -- nor survive
+    # the reopened-but-grounded check, whose kept_ids comprehension has
+    # nothing to iterate over an empty list).
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "findme.py").write_text(
+        "def target_function():\n    pass\n", encoding="utf-8"
+    )
+    worker = WorkerCard(
+        id="worker-src",
+        territory_id="src",
+        name="src",
+        root="src",
+        searchable_terms=["target_function"],
+        files=["src/findme.py"],
+    )
+
+    class _PicksGlobalFallbackReasoner(_PassthroughLookupsReasoner):
+        def observe(self, *, question, worker_id, territory_id, evidence):
+            return WorkerObservation(worker_id=worker_id, territory_id=territory_id)
+
+        def check_need_resolution(self, *, need, new_evidence, question):
+            return NeedResolution(status="unresolved")
+
+        def plan_round(
+            self,
+            *,
+            question,
+            graph,
+            resolution_results,
+            evidence,
+            workers,
+            memory_hints,
+            frontier,
+            incomplete_parents,
+            cross_repo_experience,
+            validation_feedback="",
+            repair_guidance="",
+            stuck_tried_workers=None,
+            candidate_probes=None,
+        ):
+            return RoundPlan(special_tactics={"root": "global_fallback"})
+
+    recovery = RecoveryState(
+        stuck_episodes={"root": StuckEpisode(episode_id="root", members={"root"})},
+        episode_by_need_id={"root": "root"},
+    )
+
+    state = LocalCoordinator(
+        tmp_path, [worker], reasoner=_PicksGlobalFallbackReasoner()
+    ).ask(
+        "Where is target_function defined?",
+        max_rounds=1,
+        initial_recovery=recovery,
+    )
+
+    assert state.evidence
+    assert all(item.need_ids == ["root"] for item in state.evidence)
+
+
 class _StubbornlyReassignsTriedWorkerReasoner(_PassthroughLookupsReasoner):
     """Never escalates a stuck need on its own -- keeps proposing a plain
     reassignment of the same single known worker for ready AND

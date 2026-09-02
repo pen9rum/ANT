@@ -711,9 +711,12 @@ class LocalCoordinator:
                     # persistent candidate for a future bridge.
                 else:  # global_fallback
                     all_files = sorted({file for worker in self.workers for file in worker.files})
-                    hits = search.search(
-                        self._query_from_needs(question, [node.detail]), all_files, limit=8
-                    )
+                    hits = [
+                        item.model_copy(update={"need_ids": [need_id]})
+                        for item in search.search(
+                            self._query_from_needs(question, [node.detail]), all_files, limit=8
+                        )
+                    ]
                     evidence.extend(hits)
                     observations = [
                         WorkerObservation(
