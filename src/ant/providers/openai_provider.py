@@ -299,9 +299,18 @@ class OpenAIProvider:
         territory_id: str,
         evidence: list[Evidence],
     ) -> WorkerObservation:
+        # No count cap on `evidence`: this decides whether a real gap
+        # exists, a correctness-critical judgment -- an arbitrary
+        # first-8 slice by arrival order (no epistemic meaning) could
+        # silently hide the one item that actually closes the gap, the
+        # same visibility bug confirmed live in verify_evidence_upgrade
+        # (a decisive item at position 24 of a round's own findings was
+        # never shown to that verifier at all). Per-item `[:1200]`
+        # truncation (unchanged) keeps any one call's prompt bounded the
+        # same way select_evidence's own pool is.
         evidence_text = "\n".join(
             f"[{index}] {item.path}:{item.line_start}-{item.line_end}\n{item.quote[:1200]}"
-            for index, item in enumerate(evidence[:8])
+            for index, item in enumerate(evidence)
         )
         prompt = (
             "Identify at most one grounded semantic knowledge gap for a code navigation task. "
@@ -619,9 +628,19 @@ class OpenAIProvider:
         # satisfy it, partially narrow it down, or leave it no better off.
         if not new_evidence:
             return NeedResolution(status="unresolved")
+        # No count cap on `new_evidence`: resolved/partial/unresolved is
+        # the correctness-critical decision this whole method exists
+        # for -- an arbitrary first-8 slice by arrival order (no
+        # epistemic meaning) could silently hide the one item that
+        # actually resolves the need, the same visibility bug confirmed
+        # live in verify_evidence_upgrade (a decisive item at position
+        # 24 of a round's own findings never reached that verifier at
+        # all). Per-item `[:900]` truncation (unchanged) keeps any one
+        # round's prompt bounded the same way select_evidence's own pool
+        # is.
         evidence_text = "\n".join(
             f"[{index}] {item.path}:{item.line_start}-{item.line_end}\n{item.quote[:900]}"
-            for index, item in enumerate(new_evidence[:8])
+            for index, item in enumerate(new_evidence)
         )
         prompt = (
             "Judge whether the NEW evidence below actually resolves the "

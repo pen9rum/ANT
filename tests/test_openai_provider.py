@@ -963,6 +963,79 @@ def test_verify_evidence_upgrade_shows_every_new_evidence_item_no_count_cap() ->
     assert "from sphinx.util import logging" in captured["prompt"]
 
 
+def test_observe_shows_every_evidence_item_no_count_cap() -> None:
+    # Correctness-critical: observe() decides whether a real gap exists at
+    # all. A fixed [:8] slice by arrival order (no epistemic meaning)
+    # could hide the one item that would have shown the gap is already
+    # closed, or hide the one item that reveals it -- same visibility
+    # bug confirmed live in verify_evidence_upgrade.
+    provider = OpenAIProvider(model="gpt-4.1")
+    captured = {}
+
+    def fake_responses_json(prompt, max_output_tokens=512):
+        captured["prompt"] = prompt
+        return type("Result", (), {"text": '{"unresolved_needs": []}'})()
+
+    provider.responses_json = fake_responses_json  # type: ignore[method-assign]
+
+    evidence = [
+        Evidence(path=f"src/noise_{index}.py", line_start=1, line_end=2, quote="noise", reason="r")
+        for index in range(23)
+    ] + [
+        Evidence(
+            path="src/decisive.py",
+            line_start=10,
+            line_end=12,
+            quote="from sphinx.util import logging",
+            reason="r",
+        )
+    ]
+
+    provider.observe(
+        question="q", worker_id="worker-1", territory_id="territory-1", evidence=evidence
+    )
+
+    assert "[23] src/decisive.py" in captured["prompt"]
+    assert "from sphinx.util import logging" in captured["prompt"]
+
+
+def test_check_need_resolution_shows_every_new_evidence_item_no_count_cap() -> None:
+    # Correctness-critical: resolved/partial/unresolved is the decision
+    # this whole method exists for. A fixed [:8] slice by arrival order
+    # (no epistemic meaning) could silently hide the one item that
+    # actually resolves the need -- same visibility bug confirmed live
+    # in verify_evidence_upgrade (a decisive item at position 24 of a
+    # round's own findings never reached that verifier at all).
+    provider = OpenAIProvider(model="gpt-4.1")
+    captured = {}
+
+    def fake_responses_json(prompt, max_output_tokens=512):
+        captured["prompt"] = prompt
+        return type("Result", (), {"text": '{"status": "unresolved"}'})()
+
+    provider.responses_json = fake_responses_json  # type: ignore[method-assign]
+
+    new_evidence = [
+        Evidence(path=f"src/noise_{index}.py", line_start=1, line_end=2, quote="noise", reason="r")
+        for index in range(23)
+    ] + [
+        Evidence(
+            path="src/decisive.py",
+            line_start=10,
+            line_end=12,
+            quote="from sphinx.util import logging",
+            reason="r",
+        )
+    ]
+
+    provider.check_need_resolution(
+        need=UnresolvedNeed(description="need"), new_evidence=new_evidence, question="q"
+    )
+
+    assert "[23] src/decisive.py" in captured["prompt"]
+    assert "from sphinx.util import logging" in captured["prompt"]
+
+
 def test_verify_evidence_upgrade_returns_unapproved_with_no_new_evidence() -> None:
     provider = OpenAIProvider(model="gpt-4.1")
     provider.responses_json = lambda prompt, max_output_tokens=512: type(  # type: ignore[method-assign]
