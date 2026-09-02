@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import warnings
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import cast
@@ -1066,6 +1067,45 @@ class LocalCoordinator:
                     rounds, coverage_gap_node_ids or [], targeted_need_ids or set()
                 )
                 grounded_this_retry = {update.need_id for update in grounded_updates}
+
+                # Provenance telemetry, not a gate: an item with need_ids=[]
+                # can never be preserved (requires non-empty need_ids) nor
+                # survive revalidation (an empty need_ids has nothing for
+                # the kept_ids comprehension below to iterate), so it is
+                # silently unrecoverable here regardless of whether its
+                # owning need was ever grounded. A full audit of every
+                # evidence entry point in this file found exactly one
+                # accepted source for this: _verify_inheritance_completeness's
+                # own `inheritance_evidence`, deliberately untagged because
+                # it is a repository-wide structural fact, not any single
+                # need's claim (see that function's own docstring) --
+                # tagging it to whichever need happened to trigger this
+                # ask() call would be fake provenance, not a fix. Anything
+                # ELSE untagged reaching this point is a real gap in that
+                # audit, not an accepted exception -- warn (never crash) so
+                # a live run surfaces it instead of silently losing
+                # evidence the same way the global_fallback bug did.
+                untagged = [item for item in evidence if not item.need_ids]
+                if untagged:
+                    inheritance_keys = {_evidence_key(item) for item in inheritance_evidence}
+                    unexpected = [
+                        item for item in untagged if _evidence_key(item) not in inheritance_keys
+                    ]
+                    if unexpected:
+                        warnings.warn(
+                            f"{len(unexpected)}/{len(untagged)} untagged evidence item(s) "
+                            "reached fast-repair final synthesis from an unaccounted-for "
+                            "source (_verify_inheritance_completeness explains "
+                            f"{len(untagged) - len(unexpected)} of them) -- these will be "
+                            "unrecoverable under per-claim retention regardless of "
+                            "grounding: "
+                            + ", ".join(
+                                f"{item.path}:{item.line_start}-{item.line_end}"
+                                for item in unexpected[:5]
+                            )
+                            + ("..." if len(unexpected) > 5 else ""),
+                            stacklevel=2,
+                        )
 
                 def _is_untouched(item: Evidence) -> bool:
                     return bool(item.need_ids) and not (set(item.need_ids) & reopened)

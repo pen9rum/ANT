@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 from ant.coordinator import LocalCoordinator
 from ant.coordinator.local import (
     _ESCALATED_NEED_CANDIDATE_LIMIT,
@@ -2039,6 +2041,108 @@ def test_ask_reduces_shared_evidence_to_its_untouched_need_id_when_its_sibling_i
     assert any(
         item.path == "src/shared.py" and item.need_ids == ["untouched-need"]
         for item in result.evidence
+    )
+
+
+def test_ask_warns_on_untagged_evidence_from_an_unaccounted_for_source(tmp_path: Path) -> None:
+    # Provenance telemetry: an audit of every evidence entry point found
+    # exactly one accepted untagged source (_verify_inheritance_completeness
+    # -- deliberately untagged, a repository-wide fact, not any one need's
+    # claim). Anything else reaching final synthesis with need_ids=[] is an
+    # unaudited gap -- must warn (never crash) rather than silently and
+    # permanently lose that evidence the way the global_fallback bug did.
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "mod.py").write_text(
+        "def grounds_target():\n    pass\n", encoding="utf-8"
+    )
+    worker = WorkerCard(
+        id="worker-src", territory_id="src", name="src", root="src", files=["src/mod.py"]
+    )
+    graph = NeedGraph(
+        nodes={
+            "root": NeedNode(
+                need_id="root",
+                need="original question",
+                resolution="resolved",
+                children=["grounds-need"],
+                detail=UnresolvedNeed(description="original question"),
+            ),
+            "grounds-need": NeedNode(
+                need_id="grounds-need",
+                need="find grounds_target",
+                resolution="unresolved",
+                detail=UnresolvedNeed(description="find grounds_target"),
+            ),
+        }
+    )
+    # No inheritance-asking language in the question, so
+    # _verify_inheritance_completeness contributes nothing this call --
+    # this item's empty need_ids has no accepted explanation.
+    mystery_evidence = Evidence(
+        path="src/mystery.py",
+        line_start=1,
+        line_end=1,
+        quote="def mystery_target():",
+        reason="from some untagged source",
+    )
+    reasoner = _GroundsOnlyOneNamedNeedReasoner(grounded_description="find grounds_target")
+
+    with pytest.warns(UserWarning, match="untagged evidence"):
+        LocalCoordinator(tmp_path, [worker], reasoner=reasoner).ask(
+            "original question",
+            max_rounds=1,
+            initial_graph=graph,
+            initial_evidence=[mystery_evidence],
+            prior_answer="gen0's own verbatim answer",
+            enforce_alignment=True,
+        )
+
+
+def test_ask_does_not_warn_on_inheritance_completeness_evidence(
+    tmp_path: Path, recwarn: pytest.WarningsRecorder
+) -> None:
+    # The accepted exception itself must NOT trip the telemetry warning --
+    # _verify_inheritance_completeness's own untagged evidence is deliberate
+    # (a repository-wide structural fact, not any one need's claim), not a
+    # gap the audit missed.
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "mod.py").write_text(
+        "class BaseThing:\n    pass\n\n\nclass SubThing(BaseThing):\n    pass\n\n\n"
+        "def grounds_target():\n    pass\n",
+        encoding="utf-8",
+    )
+    worker = WorkerCard(
+        id="worker-src", territory_id="src", name="src", root="src", files=["src/mod.py"]
+    )
+    graph = NeedGraph(
+        nodes={
+            "root": NeedNode(
+                need_id="root",
+                need="original question",
+                resolution="resolved",
+                children=["grounds-need"],
+                detail=UnresolvedNeed(description="original question"),
+            ),
+            "grounds-need": NeedNode(
+                need_id="grounds-need",
+                need="find grounds_target",
+                resolution="unresolved",
+                detail=UnresolvedNeed(description="find grounds_target"),
+            ),
+        }
+    )
+    reasoner = _GroundsOnlyOneNamedNeedReasoner(grounded_description="find grounds_target")
+
+    LocalCoordinator(tmp_path, [worker], reasoner=reasoner).ask(
+        "What are the subclasses of BaseThing? find grounds_target",
+        max_rounds=1,
+        initial_graph=graph,
+        prior_answer="gen0's own verbatim answer",
+        enforce_alignment=True,
+    )
+
+    assert not any(
+        "untagged evidence" in str(warning.message) for warning in recwarn.list
     )
 
 
