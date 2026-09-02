@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import re
-from collections import defaultdict
+from collections import Counter, defaultdict
 from pathlib import Path
 
+import numpy as np
 from pydantic import BaseModel, Field
 
 from ant.domain import Territory, WorkerCard
@@ -11,7 +12,9 @@ from ant.indexing.cards import build_worker_cards, template_routing_summary
 from ant.memory import ColonyMemoryStore, IndexStore
 from ant.memory.colony import MemoryRoute
 from ant.providers import EvolutionReasoner
+from ant.retrieval.dense import DenseEmbedder, get_shared_embedder
 from ant.scoring_config import DEFAULT_SCORING_CONFIG
+from ant.tools.local import LocalSearchTool
 
 TOKEN_RE = re.compile(r"[A-Za-z][A-Za-z0-9_]{2,}")
 
@@ -73,6 +76,12 @@ def evolve_workers(
         DEFAULT_SCORING_CONFIG.evolution.negative_presence_gate_ratio
     ),
     min_episode_count: int = DEFAULT_SCORING_CONFIG.evolution.min_episode_count,
+    semantic_cluster_similarity_threshold: float = (
+        DEFAULT_SCORING_CONFIG.evolution.semantic_cluster_similarity_threshold
+    ),
+    min_semantic_cluster_file_support: int = (
+        DEFAULT_SCORING_CONFIG.evolution.min_semantic_cluster_file_support
+    ),
 ) -> EvolutionResult:
     store = IndexStore(index_path)
     memory = ColonyMemoryStore(index_path)
@@ -96,6 +105,8 @@ def evolve_workers(
         negative_presence_gate_ratio=negative_presence_gate_ratio,
         repo_root=repo_root,
         reasoner=reasoner,
+        semantic_cluster_similarity_threshold=semantic_cluster_similarity_threshold,
+        min_semantic_cluster_file_support=min_semantic_cluster_file_support,
     )
     events.extend(specialize_events)
     removed_worker_ids.update(
@@ -511,6 +522,12 @@ def _specialize_overloaded_workers(
     negative_presence_gate_ratio: float,
     repo_root: Path | None,
     reasoner: EvolutionReasoner | None = None,
+    semantic_cluster_similarity_threshold: float = (
+        DEFAULT_SCORING_CONFIG.evolution.semantic_cluster_similarity_threshold
+    ),
+    min_semantic_cluster_file_support: int = (
+        DEFAULT_SCORING_CONFIG.evolution.min_semantic_cluster_file_support
+    ),
 ) -> tuple[list[WorkerCard], list[EvolutionEvent]]:
     """Split a coarse worker into finer workers along its existing directory
     substructure once recurring routes show it is being asked about at least
@@ -518,18 +535,41 @@ def _specialize_overloaded_workers(
     / Birth" mechanism from the design: worker count is not fixed up front, it
     grows where task experience shows a single worker is covering topics that
     do not actually belong together.
+
+    When a worker's territory has no usable subdirectory structure to
+    split along at all (_subdirectory_groups returns <2 groups -- e.g.
+    yt-dlp's yt_dlp/extractor/, 1010 files flat in one directory), falls
+    back to _semantic_groups: clusters the worker's own route HISTORY by
+    embedding similarity over need_terms (what keeps recurring), then
+    MATERIALIZES each recurring cluster's territory via live, full-
+    territory retrieval against the worker's current files (what that
+    workload corresponds to now) -- see _semantic_groups' own docstring
+    for why this doesn't require storing historical evidence paths.
     """
     events: list[EvolutionEvent] = []
     result: list[WorkerCard] = []
     for worker in workers:
-        groups = _subdirectory_groups(worker)
         worker_routes = routes_by_worker.get(worker.id, [])
         if (
-            len(groups) < 2
-            or len(worker_routes) < min_routes
+            len(worker_routes) < min_routes
             or _is_worker_healthy(worker.id, routes_by_worker, min_health_routes, healthy_ratio)
             or _mostly_negative_presence(worker_routes, negative_presence_gate_ratio)
         ):
+            result.append(worker)
+            continue
+
+        groups = _subdirectory_groups(worker)
+        if len(groups) < 2 and repo_root is not None:
+            groups = _semantic_groups(
+                worker,
+                worker_routes,
+                repo_root,
+                min_group_routes=min_group_routes,
+                similarity_threshold=semantic_cluster_similarity_threshold,
+                min_file_support=min_semantic_cluster_file_support,
+            )
+        groups = _fold_colliding_groups(groups, worker, workers)
+        if len(groups) < 2:
             result.append(worker)
             continue
 
@@ -699,6 +739,180 @@ def _subdirectory_groups(worker: WorkerCard) -> dict[str, list[str]]:
         key = worker.root if len(remainder) <= 1 else "/".join([*root_parts, remainder[0]])
         groups[key].append(file)
     return dict(groups)
+
+
+def _fold_colliding_groups(
+    groups: dict[str, list[str]], worker: WorkerCard, all_workers: list[WorkerCard]
+) -> dict[str, list[str]]:
+    """A candidate child's id (`worker-{_slug(group)}`) can collide with an
+    unrelated, already-existing worker -- confirmed live on sphinx:
+    worker-sphinx's own file list contained a single stray file under
+    sphinx/locale/, a directory already fully owned by a separate,
+    pre-existing 67-file worker-sphinx-locale (a `_merge_tiny_groups`
+    artifact from initial indexing -- a lone file that natural-roots to a
+    subdirectory another territory already fully claims can still end up
+    counted under a coarser worker's own file list). Specializing
+    worker-sphinx then tried to create a second, wrong-scope (1-file)
+    worker-sphinx-locale, crashing IndexStore.save's UNIQUE constraint on
+    territories.id -- the first time specialize had ever actually fired
+    against real accumulated route data, so this path had never been
+    exercised live before.
+
+    Rather than drop a colliding group's files (silently orphaning them --
+    no worker would own them after `worker` itself is replaced by its
+    children) or crash, folds them into `groups[worker.root]` -- the
+    group `_subdirectory_groups` already uses for a file that isn't under
+    any further subdirectory, i.e. this specialize pass's own natural
+    "residual" bucket for `worker`.
+    """
+    other_ids = {other.id for other in all_workers if other.id != worker.id}
+    colliding = [group for group in groups if f"worker-{_slug(group)}" in other_ids]
+    if not colliding:
+        return groups
+    folded = dict(groups)
+    for group in colliding:
+        folded.setdefault(worker.root, []).extend(folded.pop(group))
+    return folded
+
+
+def _semantic_groups(
+    worker: WorkerCard,
+    worker_routes: list[MemoryRoute],
+    repo_root: Path,
+    min_group_routes: int,
+    similarity_threshold: float,
+    min_file_support: int,
+) -> dict[str, list[str]]:
+    """Fallback for _subdirectory_groups when a worker's territory has no
+    usable subdirectory structure (e.g. yt-dlp's yt_dlp/extractor/, 1010
+    files flat in one directory -- _subdirectory_groups can only ever
+    return one group for it, so specialization could never trigger there
+    no matter how much route history accumulated).
+
+    Two separate responsibilities, deliberately not conflated:
+    1. Route history says WHAT keeps recurring: cluster this worker's own
+       routes by embedding similarity over need_terms (connected
+       components over a cosine-similarity graph, same pattern as
+       ant.coordinator.local._cluster_pending_proposals) -- a cluster
+       that doesn't clear min_group_routes isn't a real recurring niche,
+       just noise.
+    2. CURRENT full-territory retrieval says WHERE that workload lands
+       NOW: for each qualifying cluster, run search()/dense_search()
+       (the same uncapped machinery a worker's own AutonomousWorker.run()
+       already uses once assigned -- no per-card term cap applies here)
+       once per route in the cluster against this worker's own complete
+       file list, and keep only files with RECURRING support -- hit by
+       at least `min_file_support` of the cluster's own routes, not just
+       whichever files one route's own top hit happened to surface.
+
+    Deliberately does not read or store historical evidence paths (see
+    this session's own design discussion): a route's need_terms describe
+    a recurring WORKLOAD, but where that workload's answer lives is a
+    property of the current repo checkout, not a historical fact worth
+    persisting -- code moves, and a live query stays correct as the
+    codebase evolves in a way a stored path list would not.
+
+    Returns {} (never a single-group dict) whenever there's nothing
+    genuinely separable: no shared embedder, fewer than two distinct
+    routes worth clustering, or fewer than two clusters clear both the
+    route-count and file-support bars -- the same "no split" signal
+    _subdirectory_groups gives by returning a dict of length < 2.
+    """
+    embedder = get_shared_embedder()
+    if embedder is None or len(worker_routes) < min_group_routes * 2:
+        return {}
+
+    clusters = _cluster_routes_by_need_terms(worker_routes, embedder, similarity_threshold)
+    qualifying = [cluster for cluster in clusters if len(cluster) >= min_group_routes]
+    if len(qualifying) < 2:
+        return {}
+
+    tools = LocalSearchTool(repo_root)
+    groups: dict[str, list[str]] = {}
+    for cluster in qualifying:
+        support: Counter[str] = Counter()
+        for route in cluster:
+            query = " ".join(route.need_terms)
+            if not query.strip():
+                continue
+            hit_paths = {evidence.path for evidence in tools.search(query, worker.files, limit=6)}
+            hit_paths |= {
+                evidence.path for evidence in tools.dense_search(query, worker.files, limit=6)
+            }
+            support.update(hit_paths)
+        supported_files = sorted(
+            path for path, count in support.items() if count >= min_file_support
+        )
+        if not supported_files:
+            continue
+        label = _cluster_representative_query(cluster)
+        group_key = f"{worker.root}/{_slug(label)}" if worker.root else _slug(label)
+        groups[group_key] = supported_files
+    return groups
+
+
+def _cluster_routes_by_need_terms(
+    routes: list[MemoryRoute], embedder: DenseEmbedder, similarity_threshold: float
+) -> list[list[MemoryRoute]]:
+    """Connected components over a cosine-similarity graph of each route's
+    need_terms -- same deterministic-clustering shape as
+    ant.coordinator.local._cluster_pending_proposals, just over
+    MemoryRoute.need_terms instead of ProposedNode.need text. A route with
+    no need_terms at all can't be embedded meaningfully and is skipped.
+    """
+    embeddable = [route for route in routes if route.need_terms]
+    if len(embeddable) < 2:
+        return [[route] for route in embeddable]
+
+    texts = [" ".join(route.need_terms) for route in embeddable]
+    vectors = embedder.embed(texts)
+    if not vectors:
+        return [[route] for route in embeddable]
+
+    array = np.asarray(vectors, dtype=np.float32)
+    norms = np.linalg.norm(array, axis=1, keepdims=True)
+    norms[norms == 0] = 1.0
+    normed = array / norms
+    similarity = normed @ normed.T
+
+    n = len(embeddable)
+    parent = list(range(n))
+
+    def find(i: int) -> int:
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+
+    def union(i: int, j: int) -> None:
+        root_i, root_j = find(i), find(j)
+        if root_i != root_j:
+            parent[root_j] = root_i
+
+    for i in range(n):
+        for j in range(i + 1, n):
+            if similarity[i, j] >= similarity_threshold:
+                union(i, j)
+
+    members_by_root: dict[int, list[MemoryRoute]] = defaultdict(list)
+    for i, route in enumerate(embeddable):
+        members_by_root[find(i)].append(route)
+    return list(members_by_root.values())
+
+
+def _cluster_representative_query(cluster: list[MemoryRoute]) -> str:
+    """Deterministic, non-LLM label for a semantic cluster: the terms
+    shared across the most of its own routes, not every route's full
+    need_terms concatenated together (which balloons into a long, noisy
+    query as a cluster grows). Used both as the retrieval query fed to
+    search()/dense_search() for routes without their own usable
+    need_terms and as this cluster's group-key slug.
+    """
+    counts: Counter[str] = Counter()
+    for route in cluster:
+        counts.update({term.lower() for term in route.need_terms})
+    top_terms = [term for term, _ in counts.most_common(6)]
+    return " ".join(top_terms) if top_terms else "cluster"
 
 
 def _assign_route_to_group(route: MemoryRoute, groups: dict[str, list[str]]) -> str | None:

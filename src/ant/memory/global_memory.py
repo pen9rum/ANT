@@ -74,27 +74,59 @@ class GlobalMemoryStore:
             )
         updated.save(self.path, EXPERIENCE_KEY)
 
-    def retrieve_similar(self, query: str, embedder: DenseEmbedder, limit: int = 5) -> list[str]:
+    def retrieve_similar(
+        self,
+        query: str,
+        embedder: DenseEmbedder,
+        limit: int = 5,
+        exclude_repo: str = "",
+    ) -> list[str]:
         index = EmbeddingIndex.load(self.path, EXPERIENCE_KEY)
         if index is None or not index.entries:
             return []
         vector = _embed_and_normalize(embedder, query)
-        hits = index.search(vector.tolist(), limit=limit)
+        # exclude_repo: confirmed live that without this, a repo's own
+        # gen0 attempt on THIS SAME question -- recorded minutes earlier
+        # by record_global_experience_safe, in the same run -- is
+        # embedding-similarity's own top match for slow-gen1's retry of
+        # that identical question. That is the opposite of "cross-repo":
+        # the Orchestrator gets handed a summary describing its own prior
+        # self's struggle ("this needed coalition/temporary_bridge") as
+        # if it were outside precedent, priming it to reach for the same
+        # recovery tactics again rather than exploring a fresh escalation
+        # path gen0 itself may only have found in a later round. `repo` is
+        # the same provenance string record_global_experience_safe was
+        # called with, so an omitted/empty exclude_repo (e.g. no `repo`
+        # available) degrades to today's exact behavior -- no entries
+        # excluded -- rather than ever silently under-filling `limit`.
+        paths = None
+        if exclude_repo:
+            paths = {entry.path for entry in index.entries if entry.path != exclude_repo}
+            if not paths:
+                return []
+        hits = index.search(vector.tolist(), limit=limit, paths=paths)
         return [entry.quote for _, entry in hits]
 
 
 def retrieve_cross_repo_experience_safe(
-    global_memory: GlobalMemoryStore, query: str, limit: int = 5
+    global_memory: GlobalMemoryStore, query: str, limit: int = 5, exclude_repo: str = ""
 ) -> list[str]:
     """Same graceful-degradation shape as the rest of dense retrieval in
     this codebase: no embedder available (the optional 'dense' extra isn't
     installed) means cross-repo experience is simply absent this run, not
     an error -- callers get [] and the Orchestrator prompt shows "(none)".
+
+    `exclude_repo`: pass the same repo-provenance string this call's own
+    later record_global_experience_safe will use, so a gen0/slow-gen1 pair
+    for the same repo never has the later stage handed the earlier one's
+    own just-recorded experience as if it were outside precedent -- see
+    GlobalMemoryStore.retrieve_similar's own docstring for why this
+    mattered in practice.
     """
     embedder = get_shared_embedder()
     if embedder is None:
         return []
-    return global_memory.retrieve_similar(query, embedder, limit=limit)
+    return global_memory.retrieve_similar(query, embedder, limit=limit, exclude_repo=exclude_repo)
 
 
 def record_global_experience_safe(

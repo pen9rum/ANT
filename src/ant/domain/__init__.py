@@ -1,5 +1,6 @@
 from ant.domain.models import (
     AbsenceProof,
+    AnswerObligation,
     CodeSymbol,
     Evidence,
     EvidenceState,
@@ -16,6 +17,7 @@ from ant.domain.models import (
     NeedNode,
     NeedResolution,
     NodeExecutionTrace,
+    ObligationCoverage,
     PlanningRound,
     ProposedNode,
     RecoverySnapshot,
@@ -36,6 +38,7 @@ from ant.domain.models import (
 
 __all__ = [
     "AbsenceProof",
+    "AnswerObligation",
     "Evidence",
     "EvidenceUpgradeVerdict",
     "CodeSymbol",
@@ -52,6 +55,7 @@ __all__ = [
     "NeedNode",
     "NeedResolution",
     "NodeExecutionTrace",
+    "ObligationCoverage",
     "PlanningRound",
     "ProposedNode",
     "RecoverySnapshot",

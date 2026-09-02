@@ -13,6 +13,7 @@ from openai import OpenAI
 from ant.config import load_dotenv
 from ant.domain import (
     AbsenceProof,
+    AnswerObligation,
     CodeSymbol,
     Evidence,
     EvidenceUpgradeVerdict,
@@ -26,6 +27,7 @@ from ant.domain import (
     NeedNode,
     NeedResolution,
     NodeExecutionTrace,
+    ObligationCoverage,
     PlanningRound,
     ProposedNode,
     RepairAction,
@@ -65,6 +67,15 @@ SYNTHESIS_MAX_OUTPUT_TOKENS = 8192
 # partial receive without ever completing the response. A hard deadline
 # from a separate thread has no such loophole.
 REQUEST_TIMEOUT_SECONDS = 120
+
+# plan_round's prompt shows every candidate worker's full searchable_terms
+# list (up to 48 terms) rather than a fixed [:12] slice, but only up to
+# this many workers -- two-stage routing (LocalCoordinator.
+# _candidate_workers_for_round) normally narrows to 5-10 candidates, so
+# this threshold is sized to cover that width comfortably while still
+# falling back to the old, tighter [:12] slice for the unnarrowed
+# full-worker-list path (stuck subgraphs), which can be 20-30+ workers.
+_FULL_TERMS_WORKER_LIMIT = 15
 
 
 @dataclass(frozen=True)
@@ -811,10 +822,26 @@ class OpenAIProvider:
         ordered_workers = sorted(
             workers, key=lambda worker: -best_anchor_count.get(worker.id, -1)
         )
+        # Two-stage routing (LocalCoordinator._candidate_workers_for_round)
+        # already narrows `workers` to ~5-10 candidates for a fresh/
+        # escalated need before this prompt is ever built -- so slicing
+        # searchable_terms down further here was a second, redundant
+        # truncation on top of that one. Confirmed live on seaborn/
+        # pennylane: a candidate's own answering symbol (e.g.
+        # EstimateAggregator) sat at position 30+ of its card's full term
+        # list, past the old `[:12]` cutoff, invisible to the Orchestrator
+        # even though retrieval had already correctly surfaced that worker
+        # as a candidate. Showing the full per-worker term list is cheap
+        # at this narrowed width (worst case ~10 workers x 48 terms); the
+        # `_FULL_TERMS_WORKER_LIMIT` guard keeps the old, tighter `[:12]`
+        # for the full-worker-list fallback (stuck subgraphs get every
+        # worker, unnarrowed) so that path can't blow the prompt up to
+        # dozens of workers x 48 terms each.
+        terms_slice = slice(None) if len(ordered_workers) <= _FULL_TERMS_WORKER_LIMIT else slice(12)
         worker_lines = [
             f"- {worker.id}: {worker.routing_summary or '(no routing summary)'}"
             + (
-                f"\n  terms: {', '.join(worker.searchable_terms[:12])}"
+                f"\n  terms: {', '.join(worker.searchable_terms[terms_slice])}"
                 if worker.searchable_terms
                 else ""
             )
@@ -870,7 +897,16 @@ class OpenAIProvider:
             "2. assignments: which worker id(s) handle each ready-frontier "
             "need_id this round. One worker id is a plain follow-up/"
             "handoff; more than one is a coalition -- same kind of entry "
-            "either way.\n"
+            "either way. A NEW need_id you are proposing in graph_updates "
+            "THIS round is NOT ready-frontier yet and can never appear "
+            "here -- it does not exist as a real node until a separate "
+            "step commits it after this round ends, so an assignment "
+            "entry for it is silently wasted (nothing executes it) and "
+            "its real parent gets no work done this round either. If you "
+            "want to both decompose a need AND make progress on it this "
+            "round, assign the EXISTING ready-frontier parent need_id "
+            "itself (propose the children for next round, once they are "
+            "real) -- never a same-round proposal's own new id.\n"
             "3. special_tactics: ONLY for a need_id inside one of the "
             "listed stuck subgraphs, and only if its recovery plan needs "
             "one of exactly two special mechanisms: temporary_bridge "
@@ -1166,6 +1202,68 @@ class OpenAIProvider:
         data = _loads_json_object(result.text)
         valid_ids = {node.need_id for node in package.stuck_nodes}
         return _parse_alignment_plan(data, valid_need_ids=valid_ids)
+
+    def extract_answer_obligations(self, *, question: str) -> list[AnswerObligation]:
+        # Question Coverage Contract, part 1 -- see FastEvolutionReasoner's
+        # own docstring for why this must read only the ORIGINAL question
+        # text, never the Need Graph's own (possibly narrower) wording.
+        prompt = (
+            "A codebase question is given below. List the small number of "
+            "concrete, distinct things a COMPLETE answer must cover -- not "
+            "a full decomposition of every possible sub-detail, just the "
+            "few top-level obligations the question itself names or "
+            "clearly implies (usually 1-4). For example \"What are the "
+            "subclasses of X, and their overridden methods?\" has two: "
+            "(1) which classes subclass X, (2) what each one overrides or "
+            "extends. A single-part question (\"Where is X defined?\") "
+            "has just one.\n"
+            f"Question: {question}\n"
+            "Return JSON with key obligations: a list of short strings, "
+            "each one concrete obligation, in the question's own order."
+        )
+        result = self.responses_json(prompt, max_output_tokens=512)
+        data = _loads_json_object(result.text)
+        return _parse_answer_obligations(data)
+
+    def check_obligation_coverage(
+        self,
+        *,
+        question: str,
+        obligations: list[AnswerObligation],
+        evidence: list[Evidence],
+    ) -> list[ObligationCoverage]:
+        # Question Coverage Contract, part 2 -- deliberately does not
+        # consult Need Graph resolution state at all, only the raw
+        # evidence pool: a node can read "resolved" while still leaving an
+        # obligation uncovered (see AnswerObligation's own docstring for
+        # the live case this was found from).
+        if not obligations:
+            return []
+        obligation_lines = "\n".join(
+            f"[{item.obligation_id}] {item.description}" for item in obligations
+        )
+        evidence_text = "\n".join(_format_evidence_block(item) for item in evidence)
+        prompt = (
+            "A codebase question was split into a few top-level answer "
+            "obligations. For each one, judge whether the evidence below "
+            "actually addresses THAT SPECIFIC obligation -- not the "
+            "question in general, and not merely topically related "
+            "evidence. Concrete, direct support only (a definition, an "
+            "override, a call site, an explicit statement) -- evidence "
+            "that is adjacent or plausible-but-unconfirmed does not count "
+            "as covering it.\n"
+            f"Original question: {question}\n"
+            f"Obligations:\n{obligation_lines}\n"
+            f"Evidence:\n{evidence_text or '(none)'}\n"
+            "Return JSON with key coverage: a list of objects with "
+            "obligation_id, covered (true/false), and rationale (brief). "
+            "Cover every obligation_id listed above exactly once; an "
+            "obligation_id you omit defaults to covered=false."
+        )
+        result = self.responses_json(prompt, max_output_tokens=768)
+        data = _loads_json_object(result.text)
+        valid_ids = {item.obligation_id for item in obligations}
+        return _parse_obligation_coverage(data, valid_obligation_ids=valid_ids)
 
     def summarize_task_experience(
         self,
@@ -1521,6 +1619,12 @@ def _patch_instruction(prior_answer: str) -> str:
         "uncertain, still absent) even while rephrasing it. Do not use "
         "the surrounding evidence to strengthen a claim beyond what a "
         "grounded update explicitly supports.\n"
+        "Output ONLY the answer itself, exactly as if it were a fresh, "
+        "standalone response to the question below -- never mention that "
+        "this is a revision, a patch, a re-check, or that anything was "
+        "reworded/verified/cross-checked; the reader has no prior answer "
+        "to compare against and must not be able to tell this instruction "
+        "exists.\n"
     )
 
 
@@ -1866,6 +1970,60 @@ def _parse_alignment_plan(data: dict, *, valid_need_ids: set[str]) -> NeedAlignm
             )
         )
     return NeedAlignmentPlan(verdicts=verdicts)
+
+
+def _parse_answer_obligations(data: dict) -> list[AnswerObligation]:
+    """A malformed/missing obligations list degrades to [] (no coverage
+    contract this retry), not an error -- Question Coverage stays purely
+    additive on top of the existing repair machinery, same posture as
+    every other Grounded Fast Repair parse helper. Ids are assigned here,
+    not trusted from the model, so downstream code never depends on the
+    LLM producing unique, well-formed identifiers."""
+    raw_obligations = data.get("obligations")
+    if not isinstance(raw_obligations, list):
+        return []
+    obligations: list[AnswerObligation] = []
+    for index, raw_item in enumerate(raw_obligations):
+        if not isinstance(raw_item, str) or not raw_item.strip():
+            continue
+        obligations.append(
+            AnswerObligation(obligation_id=f"obligation-{index}", description=raw_item.strip())
+        )
+    return obligations
+
+
+def _parse_obligation_coverage(
+    data: dict, *, valid_obligation_ids: set[str]
+) -> list[ObligationCoverage]:
+    """Same tolerant-parsing shape as _parse_alignment_plan: an unknown
+    obligation_id or a non-boolean covered value is dropped, not fatal --
+    every valid_obligation_ids entry the response doesn't cover (dropped
+    or simply omitted) defaults to covered=False, the safe default given
+    check_obligation_coverage's own contract ("an obligation_id you omit
+    defaults to covered=false") -- a malformed response must never look
+    like confirmed coverage.
+    """
+    seen: dict[str, ObligationCoverage] = {}
+    raw_coverage = data.get("coverage")
+    if isinstance(raw_coverage, list):
+        for raw_item in raw_coverage:
+            if not isinstance(raw_item, dict):
+                continue
+            obligation_id = raw_item.get("obligation_id")
+            covered = raw_item.get("covered")
+            if not isinstance(obligation_id, str) or obligation_id not in valid_obligation_ids:
+                continue
+            if not isinstance(covered, bool):
+                continue
+            seen[obligation_id] = ObligationCoverage(
+                obligation_id=obligation_id,
+                covered=covered,
+                rationale=str(raw_item.get("rationale") or ""),
+            )
+    return [
+        seen.get(obligation_id, ObligationCoverage(obligation_id=obligation_id, covered=False))
+        for obligation_id in valid_obligation_ids
+    ]
 
 
 def _parse_graph_update(raw_node: object) -> NeedNode | None:

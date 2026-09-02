@@ -155,7 +155,11 @@ def _run_example(
     # or produces a summary worth recording, so skip the real embedding-
     # model call entirely rather than pay for a result nothing will use.
     cross_repo_experience = (
-        retrieve_cross_repo_experience_safe(global_memory, example.question) if provider else []
+        retrieve_cross_repo_experience_safe(
+            global_memory, example.question, exclude_repo=example.repo
+        )
+        if provider
+        else []
     )
     coordinator = LocalCoordinator(
         example_repo,

@@ -3,10 +3,12 @@ from pathlib import Path
 
 from ant.domain import (
     AbsenceProof,
+    AnswerObligation,
     Evidence,
     FrontierResult,
     NeedGraph,
     NeedNode,
+    ObligationCoverage,
     ProposedNode,
     StuckNodeSummary,
     TaskTrajectoryPackage,
@@ -16,6 +18,7 @@ from ant.domain import (
 )
 from ant.providers import OpenAIProvider
 from ant.providers.openai_provider import (
+    _FULL_TERMS_WORKER_LIMIT,
     ResponseResult,
     _completeness_notes,
     _extract_output_text,
@@ -273,6 +276,93 @@ def test_plan_round_shows_worker_searchable_terms_not_just_routing_summary() -> 
     assert "bloch" in captured["prompt"]
     assert "sphere" in captured["prompt"]
     assert "paint_world_map" in captured["prompt"]
+
+
+def test_plan_round_shows_all_searchable_terms_when_candidates_are_few() -> None:
+    # Regression test for the seaborn/pennylane failure mode: a worker's
+    # own answering symbol (e.g. EstimateAggregator) sat past position 12
+    # of its card's full term list -- the old fixed `[:12]` slice hid it
+    # from the Orchestrator even after two-stage routing had already
+    # correctly narrowed the candidate set down to this worker. At a
+    # narrowed width (well under _FULL_TERMS_WORKER_LIMIT), every term on
+    # the card should now reach the prompt.
+    provider = OpenAIProvider(model="gpt-4.1")
+    captured: dict[str, str] = {}
+
+    def fake_responses_json(prompt: str, max_output_tokens: int = 512):
+        captured["prompt"] = prompt
+        return type("Result", (), {"text": "{}"})()
+
+    provider.responses_json = fake_responses_json  # type: ignore[method-assign]
+    terms = [f"term{i}" for i in range(30)] + ["EstimateAggregator"]
+    workers = [
+        WorkerCard(
+            id="worker-seaborn",
+            territory_id="seaborn",
+            name="seaborn",
+            root="seaborn",
+            routing_summary="owns seaborn's top-level modules",
+            searchable_terms=terms,
+        )
+    ]
+
+    provider.plan_round(
+        question="How does seaborn aggregate estimates for confidence intervals?",
+        graph=NeedGraph(nodes={}),
+        resolution_results={},
+        evidence=[],
+        workers=workers,
+        memory_hints={},
+        frontier=FrontierResult(ready=[], blocked=[], stuck_subgraphs=[]),
+        incomplete_parents=[],
+        cross_repo_experience=[],
+    )
+
+    assert "EstimateAggregator" in captured["prompt"]
+
+
+def test_plan_round_keeps_the_narrow_term_slice_for_a_large_unnarrowed_worker_list() -> None:
+    # The full-terms behavior above is only safe at the narrowed
+    # (two-stage-routed) candidate width. The unnarrowed fallback path --
+    # every worker, no candidate limit, used when a need is stuck -- can
+    # legitimately be 20-30+ workers; showing every worker's full term
+    # list there would blow the prompt up quadratically. Confirms the
+    # `_FULL_TERMS_WORKER_LIMIT` guard actually gates on worker count.
+    provider = OpenAIProvider(model="gpt-4.1")
+    captured: dict[str, str] = {}
+
+    def fake_responses_json(prompt: str, max_output_tokens: int = 512):
+        captured["prompt"] = prompt
+        return type("Result", (), {"text": "{}"})()
+
+    provider.responses_json = fake_responses_json  # type: ignore[method-assign]
+    terms = [f"term{i}" for i in range(30)] + ["EstimateAggregator"]
+    workers = [
+        WorkerCard(
+            id=f"worker-{index}",
+            territory_id=f"territory-{index}",
+            name=f"territory-{index}",
+            root=f"territory-{index}",
+            routing_summary=f"owns territory {index}",
+            searchable_terms=terms if index == 0 else [f"other{index}"],
+        )
+        for index in range(_FULL_TERMS_WORKER_LIMIT + 1)
+    ]
+
+    provider.plan_round(
+        question="How does seaborn aggregate estimates for confidence intervals?",
+        graph=NeedGraph(nodes={}),
+        resolution_results={},
+        evidence=[],
+        workers=workers,
+        memory_hints={},
+        frontier=FrontierResult(ready=[], blocked=[], stuck_subgraphs=[]),
+        incomplete_parents=[],
+        cross_repo_experience=[],
+    )
+
+    assert "EstimateAggregator" not in captured["prompt"]
+    assert "term0" in captured["prompt"]
 
 
 def test_plan_round_shows_probe_anchors_and_orders_candidates_by_them() -> None:
@@ -667,6 +757,94 @@ def test_assess_need_alignment_drops_a_verdict_for_an_unknown_need_id() -> None:
     assert plan.verdicts == []
 
 
+def test_extract_answer_obligations_parses_a_list_of_strings() -> None:
+    provider = OpenAIProvider(model="gpt-4.1")
+    provider.responses_json = lambda prompt, max_output_tokens=512: type(  # type: ignore[method-assign]
+        "Result",
+        (),
+        {"text": '{"obligations": ["which classes subclass X", "what each one overrides"]}'},
+    )()
+
+    obligations = provider.extract_answer_obligations(question="q")
+
+    assert [item.description for item in obligations] == [
+        "which classes subclass X",
+        "what each one overrides",
+    ]
+    # Ids are assigned locally, not trusted from the model -- downstream
+    # code never depends on the LLM producing unique identifiers.
+    assert len({item.obligation_id for item in obligations}) == 2
+
+
+def test_extract_answer_obligations_degrades_to_empty_on_malformed_response() -> None:
+    provider = OpenAIProvider(model="gpt-4.1")
+    provider.responses_json = lambda prompt, max_output_tokens=512: type(  # type: ignore[method-assign]
+        "Result", (), {"text": "{}"}
+    )()
+
+    assert provider.extract_answer_obligations(question="q") == []
+
+
+def test_check_obligation_coverage_parses_covered_and_uncovered() -> None:
+    provider = OpenAIProvider(model="gpt-4.1")
+    provider.responses_json = lambda prompt, max_output_tokens=768: type(  # type: ignore[method-assign]
+        "Result",
+        (),
+        {
+            "text": (
+                '{"coverage": ['
+                '{"obligation_id": "obligation-0", "covered": true, "rationale": "found it"}, '
+                '{"obligation_id": "obligation-1", "covered": false, "rationale": "not shown"}'
+                "]}"
+            )
+        },
+    )()
+    obligations = [
+        AnswerObligation(obligation_id="obligation-0", description="a"),
+        AnswerObligation(obligation_id="obligation-1", description="b"),
+    ]
+
+    coverage = provider.check_obligation_coverage(
+        question="q", obligations=obligations, evidence=[]
+    )
+
+    by_id = {item.obligation_id: item for item in coverage}
+    assert by_id["obligation-0"].covered is True
+    assert by_id["obligation-1"].covered is False
+
+
+def test_check_obligation_coverage_defaults_an_omitted_obligation_to_uncovered() -> None:
+    # "an obligation_id you omit defaults to covered=false" -- a malformed
+    # or incomplete response must never look like confirmed coverage.
+    provider = OpenAIProvider(model="gpt-4.1")
+    provider.responses_json = lambda prompt, max_output_tokens=768: type(  # type: ignore[method-assign]
+        "Result", (), {"text": '{"coverage": []}'}
+    )()
+    obligations = [AnswerObligation(obligation_id="obligation-0", description="a")]
+
+    coverage = provider.check_obligation_coverage(
+        question="q", obligations=obligations, evidence=[]
+    )
+
+    assert coverage == [ObligationCoverage(obligation_id="obligation-0", covered=False)]
+
+
+def test_check_obligation_coverage_drops_an_unknown_obligation_id() -> None:
+    provider = OpenAIProvider(model="gpt-4.1")
+    provider.responses_json = lambda prompt, max_output_tokens=768: type(  # type: ignore[method-assign]
+        "Result",
+        (),
+        {"text": '{"coverage": [{"obligation_id": "not-real", "covered": true}]}'},
+    )()
+    obligations = [AnswerObligation(obligation_id="obligation-0", description="a")]
+
+    coverage = provider.check_obligation_coverage(
+        question="q", obligations=obligations, evidence=[]
+    )
+
+    assert coverage == [ObligationCoverage(obligation_id="obligation-0", covered=False)]
+
+
 def test_verify_evidence_upgrade_parses_an_approved_verdict() -> None:
     provider = OpenAIProvider(model="gpt-4.1")
     provider.responses_json = lambda prompt, max_output_tokens=512: type(  # type: ignore[method-assign]
@@ -822,6 +1000,39 @@ def test_synthesize_includes_completeness_notes_in_prompt(monkeypatch) -> None:
     assert "Exhaustive search for QAOA" in captured["prompt"]
     assert "found_1_subclass" in captured["prompt"]
     assert "Subclass lookup for base symbol QAOA" in captured["prompt"]
+
+
+def test_synthesize_patch_mode_instructs_against_narrating_the_revision(monkeypatch) -> None:
+    # Regression test for a real, confirmed failure: patch-mode answers
+    # (fast-repair retries, prior_answer set) opened with lines like
+    # "Revision: Cross-checked, epistemic commitments retained..." and
+    # "Here is a revised, evidence-rooted analysis..." instead of a clean
+    # direct answer -- the model was narrating this prompt's own framing
+    # ("this is a revision pass") back into its output, confirmed
+    # identical across 3 independent sphinx questions. The prompt must
+    # explicitly say not to.
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    provider = OpenAIProvider(model="gpt-4.1")
+    captured: dict[str, str] = {}
+
+    def fake_responses_text(prompt: str, max_output_tokens: int = 512):
+        captured["prompt"] = prompt
+        return type("Result", (), {"text": "answer"})()
+
+    provider.responses_text = fake_responses_text  # type: ignore[method-assign]
+
+    provider.synthesize(
+        question="q",
+        evidence=[],
+        prior_answer="gen0's own prior answer",
+    )
+
+    assert "never mention that this is a revision" in captured["prompt"]
+    # A gen0/slow-gen1 call (prior_answer=="") must stay byte-identical to
+    # before this instruction existed -- it's patch-mode-only.
+    captured.clear()
+    provider.synthesize(question="q", evidence=[])
+    assert "never mention that this is a revision" not in captured["prompt"]
 
 
 def test_responses_json_falls_back_to_empty_object_when_repair_also_fails(

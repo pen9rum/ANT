@@ -873,3 +873,196 @@ def test_evolve_workers_leaves_episodes_alone_when_reasoner_says_no_change(
     assert not [
         event for event in result.events if event.kind in ("birth", "merge", "strengthen_route")
     ]
+
+
+def test_specialize_folds_a_child_that_would_collide_with_an_existing_worker_id(
+    tmp_path: Path,
+) -> None:
+    # Regression test for a real crash found live on sphinx: worker-sphinx's
+    # own file list contained a single stray file under sphinx/locale/, a
+    # directory ALREADY fully owned by a separate, pre-existing 67-file
+    # worker-sphinx-locale (a _merge_tiny_groups artifact from initial
+    # indexing). Specializing worker-sphinx tried to create a second,
+    # wrong-scope (1-file) worker-sphinx-locale, and IndexStore.save's
+    # UNIQUE constraint on territories.id crashed the whole evolve_workers
+    # call -- the first time specialize had ever actually fired against
+    # real accumulated route data all session, so this path had never been
+    # exercised live before. The stray file must end up folded into the
+    # specializing worker's own residual child, not silently dropped and
+    # not given a colliding id, and the unrelated pre-existing worker must
+    # be left completely untouched.
+    index_path = tmp_path / ".ant"
+    mixed = WorkerCard(
+        id="worker-mixed",
+        territory_id="mixed",
+        name="mixed worker",
+        root="pkg",
+        files=[
+            "pkg/auth/service.py",
+            "pkg/billing/service.py",
+            "pkg/existing/stray.py",
+        ],
+    )
+    existing = WorkerCard(
+        id="worker-pkg-existing",
+        territory_id="pkg-existing",
+        name="existing worker",
+        root="pkg/existing",
+        files=["pkg/existing/real_owner.py"],
+    )
+    territories = [
+        Territory(id="mixed", root="pkg", files=mixed.files),
+        Territory(id="pkg-existing", root="pkg/existing", files=existing.files),
+    ]
+    IndexStore(index_path).save(territories, [mixed, existing])
+    memory = ColonyMemoryStore(index_path)
+    for _ in range(2):
+        memory.save_route(
+            MemoryRoute(
+                need_terms=["auth"], worker_ids=["worker-mixed"], weight=2.0, is_high_quality=False
+            )
+        )
+    for _ in range(2):
+        memory.save_route(
+            MemoryRoute(
+                need_terms=["billing"],
+                worker_ids=["worker-mixed"],
+                weight=2.0,
+                is_high_quality=False,
+            )
+        )
+
+    result = evolve_workers(
+        index_path,
+        min_coalition_count=99,
+        retire_empty=False,
+        merge_overlap=0.99,
+        min_specialization_routes=4,
+        min_specialization_group_routes=2,
+    )
+
+    raw_workers = IndexStore(index_path).load_workers()
+    raw_ids = [worker.id for worker in raw_workers]
+    assert len(raw_ids) == len(set(raw_ids)), "duplicate worker ids after specialize"
+    stored_workers = {worker.id: worker for worker in raw_workers}
+    # The pre-existing worker is untouched -- still exactly its own file.
+    assert stored_workers["worker-pkg-existing"].files == ["pkg/existing/real_owner.py"]
+    # The stray file was folded into the specializing worker's own
+    # residual child (worker-pkg, the group key equal to mixed.root), not
+    # dropped and not given a second worker-pkg-existing id.
+    assert "worker-pkg-existing" not in {
+        event.worker_id
+        for event in result.events
+        if event.kind == "specialize" and event.source_worker_ids == ["worker-mixed"]
+    }
+    residual = stored_workers.get("worker-pkg")
+    assert residual is not None
+    assert "pkg/existing/stray.py" in residual.files
+
+
+class _RouteClusterFakeEmbedder:
+    """Same fixed-vectors-by-exact-text pattern used throughout this
+    codebase's other embedding-clustering tests (e.g.
+    test_local_coordinator.py's _cluster_pending_proposals tests) -- no
+    real model load, deterministic cosine math.
+    """
+
+    def __init__(self, vectors_by_text: dict[str, list[float]]) -> None:
+        self.vectors_by_text = vectors_by_text
+
+    def embed(self, texts: list[str]) -> list[list[float]]:
+        return [self.vectors_by_text[text] for text in texts]
+
+
+def test_evolve_workers_specializes_a_flat_directory_via_route_semantic_clustering(
+    tmp_path: Path, monkeypatch
+) -> None:
+    # Regression test for yt-dlp's yt_dlp/extractor/ (1010 files flat in
+    # one directory, no subfolders): _subdirectory_groups can only ever
+    # return one group for a territory like this, so the old
+    # directory-only specialization mechanism could never split it no
+    # matter how much recurring route history accumulated. This worker
+    # ("flat") reproduces that shape at a testable scale -- 4 files, none
+    # nested -- with two genuinely distinct recurring workloads in its
+    # route history (alpha/widget vs. gamma/gadget), and confirms
+    # evolve_workers now specializes it by (1) clustering routes by
+    # embedding similarity over need_terms, then (2) MATERIALIZING each
+    # cluster's territory via live BM25 retrieval against the worker's
+    # actual current files -- not by reading any stored evidence path.
+    repo_root = tmp_path / "repo"
+    (repo_root / "flat").mkdir(parents=True)
+    (repo_root / "flat" / "alpha.py").write_text(
+        "class AlphaWidgetService:\n    def build_alpha_widget(self):\n        pass\n",
+        encoding="utf-8",
+    )
+    (repo_root / "flat" / "gamma.py").write_text(
+        "class GammaGadgetService:\n    def build_gamma_gadget(self):\n        pass\n",
+        encoding="utf-8",
+    )
+    (repo_root / "flat" / "beta.py").write_text(
+        "class BetaHelper:\n    pass\n", encoding="utf-8"
+    )
+    (repo_root / "flat" / "delta.py").write_text(
+        "class DeltaHelper:\n    pass\n", encoding="utf-8"
+    )
+    files = ["flat/alpha.py", "flat/beta.py", "flat/gamma.py", "flat/delta.py"]
+    worker = WorkerCard(
+        id="worker-flat", territory_id="flat", name="flat worker", root="flat", files=files
+    )
+    index_path = tmp_path / ".ant"
+    IndexStore(index_path).save([Territory(id="flat", root="flat", files=files)], [worker])
+
+    memory = ColonyMemoryStore(index_path)
+    for _ in range(2):
+        memory.save_route(
+            MemoryRoute(
+                need_terms=["alpha", "widget"],
+                worker_ids=["worker-flat"],
+                weight=2.0,
+                is_high_quality=False,
+            )
+        )
+    for _ in range(2):
+        memory.save_route(
+            MemoryRoute(
+                need_terms=["gamma", "gadget"],
+                worker_ids=["worker-flat"],
+                weight=2.0,
+                is_high_quality=False,
+            )
+        )
+
+    embedder = _RouteClusterFakeEmbedder(
+        {"alpha widget": [1.0, 0.0], "gamma gadget": [0.0, 1.0]}
+    )
+    monkeypatch.setattr("ant.evolution.get_shared_embedder", lambda: embedder)
+    # dense_search's own embedder access (ant.tools.local) is left
+    # unpatched-to-None so this test exercises only the deterministic
+    # BM25 channel of search() for territory materialization -- clean
+    # real content on disk is enough for that alone to discriminate
+    # alpha.py/gamma.py from the beta/delta filler files.
+    monkeypatch.setattr("ant.tools.local.get_shared_embedder", lambda: None)
+
+    result = evolve_workers(
+        index_path,
+        repo_root=repo_root,
+        min_coalition_count=99,
+        retire_empty=False,
+        merge_overlap=0.99,
+        min_specialization_routes=4,
+        min_specialization_group_routes=2,
+    )
+
+    specialize_events = [event for event in result.events if event.kind == "specialize"]
+    assert len(specialize_events) == 2
+    assert all(event.source_worker_ids == ["worker-flat"] for event in specialize_events)
+
+    stored_workers = {worker.id: worker for worker in IndexStore(index_path).load_workers()}
+    assert "worker-flat" not in stored_workers
+    files_by_child = {tuple(w.files) for w in stored_workers.values()}
+    assert ("flat/alpha.py",) in files_by_child
+    assert ("flat/gamma.py",) in files_by_child
+    # beta.py/delta.py had no cluster's recurring retrieval support --
+    # they must not be silently swept into either child's territory.
+    assert not any("flat/beta.py" in child_files for child_files in files_by_child)
+    assert not any("flat/delta.py" in child_files for child_files in files_by_child)

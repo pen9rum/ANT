@@ -20,10 +20,12 @@ from ant.coordinator.local import (
     _prune_dangling_edges,
     _rank_global_evidence,
     _reopen_referenced_evidence,
+    _resolution_check_need,
     _select_evidence,
 )
 from ant.coordinator.worker_retrieval import build_worker_index
 from ant.domain import (
+    AnswerObligation,
     CodeSymbol,
     Evidence,
     EvidenceState,
@@ -37,6 +39,7 @@ from ant.domain import (
     NeedGraph,
     NeedNode,
     NeedResolution,
+    ObligationCoverage,
     ProposedNode,
     RecoverySnapshot,
     RepairAction,
@@ -2008,6 +2011,12 @@ class _SuggestsReplacementWorkerReasoner:
         # execution, not exercising alignment judgment.
         return NeedAlignmentPlan()
 
+    def extract_answer_obligations(self, *, question):
+        return []
+
+    def check_obligation_coverage(self, *, question, obligations, evidence):
+        return []
+
 
 class _AlwaysPrefersBrokenWorkerReasoner(_PassthroughLookupsReasoner):
     """The retry's own WorkerReasoner: accepts real evidence as resolving a
@@ -2200,6 +2209,251 @@ def test_apply_evidence_upgrade_gate_covers_gen0_and_retry_born_nodes_and_is_ine
     assert reasoner.calls == []
 
 
+def test_resolution_check_need_is_a_passthrough_outside_fast_repair_mode() -> None:
+    detail = UnresolvedNeed(description="narrowed live wording")
+    recovery = RecoveryState(intent_anchors={"n1": "broad original wording"})
+
+    result = _resolution_check_need(detail, "n1", recovery, enforce_alignment=False)
+
+    assert result is detail
+
+
+def test_resolution_check_need_is_a_passthrough_with_no_anchor_seeded() -> None:
+    detail = UnresolvedNeed(description="narrowed live wording")
+    recovery = RecoveryState()
+
+    result = _resolution_check_need(detail, "n1", recovery, enforce_alignment=True)
+
+    assert result is detail
+
+
+def test_resolution_check_need_substitutes_the_frozen_anchor_for_the_description() -> None:
+    detail = UnresolvedNeed(
+        description="narrowed live wording", missing="a live detail that keeps updating"
+    )
+    recovery = RecoveryState(intent_anchors={"n1": "broad original wording"})
+
+    result = _resolution_check_need(detail, "n1", recovery, enforce_alignment=True)
+
+    assert result.description == "broad original wording"
+    # Only description is swapped -- every other field (used for
+    # search/routing, not for judging evidence) passes through unchanged.
+    assert result.missing == "a live detail that keeps updating"
+
+
+class _KeepsEverythingFastReasoner:
+    def propose_repair(self, *, package):
+        return RepairPlan(actions=[])
+
+    def assess_need_alignment(self, *, question, package):
+        return NeedAlignmentPlan()
+
+    def extract_answer_obligations(self, *, question):
+        return []
+
+    def check_obligation_coverage(self, *, question, obligations, evidence):
+        return []
+
+
+class _NarrowsWordingThenChecksResolutionReasoner(_PassthroughLookupsReasoner):
+    """Round 0: narrows the ready leaf's own wording via an ordinary
+    existing-node graph_updates edit (exactly what plan_round does in
+    practice, and what check_need_resolution's own "partial" refined_need
+    rewrite also does) -- then executes and checks it the SAME round, so
+    check_need_resolution sees whatever _resolution_check_need hands it
+    at that point. Records every description it was actually asked to
+    judge, so the test can assert it saw the frozen original wording, not
+    the already-narrowed live one."""
+
+    def __init__(self) -> None:
+        self.seen_descriptions: list[str] = []
+
+    def observe(self, *, question, worker_id, territory_id, evidence):
+        return WorkerObservation(worker_id=worker_id, territory_id=territory_id)
+
+    def check_need_resolution(self, *, need, new_evidence, question):
+        self.seen_descriptions.append(need.description)
+        return NeedResolution(status="unresolved")
+
+    def verify_evidence_upgrade(self, *, need, epistemic_state, new_evidence, question):
+        return EvidenceUpgradeVerdict(approved=False)
+
+    def plan_round(
+        self,
+        *,
+        question,
+        graph,
+        resolution_results,
+        evidence,
+        workers,
+        memory_hints,
+        frontier,
+        incomplete_parents,
+        cross_repo_experience,
+        validation_feedback="",
+        repair_guidance="",
+        stuck_tried_workers=None,
+        candidate_probes=None,
+    ):
+        graph_updates = {}
+        for need_id in frontier.ready:
+            existing = graph.nodes[need_id]
+            if existing.need == "broad original wording":
+                graph_updates[need_id] = existing.model_copy(
+                    update={
+                        "need": "narrow specific wording",
+                        "detail": existing.detail.model_copy(
+                            update={"description": "narrow specific wording"}
+                        ),
+                    }
+                )
+        return RoundPlan(
+            assignments={need_id: [workers[0].id] for need_id in frontier.ready},
+            graph_updates=graph_updates,
+        )
+
+
+def test_retry_from_trajectory_judges_a_narrowed_leaf_against_its_frozen_intent_anchor(
+    tmp_path: Path,
+) -> None:
+    # Regression test for a real yt-dlp trace: a kept leaf's own wording
+    # narrowed over the retry's own rounds (e.g. "proxy configuration
+    # validation" -> "the make_socks_proxy_opts/select_proxy helpers
+    # specifically") until a later round's genuinely correct, directly-
+    # responsive evidence got judged against the now-over-narrow wording
+    # instead of what the node was originally about, and rejected.
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "mod.py").write_text("def unrelated():\n    pass\n", encoding="utf-8")
+    worker = WorkerCard(
+        id="worker-src", territory_id="src", name="src", root="src", files=["src/mod.py"]
+    )
+    prior_state = EvidenceState(
+        question="original question",
+        final_need_graph={
+            "root": NeedNode(
+                need_id="root",
+                need="original question",
+                resolution="resolved",
+                children=["target-need"],
+                detail=UnresolvedNeed(description="original question"),
+            ),
+            "target-need": NeedNode(
+                need_id="target-need",
+                need="broad original wording",
+                resolution="unresolved",
+                detail=UnresolvedNeed(description="broad original wording"),
+            ),
+        },
+    )
+    reasoner = _NarrowsWordingThenChecksResolutionReasoner()
+
+    LocalCoordinator(tmp_path, [worker], reasoner=reasoner).retry_from_trajectory(
+        prior_state, fast_reasoner=_KeepsEverythingFastReasoner(), max_rounds=2
+    )
+
+    assert "broad original wording" in reasoner.seen_descriptions
+    assert "narrow specific wording" not in reasoner.seen_descriptions
+
+
+class _BirthsThenNarrowsANewNodeReasoner(_PassthroughLookupsReasoner):
+    """Round 0: proposes a brand-new node (via graph_updates, source
+    already committed through consolidation since this reasoner's
+    consolidate_graph -- inherited from _PassthroughLookupsReasoner --
+    creates everything). Round 1: narrows THAT SAME node's own wording,
+    then checks its resolution -- proving a node born mid-retry gets its
+    own intent_anchor seeded once, at birth, not just gen0-carried-over
+    nodes."""
+
+    def __init__(self) -> None:
+        self.seen_descriptions: list[str] = []
+
+    def observe(self, *, question, worker_id, territory_id, evidence):
+        return WorkerObservation(worker_id=worker_id, territory_id=territory_id)
+
+    def check_need_resolution(self, *, need, new_evidence, question):
+        self.seen_descriptions.append(need.description)
+        return NeedResolution(status="unresolved")
+
+    def verify_evidence_upgrade(self, *, need, epistemic_state, new_evidence, question):
+        return EvidenceUpgradeVerdict(approved=False)
+
+    def plan_round(
+        self,
+        *,
+        question,
+        graph,
+        resolution_results,
+        evidence,
+        workers,
+        memory_hints,
+        frontier,
+        incomplete_parents,
+        cross_repo_experience,
+        validation_feedback="",
+        repair_guidance="",
+        stuck_tried_workers=None,
+        candidate_probes=None,
+    ):
+        assignments = {need_id: [workers[0].id] for need_id in frontier.ready}
+        if "born-mid-retry" not in graph.nodes:
+            return RoundPlan(
+                assignments=assignments,
+                graph_updates={
+                    "born-mid-retry": NeedNode(
+                        need_id="born-mid-retry",
+                        need="birth wording",
+                        detail=UnresolvedNeed(description="birth wording"),
+                    )
+                },
+            )
+        existing = graph.nodes["born-mid-retry"]
+        if existing.need == "birth wording":
+            assignments["born-mid-retry"] = [workers[0].id]
+            return RoundPlan(
+                assignments=assignments,
+                graph_updates={
+                    "born-mid-retry": existing.model_copy(
+                        update={
+                            "need": "narrowed after birth",
+                            "detail": existing.detail.model_copy(
+                                update={"description": "narrowed after birth"}
+                            ),
+                        }
+                    )
+                },
+            )
+        return RoundPlan(assignments=assignments)
+
+
+def test_retry_from_trajectory_seeds_an_intent_anchor_for_a_node_born_mid_retry(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "mod.py").write_text("def unrelated():\n    pass\n", encoding="utf-8")
+    worker = WorkerCard(
+        id="worker-src", territory_id="src", name="src", root="src", files=["src/mod.py"]
+    )
+    prior_state = EvidenceState(
+        question="original question",
+        final_need_graph={
+            "root": NeedNode(
+                need_id="root",
+                need="original question",
+                resolution="unresolved",
+                detail=UnresolvedNeed(description="original question"),
+            ),
+        },
+    )
+    reasoner = _BirthsThenNarrowsANewNodeReasoner()
+
+    LocalCoordinator(tmp_path, [worker], reasoner=reasoner).retry_from_trajectory(
+        prior_state, fast_reasoner=_KeepsEverythingFastReasoner(), max_rounds=3
+    )
+
+    assert "birth wording" in reasoner.seen_descriptions
+    assert "narrowed after birth" not in reasoner.seen_descriptions
+
+
 def _fast_repair_graph_fixture() -> dict[str, NeedNode]:
     return {
         "root": NeedNode(
@@ -2260,6 +2514,12 @@ class _ReframesOneDropsAnotherReasoner:
                 NeedAlignmentVerdict(need_id="drop-need", verdict="drop"),
             ]
         )
+
+    def extract_answer_obligations(self, *, question):
+        return []
+
+    def check_obligation_coverage(self, *, question, obligations, evidence):
+        return []
 
 
 class _NeverResolvesAssignsEverythingReasoner(_PassthroughLookupsReasoner):
@@ -2424,6 +2684,12 @@ class _EmptyRepairPlanKeepsEverythingReasoner:
     def assess_need_alignment(self, *, question, package):
         return NeedAlignmentPlan()
 
+    def extract_answer_obligations(self, *, question):
+        return []
+
+    def check_obligation_coverage(self, *, question, obligations, evidence):
+        return []
+
 
 def test_retry_from_trajectory_enforces_alignment_mid_retry_with_an_empty_repair_plan(
     tmp_path: Path,
@@ -2465,6 +2731,144 @@ def test_retry_from_trajectory_enforces_alignment_mid_retry_with_an_empty_repair
     # propose_repair returned an empty RepairPlan -- proving it is an
     # explicit parameter, not inferred from repair_guidance's own text.
     assert True in reasoner.enforce_alignment_values
+
+
+class _RecordingSynthesizer:
+    """Stub AnswerSynthesizer that records every call -- used to prove
+    the monotonic-repair gate skips synthesis entirely (not just skips
+    the upgrade), rather than calling it and discarding the result."""
+
+    def __init__(self) -> None:
+        self.synthesize_calls = 0
+        self.synthesize_coalition_calls = 0
+
+    def synthesize(self, **kwargs):
+        self.synthesize_calls += 1
+        return "a freshly synthesized answer"
+
+    def synthesize_coalition(self, **kwargs):
+        self.synthesize_coalition_calls += 1
+        return "a freshly synthesized coalition answer"
+
+
+def test_retry_from_trajectory_is_monotonic_when_nothing_is_verified(tmp_path: Path) -> None:
+    # Regression test for a real, empirically-confirmed finding (a
+    # 48-question audit): a fast-repair retry that earns zero verified
+    # GroundedUpdates (the Evidence Upgrade Gate approved no upgrade all
+    # retry long -- here because _NeverResolvesAssignsEverythingReasoner
+    # never lets anything reach resolved/partial at all) must leave gen0's
+    # own answer completely untouched -- no re-selection of evidence, no
+    # re-synthesis. 7 real retries that found nothing to target still
+    # re-synthesized regardless before this fix; 5 of those 7 scored worse
+    # than gen0's own answer purely from that unforced re-synthesis.
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "mod.py").write_text("def unrelated():\n    pass\n", encoding="utf-8")
+    worker = WorkerCard(
+        id="worker-src", territory_id="src", name="src", root="src", files=["src/mod.py"]
+    )
+    prior_state = EvidenceState(
+        question="original question",
+        answer="gen0's own verbatim answer",
+        evidence=[
+            Evidence(
+                path="src/mod.py",
+                line_start=1,
+                line_end=1,
+                quote="def unrelated():",
+                reason="gen0's own evidence",
+            )
+        ],
+        final_need_graph={
+            "target-need": NeedNode(
+                need_id="target-need",
+                need="target need",
+                resolution="unresolved",
+                detail=UnresolvedNeed(description="target need"),
+            ),
+        },
+    )
+    synthesizer = _RecordingSynthesizer()
+
+    retried = LocalCoordinator(
+        tmp_path,
+        [worker],
+        reasoner=_NeverResolvesAssignsEverythingReasoner(),
+        synthesizer=synthesizer,
+    ).retry_from_trajectory(
+        prior_state, fast_reasoner=_EmptyRepairPlanKeepsEverythingReasoner(), max_rounds=1
+    )
+
+    assert retried.answer == "gen0's own verbatim answer"
+    assert synthesizer.synthesize_calls == 0
+    assert synthesizer.synthesize_coalition_calls == 0
+
+
+class _ProposesOneUncoveredObligationReasoner:
+    """Stub FastEvolutionReasoner: an empty RepairPlan (nothing in the
+    existing graph is targeted) but one answer obligation the starting
+    evidence pool does not cover -- reproducing the live qibo case this
+    mechanism exists for (a "which subclasses, and their overridden
+    methods" question where check_need_resolution accepted "found the one
+    subclass" as resolving the whole node, leaving the overridden-methods
+    half uncovered and only ever honestly hedged as unknown)."""
+
+    def propose_repair(self, *, package):
+        return RepairPlan(actions=[])
+
+    def assess_need_alignment(self, *, question, package):
+        return NeedAlignmentPlan()
+
+    def extract_answer_obligations(self, *, question):
+        return [AnswerObligation(obligation_id="obligation-0", description="overridden methods")]
+
+    def check_obligation_coverage(self, *, question, obligations, evidence):
+        return [
+            ObligationCoverage(obligation_id=item.obligation_id, covered=False)
+            for item in obligations
+        ]
+
+
+def test_retry_from_trajectory_injects_a_node_for_an_uncovered_obligation(tmp_path: Path) -> None:
+    # Regression test for a real, empirically-confirmed finding: a node
+    # can read resolution="resolved" -- unresolved_needs reads 0, nothing
+    # for propose_repair to target -- while still leaving part of the
+    # ORIGINAL question uncovered (see AnswerObligation's own docstring).
+    # Before this mechanism, that gap was invisible to fast-repair
+    # targeting; confirmed live it drove a real -6 point regression (gen0
+    # honestly hedged, fast-gen1 re-synthesized the same incomplete
+    # evidence and still scored worse). Question Coverage must inject a
+    # real, live leaf node for the gap so the round loop actually
+    # searches for it, not just report it after the fact the way
+    # _coverage_needs elsewhere in this module already does.
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "mod.py").write_text("def unrelated():\n    pass\n", encoding="utf-8")
+    worker = WorkerCard(
+        id="worker-src", territory_id="src", name="src", root="src", files=["src/mod.py"]
+    )
+    prior_state = EvidenceState(
+        question="original question",
+        answer="gen0's own incomplete but honestly-hedged answer",
+        final_need_graph={
+            "root": NeedNode(
+                need_id="root",
+                need="original question",
+                resolution="resolved",
+                detail=UnresolvedNeed(description="original question"),
+            ),
+        },
+    )
+
+    retried = LocalCoordinator(
+        tmp_path, [worker], reasoner=_NeverResolvesAssignsEverythingReasoner()
+    ).retry_from_trajectory(
+        prior_state, fast_reasoner=_ProposesOneUncoveredObligationReasoner(), max_rounds=1
+    )
+
+    assert "coverage-obligation-0" in retried.final_need_graph
+    executed_need_ids = {
+        trace.need_id for round_state in retried.rounds for trace in round_state.node_executions
+    }
+    assert "coverage-obligation-0" in executed_need_ids
 
 
 def _proposal(

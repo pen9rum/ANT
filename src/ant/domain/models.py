@@ -633,3 +633,45 @@ class EvidenceUpgradeVerdict(BaseModel):
     approved: bool
     supported_claim: str = ""  # only meaningful when approved
     evidence_ids: list[str] = Field(default_factory=list)  # only meaningful when approved
+
+
+class AnswerObligation(BaseModel):
+    """One fixed, small piece of what the ORIGINAL question requires an
+    answer to cover -- extracted once, up front, from the question's own
+    text (FastEvolutionReasoner.extract_answer_obligations), independent
+    of however the Need Graph goes on to decompose the problem.
+    Deliberately NOT a NeedNode and never added to NeedGraph.nodes on its
+    own: it never participates in routing, dependency edges, or worker
+    assignment -- it exists purely as a small, immutable task-level
+    checklist a fast-repair retry consults so a Need Graph that locally
+    resolved every node it happened to create can still be caught leaving
+    part of the original question uncovered.
+
+    Confirmed live why this must be independent of node resolution: a
+    qibo question asking for both "which subclasses" and "their
+    overridden methods" had check_need_resolution accept a node as
+    resolved once the subclass identity was found, even though the
+    override-methods half was only ever honestly hedged as unknown --
+    unresolved_needs read as 0 (nothing left to fix), so the retry ran
+    zero rounds and blindly re-synthesized gen0's own incomplete answer.
+    "Node resolved" means only that the node's OWN question got enough
+    evidence -- never that the original task is fully answered; only
+    Question Coverage checks the latter.
+    """
+
+    obligation_id: str
+    description: str
+
+
+class ObligationCoverage(BaseModel):
+    """FastEvolutionReasoner.check_obligation_coverage's per-obligation
+    verdict: does the CURRENT evidence pool actually address this specific
+    obligation, not just the question in general. `covered=False` is the
+    signal LocalCoordinator.retry_from_trajectory uses to inject a real,
+    fresh leaf NeedNode for the gap (see local.py's
+    _inject_coverage_gap_nodes) rather than leaving it to age silently as
+    a coverage_gap UnresolvedNeed that never reaches the round loop."""
+
+    obligation_id: str
+    covered: bool
+    rationale: str = ""

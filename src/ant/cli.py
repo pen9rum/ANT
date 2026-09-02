@@ -87,8 +87,13 @@ def ask(
     # ignores cross_repo_experience entirely and its summarize_task_experience
     # always returns "", so retrieving/recording anything here would just be
     # a real embedding-model load spent on a result nothing will ever use.
+    resolved_repo_name = repo.resolve().name
     cross_repo_experience = (
-        retrieve_cross_repo_experience_safe(global_memory, question) if provider else []
+        retrieve_cross_repo_experience_safe(
+            global_memory, question, exclude_repo=resolved_repo_name
+        )
+        if provider
+        else []
     )
     coordinator = LocalCoordinator(
         repo.resolve(),
@@ -107,7 +112,7 @@ def ask(
     record_task_memory(colony_memory, question, state)
     if provider:
         record_global_experience_safe(
-            global_memory, coordinator.reasoner, question, state, repo=repo.resolve().name
+            global_memory, coordinator.reasoner, question, state, repo=resolved_repo_name
         )
     typer.echo(json.dumps(state.model_dump(), indent=2))
 

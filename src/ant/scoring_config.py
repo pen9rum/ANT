@@ -193,6 +193,25 @@ class EvolutionConfig:
     # cycle on a failure mode it has no power over.
     negative_presence_gate_ratio: float = 0.5
 
+    # Fallback grouping for _specialize_overloaded_workers when a worker's
+    # territory has no usable subdirectory structure to split along (e.g.
+    # yt-dlp's yt_dlp/extractor/: 1010 files flat in one directory, zero
+    # subfolders -- _subdirectory_groups can only ever return one group
+    # for it). Clusters the worker's route history by embedding
+    # similarity over each route's need_terms instead (see
+    # ant.evolution._semantic_groups); this threshold is deliberately
+    # looser than _PENDING_CLUSTER_SIMILARITY_THRESHOLD
+    # (ant.coordinator.local, 0.92), which is tuned for near-duplicate
+    # TEXT dedup -- here two routes with related but non-identical need
+    # phrasing ("extractor lazy registration" / "dynamic extractor
+    # registry") should still cluster together.
+    semantic_cluster_similarity_threshold: float = 0.75
+    # A file only counts as part of a semantic cluster's candidate child
+    # territory once at least this many of the cluster's OWN routes
+    # independently retrieved it -- a single route's incidental top hit
+    # must not be enough to claim a file for a new persistent worker.
+    min_semantic_cluster_file_support: int = 2
+
 
 @dataclass(frozen=True)
 class RouteQualityConfig:

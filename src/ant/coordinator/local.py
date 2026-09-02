@@ -18,6 +18,7 @@ from ant.coordinator.repair import (
 from ant.coordinator.worker_retrieval import WorkerIndex, build_worker_index, rank_workers
 from ant.domain import (
     AbsenceProof,
+    AnswerObligation,
     Evidence,
     EvidenceState,
     FrontierResult,
@@ -29,6 +30,7 @@ from ant.domain import (
     NeedNode,
     NeedResolution,
     NodeExecutionTrace,
+    ObligationCoverage,
     PlanningRound,
     ProposedNode,
     RecoverySnapshot,
@@ -218,6 +220,39 @@ class RecoveryState:
     # the gate's trigger condition does not key off membership in this
     # dict.
     epistemic_states: dict[str, str] = field(default_factory=dict)
+    # Grounded Fast Repair: need_id -> the frozen "problem definition" a
+    # leaf need was given the moment it entered a fast-repair retry --
+    # either kept verbatim from prior_state (a node the Alignment Gate
+    # said "keep") or the new reframed text (a node it said "reframe").
+    # Confirmed live on a real yt-dlp trace: ordinary round-to-round
+    # editing (plan_round's own free rewrite of an existing node's need
+    # text, and check_need_resolution's own "partial" refined_need
+    # rewrite) can legitimately narrow a leaf's wording several rounds
+    # deep in the course of normal investigation -- e.g. "proxy
+    # configuration validation" narrowing into "the make_socks_proxy_opts/
+    # select_proxy helpers specifically" -- until a later round's
+    # genuinely correct, DIRECTLY-responsive evidence (a general
+    # _check_proxies method, not those two specific helpers) gets
+    # rejected by check_need_resolution for not answering the
+    # now-over-narrow wording, even though it squarely answers what the
+    # node was originally about. _resolution_check_need swaps this frozen
+    # anchor in for node.detail.description at every check_need_resolution/
+    # verify_evidence_upgrade call site (never at a search/routing call
+    # site -- investigation is still free to narrow, only the yardstick
+    # used to JUDGE it against stays fixed), correcting a bug the
+    # Alignment Gate cannot: that gate only catches a need pointed at the
+    # wrong TOPIC entirely, not one still on-topic but narrowed too far to
+    # correctly judge new evidence against. Deliberately NOT a NeedNode/
+    # UnresolvedNeed schema field -- this is fast-repair-only ephemeral
+    # bookkeeping, same as epistemic_states, until this mechanism has
+    # actually proven out. A node born mid-retry gets its own anchor
+    # seeded once, at the moment it is first committed to the graph (see
+    # _consolidate_and_commit's call site in ask()) -- it has no gen0
+    # framing to inherit, but still deserves the same protection against
+    # narrowing over whatever rounds remain. Only ever updated again by an
+    # explicit Alignment Gate reframe verdict (a deliberate, reviewed
+    # redefinition of the problem), never by ordinary per-round editing.
+    intent_anchors: dict[str, str] = field(default_factory=dict)
 
     @property
     def excluded_node_ids(self) -> set[str]:
@@ -487,12 +522,15 @@ class LocalCoordinator:
                     for item in obs.evidence
                     if _evidence_key(item) not in pre_round_evidence_keys
                 ]
+                resolution_check_need = _resolution_check_need(
+                    node.detail, need_id, recovery, enforce_alignment
+                )
                 resolution = self.reasoner.check_need_resolution(
-                    need=node.detail, new_evidence=new_evidence, question=question
+                    need=resolution_check_need, new_evidence=new_evidence, question=question
                 )
                 resolution, grounded_update = self._apply_evidence_upgrade_gate(
                     resolution=resolution,
-                    need=node.detail,
+                    need=resolution_check_need,
                     need_id=need_id,
                     new_evidence=new_evidence,
                     recovery=recovery,
@@ -551,12 +589,15 @@ class LocalCoordinator:
                         item for item in hits if _evidence_key(item) not in pre_round_evidence_keys
                     ]
                     evidence.extend(new_evidence)
+                    resolution_check_need = _resolution_check_need(
+                        node.detail, need_id, recovery, enforce_alignment
+                    )
                     resolution = self.reasoner.check_need_resolution(
-                        need=node.detail, new_evidence=new_evidence, question=question
+                        need=resolution_check_need, new_evidence=new_evidence, question=question
                     )
                     resolution, grounded_update = self._apply_evidence_upgrade_gate(
                         resolution=resolution,
-                        need=node.detail,
+                        need=resolution_check_need,
                         need_id=need_id,
                         new_evidence=new_evidence,
                         recovery=recovery,
@@ -676,12 +717,15 @@ class LocalCoordinator:
                     for item in obs.evidence
                     if _evidence_key(item) not in pre_round_evidence_keys
                 ]
+                resolution_check_need = _resolution_check_need(
+                    node.detail, need_id, recovery, enforce_alignment
+                )
                 resolution = self.reasoner.check_need_resolution(
-                    need=node.detail, new_evidence=new_evidence, question=question
+                    need=resolution_check_need, new_evidence=new_evidence, question=question
                 )
                 resolution, grounded_update = self._apply_evidence_upgrade_gate(
                     resolution=resolution,
-                    need=node.detail,
+                    need=resolution_check_need,
                     need_id=need_id,
                     new_evidence=new_evidence,
                     recovery=recovery,
@@ -713,12 +757,25 @@ class LocalCoordinator:
             # together -- neither becomes a real node on its own anymore
             # (see RoundPlan's docstring, GraphConsolidationPlan). The
             # buffer is fully consumed every round (a proposal with no
-            # explicit decision still defaults to "create" -- see
-            # _apply_consolidation_decisions), so nothing carries over.
+            # explicit decision now defaults to "drop", never "create" --
+            # see _apply_consolidation_decisions), so nothing carries over.
             proposals = _collect_proposals(orchestrator_new_nodes, observed_needs)
+            pre_consolidation_node_ids = set(graph.nodes)
             graph = self._consolidate_and_commit(
                 question, graph, proposals, recovery, enforce_alignment=enforce_alignment
             )
+            if enforce_alignment:
+                # A node born mid-retry has no gen0 framing to inherit an
+                # intent_anchor from (retry_from_trajectory only seeds
+                # kept/reframed leaves) -- seed it here, once, at the
+                # moment it is first committed, so it gets the same
+                # protection against narrowing over whatever rounds
+                # remain (see RecoveryState.intent_anchors' own
+                # docstring).
+                for new_node_id in set(graph.nodes) - pre_consolidation_node_ids:
+                    recovery.intent_anchors.setdefault(
+                        new_node_id, graph.nodes[new_node_id].detail.description
+                    )
             graph = _prune_dangling_edges(graph)
             observed_needs = []
 
@@ -939,27 +996,51 @@ class LocalCoordinator:
             absence_proofs.append(inheritance_proof)
 
         answer = ""
-        ranked_evidence = _rank_global_evidence(evidence, question)
-        evidence = _select_evidence(self.reasoner, question, ranked_evidence, search)
-        if self.synthesizer and evidence:
-            coalition_workers = _last_coalition_workers(rounds)
-            if coalition_workers:
-                answer = self.synthesizer.synthesize_coalition(
-                    question=question,
-                    worker_ids=coalition_workers,
-                    evidence=evidence,
-                    absence_proofs=absence_proofs,
-                    prior_answer=prior_answer,
-                    grounded_updates=grounded_updates,
-                )
-            else:
-                answer = self.synthesizer.synthesize(
-                    question=question,
-                    evidence=evidence,
-                    absence_proofs=absence_proofs,
-                    prior_answer=prior_answer,
-                    grounded_updates=grounded_updates,
-                )
+        if enforce_alignment and prior_answer and not grounded_updates:
+            # Grounded Fast Repair must be monotonic: if not one leaf
+            # transition this retry earned a verified GroundedUpdate (the
+            # Evidence Upgrade Gate approved zero upgrades all retry long),
+            # nothing new was actually confirmed -- re-selecting evidence
+            # and re-synthesizing anyway is pure downside, never upside.
+            # _select_evidence's own LLM judgment call is a fresh,
+            # independently-unstable decision every time it runs (not a
+            # deterministic filter), and patch-mode re-synthesis is itself
+            # a further source of wording drift -- both risk degrading an
+            # already-good answer for no compensating chance of
+            # improvement when there is nothing grounded to patch in.
+            # Confirmed empirically across a 48-question audit: 7 retries
+            # found nothing to target at all (0 rounds run) and still
+            # re-selected evidence and re-synthesized regardless -- 5 of
+            # those 7 scored WORSE than gen0's own answer, 1 flat, only 1
+            # improved. Keep gen0's own answer and its own evidence pool
+            # (not yet re-selected at this point) completely untouched
+            # instead. This branch can only ever fire on a fast-repair
+            # retry (enforce_alignment/prior_answer are both gen0/
+            # slow-gen1-never-set), so gen0 and slow-gen1's own behavior
+            # is unaffected.
+            answer = prior_answer
+        else:
+            ranked_evidence = _rank_global_evidence(evidence, question)
+            evidence = _select_evidence(self.reasoner, question, ranked_evidence, search)
+            if self.synthesizer and evidence:
+                coalition_workers = _last_coalition_workers(rounds)
+                if coalition_workers:
+                    answer = self.synthesizer.synthesize_coalition(
+                        question=question,
+                        worker_ids=coalition_workers,
+                        evidence=evidence,
+                        absence_proofs=absence_proofs,
+                        prior_answer=prior_answer,
+                        grounded_updates=grounded_updates,
+                    )
+                else:
+                    answer = self.synthesizer.synthesize(
+                        question=question,
+                        evidence=evidence,
+                        absence_proofs=absence_proofs,
+                        prior_answer=prior_answer,
+                        grounded_updates=grounded_updates,
+                    )
         usage = (
             self.synthesizer.drain_usage() if isinstance(self.synthesizer, UsageReporter) else None
         )
@@ -999,6 +1080,13 @@ class LocalCoordinator:
         gates every leaf resolution behind direct-evidence verification
         (see WorkerReasoner.consolidate_graph's enforce_alignment
         parameter and LocalCoordinator._apply_evidence_upgrade_gate).
+        Every leaf's resolution is judged against a frozen intent_anchor,
+        not whatever its own wording has drifted into by the time new
+        evidence arrives (see RecoveryState.intent_anchors and
+        _resolution_check_need) -- catches a need that is still on-topic
+        but has narrowed too far to correctly judge new evidence against,
+        which the Alignment Gate above cannot (it only catches a need
+        pointed at the wrong topic entirely).
         """
         package = assemble_trajectory_package(prior_state)
         alignment_plan = fast_reasoner.assess_need_alignment(
@@ -1026,7 +1114,47 @@ class LocalCoordinator:
         seed = resolve_repair_plan(plan)
         initial_graph, initial_evidence = build_retry_starting_state(aligned_state, seed)
 
+        # Question Coverage Contract: independent of whatever the Need
+        # Graph itself thinks is resolved -- a node reading "resolved"
+        # means only that node's OWN (possibly narrower) question got
+        # enough evidence, never that the original question is fully
+        # answered (see AnswerObligation's own docstring for the live case
+        # this was found from: a "which subclasses, and their overridden
+        # methods" question had the subclass-identity half accepted as
+        # resolved while the overridden-methods half was only ever
+        # honestly hedged as unknown -- unresolved_needs read 0, so the
+        # retry ran zero rounds and blindly re-synthesized the same
+        # incomplete answer). Checked against the retry's own STARTING
+        # evidence pool, before any new round runs, so a gap already
+        # covered by gen0's own evidence never spuriously creates a node.
+        obligations = fast_reasoner.extract_answer_obligations(question=prior_state.question)
+        coverage = fast_reasoner.check_obligation_coverage(
+            question=prior_state.question, obligations=obligations, evidence=initial_evidence
+        )
+        initial_graph, coverage_gap_node_ids = _inject_coverage_gap_nodes(
+            initial_graph, obligations, coverage
+        )
+
         prior_tried_workers = prior_state.final_recovery_state.tried_workers_by_node
+        # Every kept/reframed leaf's frozen "problem definition" (see
+        # RecoveryState.intent_anchors' own docstring) -- aligned_graph
+        # already carries the right text for both: unchanged (gen0's own
+        # wording) for a "keep" verdict, rewritten for a "reframe" one.
+        # A discarded-misaligned node gets none -- excluded from the
+        # frontier either way, it will never be judged against anything.
+        # A newly-injected coverage-gap node gets its own description as
+        # its anchor, same as any other freshly-born fast-repair node.
+        intent_anchors = {
+            need_id: node.detail.description
+            for need_id, node in aligned_graph.nodes.items()
+            if need_id not in discarded_misaligned_ids
+        }
+        intent_anchors.update(
+            {
+                need_id: initial_graph.nodes[need_id].detail.description
+                for need_id in coverage_gap_node_ids
+            }
+        )
         initial_recovery = RecoveryState(
             tried_workers_by_node={
                 need_id: set(worker_ids)
@@ -1043,6 +1171,7 @@ class LocalCoordinator:
             },
             discarded_misaligned_node_ids=discarded_misaligned_ids,
             epistemic_states=epistemic_states,
+            intent_anchors=intent_anchors,
         )
 
         return self.ask(
@@ -1876,6 +2005,56 @@ def _rank_global_evidence(evidence: list[Evidence], question: str) -> list[Evide
     return sorted(evidence, key=score, reverse=True)
 
 
+def _inject_coverage_gap_nodes(
+    graph: NeedGraph,
+    obligations: list[AnswerObligation],
+    coverage: list[ObligationCoverage],
+) -> tuple[NeedGraph, list[str]]:
+    """Question Coverage Contract's other half of LocalCoordinator.
+    retry_from_trajectory: for every obligation check_obligation_coverage
+    found NOT covered by the retry's starting evidence, adds a real, live
+    leaf NeedNode for it -- root-level (no depends_on, no children, so it
+    lands directly in round 0's ready frontier via compute_frontier),
+    distinct from _coverage_needs elsewhere in this module, which only
+    ever produces a post-hoc UnresolvedNeed for the FINAL reported list,
+    never a graph node the round loop can actually act on. Without this,
+    an uncovered obligation stays invisible to fast-repair's own targeting
+    (unresolved_needs can read 0 even though part of the original question
+    was never investigated) -- see AnswerObligation's own docstring for
+    the live case this was found from.
+
+    Idempotent against an id already present in `graph` (e.g. a second
+    fast-repair pass over the same prior_state) -- never clobbers an
+    existing node under the same id.
+    """
+    obligations_by_id = {item.obligation_id: item for item in obligations}
+    nodes = dict(graph.nodes)
+    injected_ids: list[str] = []
+    for verdict in coverage:
+        if verdict.covered:
+            continue
+        obligation = obligations_by_id.get(verdict.obligation_id)
+        if obligation is None:
+            continue
+        need_id = f"coverage-{obligation.obligation_id}"
+        if need_id in nodes:
+            continue
+        nodes[need_id] = NeedNode(
+            need_id=need_id,
+            need=obligation.description,
+            detail=UnresolvedNeed(
+                description=obligation.description,
+                kind="coverage_gap",
+                missing=obligation.description,
+                scope="unknown",
+            ),
+        )
+        injected_ids.append(need_id)
+    if not injected_ids:
+        return graph, []
+    return NeedGraph(nodes=nodes), injected_ids
+
+
 def _coverage_needs(
     question: str,
     evidence: list[Evidence],
@@ -2648,6 +2827,33 @@ def _apply_consolidation_decisions(
             nodes[parent_id] = parent.model_copy(update={"children": [*parent.children, node_id]})
 
     return graph.model_copy(update={"nodes": nodes})
+
+
+def _resolution_check_need(
+    detail: UnresolvedNeed,
+    need_id: str,
+    recovery: RecoveryState,
+    enforce_alignment: bool,
+) -> UnresolvedNeed:
+    """Substitutes a leaf's frozen intent_anchor (see
+    RecoveryState.intent_anchors' own docstring) for its own, possibly
+    since-narrowed, description -- ONLY for what a call site uses to
+    JUDGE new evidence (check_need_resolution, verify_evidence_upgrade),
+    never for what drives search/routing (worker assignment, query
+    construction), which must keep seeing the node's real, freely-
+    narrowing current text so investigation itself is not blocked from
+    getting more specific. A no-op (returns `detail` unchanged) outside
+    fast-repair mode, or for a need_id with no anchor seeded yet (a node
+    not yet committed to the graph when this is called, or a call made
+    before this mechanism existed on an older RecoveryState) -- the
+    caller then falls back to today's exact behavior.
+    """
+    if not enforce_alignment:
+        return detail
+    anchor = recovery.intent_anchors.get(need_id)
+    if not anchor:
+        return detail
+    return detail.model_copy(update={"description": anchor})
 
 
 def _prune_dangling_edges(graph: NeedGraph) -> NeedGraph:

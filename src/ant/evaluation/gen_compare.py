@@ -11,7 +11,13 @@ from ant.domain import EvidenceState
 from ant.evaluation.datasets import EvalExample
 from ant.evaluation.judge import judge_answer
 from ant.evaluation.metrics import EvalScore, build_reference_idf
-from ant.evaluation.runner import BatchResult, _fallback_prediction, run_batch
+from ant.evaluation.runner import (
+    BatchResult,
+    _fallback_prediction,
+    _repo_basename,
+    _resolve_repo,
+    run_batch,
+)
 from ant.evolution import EvolutionEvent, evolve_workers
 from ant.memory import IndexStore
 from ant.providers import OpenAIProvider
@@ -65,19 +71,19 @@ def run_gen_compare(
     (mirroring `ant retry`'s own `--synthesize openai` requirement -- there
     is no heuristic/mock fallback for any of these).
 
-    gen0 and slow-gen1 both run against `index_path` directly (colony memory
-    accumulates there across both stages, matching every prior run's own
-    methodology). fast-gen1 instead runs against a frozen copy of
-    `index_path` taken right after gen0 finishes, before evolve_workers
-    mutates it in place -- a task-conditioned retry repairs gen0's own
-    trajectory with gen0's own worker set, it must never silently benefit
-    from evolution it never actually saw (see
+    gen0 and slow-gen1 both run against `index_path`'s real per-repo index
+    (colony memory accumulates there across both stages, matching every
+    prior run's own methodology) -- see `resolved_index_path` below for
+    exactly which directory that is. fast-gen1 instead runs against a
+    frozen copy of that same real index taken right after gen0 finishes,
+    before evolve_workers mutates it in place -- a task-conditioned retry
+    repairs gen0's own trajectory with gen0's own worker set, it must never
+    silently benefit from evolution it never actually saw (see
     LocalCoordinator.retry_from_trajectory's own "task-conditioned, not
     colony reorganization" docstring). A fast-gen1-only call reuses
     whichever snapshot an earlier gen0 call against this `run_dir` already
     froze; if none exists (e.g. this `run_dir` predates that snapshot
-    mechanism), it falls back to `index_path` as-is, since that is exactly
-    what every fast-gen1 run before this mechanism existed already did.
+    mechanism), it falls back to the real index as-is.
     """
     run_dir.mkdir(parents=True, exist_ok=True)
     resolved_fast_max_rounds = fast_max_rounds or max_rounds
@@ -86,7 +92,27 @@ def run_gen_compare(
     fast_gen1_results_path = run_dir / "fast-gen1-results.jsonl"
     gen0_index_snapshot = run_dir / "_gen0_index_snapshot"
 
-    gen0_worker_count = len(IndexStore(index_path).load_workers())
+    # run_batch's own _run_example resolves its REAL per-repo index to
+    # index_path / _repo_basename(example.repo) whenever a dataset row's
+    # repo isn't "." (every "owner/repo"-formatted dataset row this project
+    # uses) -- `index_path` itself is left untouched, never read or written
+    # by any actual question in that case. Everything below that reads or
+    # snapshots "the index gen0 actually used" (worker count, the pre-
+    # evolution snapshot fast-gen1 replays against, evolve_workers itself)
+    # must use this SAME resolved path, not the raw one -- passing the raw
+    # top-level index_path to any of them silently operated on a
+    # permanently-empty directory instead. Confirmed live: pennylane's real
+    # per-question index had 45 recorded routes; the top-level index
+    # evolve_workers was previously called with had 0 -- specialize/birth/
+    # merge found nothing to act on, silently, for every prior gen0/
+    # slow-gen1 run against an "owner/repo"-formatted dataset this project
+    # has ever done. `run_batch` itself keeps receiving the raw `index_path`
+    # below (unchanged) -- it does this same resolution per example
+    # internally, so pre-resolving it here would double-nest.
+    resolved_index_path = (
+        index_path if examples[0].repo == "." else index_path / _repo_basename(examples[0].repo)
+    )
+
     if run_gen0:
         run_batch(
             examples=examples,
@@ -101,7 +127,14 @@ def run_gen_compare(
         )
         if gen0_index_snapshot.exists():
             shutil.rmtree(gen0_index_snapshot)
-        shutil.copytree(index_path, gen0_index_snapshot)
+        shutil.copytree(resolved_index_path, gen0_index_snapshot)
+    # Read after run_gen0 (if it ran), so a first-ever call against a fresh
+    # repo doesn't try to read resolved_index_path before run_batch's own
+    # _build_index has had a chance to create it.
+    try:
+        gen0_worker_count = len(IndexStore(resolved_index_path).load_workers())
+    except FileNotFoundError:
+        gen0_worker_count = 0
     gen0_scores = _load_or_rebuild_scores(
         results_path=gen0_results_path,
         run_dir=run_dir,
@@ -113,8 +146,32 @@ def run_gen_compare(
     evolution_events: list[EvolutionEvent] = []
     slow_worker_count = gen0_worker_count
     if run_slow_gen1:
+        # `repo_root` here is run_gen_compare's own raw --repo value, which
+        # for an "owner/repo"-formatted dataset (see _resolve_repo) must be
+        # the checkout's PARENT directory so run_batch's own per-example
+        # resolution (repo_root / basename fallback) lands on the actual
+        # repo -- not the repo root itself. evolve_workers, by contrast,
+        # needs the actual repo root directly (its specialize path reads a
+        # worker's own files straight off `repo_root / file`, both via
+        # _child_worker's card rebuild and _semantic_groups' live
+        # retrieval). Passing the raw parent-dir repo_root straight through
+        # here silently pointed both at the wrong files -- caught before it
+        # ever ran live, since specialization/semantic-clustering had never
+        # actually fired against an owner/repo-formatted dataset before.
+        # Resolve once, the same way run_batch resolves it per example.
+        # `repo_root` here is run_gen_compare's own raw --repo value, which
+        # for an "owner/repo"-formatted dataset (see _resolve_repo) must be
+        # the checkout's PARENT directory so run_batch's own per-example
+        # resolution (repo_root / basename fallback) lands on the actual
+        # repo -- not the repo root itself. evolve_workers, by contrast,
+        # needs the actual repo root directly (its specialize path reads a
+        # worker's own files straight off `repo_root / file`, both via
+        # _child_worker's card rebuild and _semantic_groups' live
+        # retrieval). Resolve once, the same way run_batch resolves it per
+        # example.
+        worker_repo_root = _resolve_repo(repo_root, examples[0].repo) or repo_root
         evolution_result = evolve_workers(
-            index_path, repo_root=repo_root, reasoner=OpenAIProvider()
+            resolved_index_path, repo_root=worker_repo_root, reasoner=OpenAIProvider()
         )
         evolution_events = evolution_result.events
         slow_worker_count = evolution_result.worker_count
@@ -149,7 +206,9 @@ def run_gen_compare(
                 f"{run_dir} has none for: {missing}. Run the gen0 stage against this "
                 "run_dir at least once first."
             )
-        fast_gen1_index = gen0_index_snapshot if gen0_index_snapshot.exists() else index_path
+        fast_gen1_index = (
+            gen0_index_snapshot if gen0_index_snapshot.exists() else resolved_index_path
+        )
         _run_fast_gen1(
             examples=examples,
             repo_root=repo_root,

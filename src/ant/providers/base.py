@@ -4,6 +4,7 @@ from typing import Protocol, runtime_checkable
 
 from ant.domain import (
     AbsenceProof,
+    AnswerObligation,
     Evidence,
     EvidenceUpgradeVerdict,
     FrontierResult,
@@ -13,6 +14,7 @@ from ant.domain import (
     NeedGraph,
     NeedNode,
     NeedResolution,
+    ObligationCoverage,
     PlanningRound,
     ProposedNode,
     RepairPlan,
@@ -474,6 +476,54 @@ class FastEvolutionReasoner(Protocol):
         continuously, to every *new* node a fast-repair retry's own
         rounds propose -- see WorkerReasoner.consolidate_graph's
         `enforce_alignment` parameter.
+        """
+        ...
+
+    def extract_answer_obligations(self, *, question: str) -> list[AnswerObligation]:
+        """Question Coverage Contract, part 1: reads only `question`'s own
+        text (never the Need Graph, never evidence) and returns a small,
+        fixed list of the concrete things a complete answer must cover --
+        e.g. "How does PennyLane implement X" split into (a) where X lives,
+        (b) how the two questions the question actually contains are the
+        same thing. Deliberately independent of however the Need Graph
+        goes on to decompose the problem: a node being marked `resolved`
+        means only that node's own (possibly narrower) question got
+        enough evidence, never that every part of the original question
+        got covered -- confirmed live this gap is real (a "which
+        subclasses, and their overridden methods" question had
+        check_need_resolution accept "found the one subclass" as resolved,
+        leaving the overridden-methods half never investigated, honestly
+        hedged as unknown, and scored low by the judge -- unresolved_needs
+        read 0, so the retry ran zero rounds and blindly re-synthesized
+        the same incomplete answer). Called once per fast-repair retry, in
+        LocalCoordinator.retry_from_trajectory, from the ORIGINAL question
+        text -- never re-derives obligations from a reframed/narrowed need
+        wording. A handful of items (usually 1-4), not an open-ended
+        decomposition -- this is a fixed checklist, not another graph.
+        """
+        ...
+
+    def check_obligation_coverage(
+        self,
+        *,
+        question: str,
+        obligations: list[AnswerObligation],
+        evidence: list[Evidence],
+    ) -> list[ObligationCoverage]:
+        """Question Coverage Contract, part 2: for each of
+        `extract_answer_obligations`'s obligations, judges whether the
+        CURRENT evidence pool actually addresses that specific obligation
+        -- not whether the question in general has been searched, and not
+        whether some Need Graph node happens to be marked resolved. Called
+        once per fast-repair retry against the retry's own starting
+        evidence pool (gen0's carried-forward evidence, before any new
+        round runs), immediately after extract_answer_obligations.
+        `covered=False` on any entry is what
+        LocalCoordinator.retry_from_trajectory uses to inject a real, live
+        leaf NeedNode for that specific gap (see local.py's
+        _inject_coverage_gap_nodes) so the retry's own round loop actually
+        goes looking for it, rather than the gap only ever surfacing as a
+        post-hoc coverage_gap UnresolvedNeed that never reaches execution.
         """
         ...
 

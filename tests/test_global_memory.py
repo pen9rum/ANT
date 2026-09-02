@@ -80,6 +80,52 @@ def test_retrieval_never_filters_or_privileges_by_repo(tmp_path: Path) -> None:
     assert store.retrieve_similar("query", embedder) == ["a pattern"]
 
 
+def test_exclude_repo_filters_out_a_same_repo_entry_even_when_it_is_the_top_match(
+    tmp_path: Path,
+) -> None:
+    # Regression test for a real cross-repo-benchmark bug: a repo's own
+    # gen0 attempt on a question is recorded here, then slow-gen1 (the
+    # very next stage, same repo, same question) queries again -- without
+    # exclude_repo, its own just-recorded entry was the single best
+    # cosine match, defeating the entire "cross-repo" premise by handing
+    # a task its own prior self's struggle back as if it were outside
+    # precedent.
+    store = GlobalMemoryStore(tmp_path)
+    embedder = _embedder(
+        {
+            "own struggle": [1.0, 0.0],
+            "other repo pattern": [0.9, 0.1],
+            "query": [1.0, 0.0],
+        }
+    )
+    store.record_experience(TaskExperience(summary="own struggle", repo="pennylane"), embedder)
+    store.record_experience(
+        TaskExperience(summary="other repo pattern", repo="qibo"), embedder
+    )
+
+    excluded = store.retrieve_similar("query", embedder, exclude_repo="pennylane")
+    unfiltered = store.retrieve_similar("query", embedder)
+
+    assert excluded == ["other repo pattern"]
+    assert unfiltered == ["own struggle", "other repo pattern"]
+
+
+def test_exclude_repo_is_a_no_op_when_not_given(tmp_path: Path) -> None:
+    store = GlobalMemoryStore(tmp_path)
+    embedder = _embedder({"a pattern": [1.0, 0.0], "query": [1.0, 0.0]})
+    store.record_experience(TaskExperience(summary="a pattern", repo="same-repo"), embedder)
+
+    assert store.retrieve_similar("query", embedder, exclude_repo="") == ["a pattern"]
+
+
+def test_exclude_repo_returns_empty_when_it_is_the_only_repo_recorded(tmp_path: Path) -> None:
+    store = GlobalMemoryStore(tmp_path)
+    embedder = _embedder({"a pattern": [1.0, 0.0], "query": [1.0, 0.0]})
+    store.record_experience(TaskExperience(summary="a pattern", repo="pennylane"), embedder)
+
+    assert store.retrieve_similar("query", embedder, exclude_repo="pennylane") == []
+
+
 class _StubReasoner:
     def __init__(self, summary: str) -> None:
         self._summary = summary
@@ -124,6 +170,20 @@ def test_record_global_experience_records_the_reasoners_summary(tmp_path: Path) 
     )
 
     assert store.retrieve_similar("similar query", embedder) == ["a transferable pattern"]
+
+
+def test_retrieve_cross_repo_experience_safe_passes_exclude_repo_through(
+    tmp_path: Path, monkeypatch
+) -> None:
+    import ant.memory.global_memory as global_memory_module
+
+    embedder = _embedder({"own struggle": [1.0, 0.0], "query": [1.0, 0.0]})
+    monkeypatch.setattr(global_memory_module, "get_shared_embedder", lambda: embedder)
+    store = GlobalMemoryStore(tmp_path)
+    store.record_experience(TaskExperience(summary="own struggle", repo="pennylane"), embedder)
+
+    assert retrieve_cross_repo_experience_safe(store, "query", exclude_repo="pennylane") == []
+    assert retrieve_cross_repo_experience_safe(store, "query") == ["own struggle"]
 
 
 def test_retrieve_cross_repo_experience_safe_degrades_to_empty_without_an_embedder(
