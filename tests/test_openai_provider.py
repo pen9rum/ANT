@@ -921,6 +921,85 @@ def test_verify_evidence_upgrade_rejects_approved_true_with_no_supported_claim()
     assert verdict.approved is False
 
 
+def test_select_lookups_ranks_by_relevance_and_diversifies_by_path() -> None:
+    # Budget-critical (K=6 kept), but arrival order carries no epistemic
+    # meaning: a relevant item arriving late must still be visible, and a
+    # single relevant item from an otherwise-underrepresented path must
+    # not be crowded out by a same-path glut that happens to arrive first.
+    provider = OpenAIProvider(model="gpt-4.1")
+    captured = {}
+
+    def fake_responses_json(prompt, max_output_tokens=256):
+        captured["prompt"] = prompt
+        return type("Result", (), {"text": '{"selected": []}'})()
+
+    provider.responses_json = fake_responses_json  # type: ignore[method-assign]
+
+    evidence = [
+        Evidence(
+            path="src/samepath.py",
+            line_start=index,
+            line_end=index + 1,
+            quote=f"target_symbol usage {index}",
+            reason="r",
+        )
+        for index in range(9)
+    ] + [
+        Evidence(
+            path="src/other.py",
+            line_start=1,
+            line_end=2,
+            quote="target_symbol lonely usage",
+            reason="r",
+        )
+    ]
+
+    provider.select_lookups(need="target_symbol", evidence=evidence, candidates=["target_symbol"])
+
+    assert "src/other.py" in captured["prompt"]
+
+
+def test_plan_worker_actions_ranks_by_relevance_and_diversifies_by_path() -> None:
+    provider = OpenAIProvider(model="gpt-4.1")
+    captured = {}
+
+    def fake_responses_json(prompt, max_output_tokens=768):
+        captured["prompt"] = prompt
+        return type("Result", (), {"text": '{"actions": []}'})()
+
+    provider.responses_json = fake_responses_json  # type: ignore[method-assign]
+
+    evidence = [
+        Evidence(
+            path="src/samepath.py",
+            line_start=index,
+            line_end=index + 1,
+            quote=f"target_symbol usage {index}",
+            reason="r",
+        )
+        for index in range(10)
+    ] + [
+        Evidence(
+            path="src/other.py",
+            line_start=1,
+            line_end=2,
+            quote="target_symbol lonely usage",
+            reason="r",
+        )
+    ]
+
+    provider.plan_worker_actions(
+        need="target_symbol",
+        evidence=evidence,
+        candidate_symbols=["target_symbol"],
+        available_tools=["navigate"],
+        hints=[],
+        max_actions=4,
+    )
+
+    assert "src/other.py" in captured["prompt"]
+
+
 def test_verify_evidence_upgrade_shows_every_new_evidence_item_no_count_cap() -> None:
     # Regression test for a real sphinx trace: a round's own new_evidence
     # can easily exceed 8 items once multiple workers or a coalition

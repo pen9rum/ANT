@@ -41,6 +41,7 @@ from ant.domain import (
 )
 from ant.indexing.cards import template_routing_summary
 from ant.providers.pricing import estimate_cost_usd
+from ant.retrieval import extract_terms, score_evidence
 from ant.tools.symbol_index import build_symbol_index
 
 # 512/768 was cutting detailed technical answers off mid-sentence (e.g. a
@@ -374,9 +375,15 @@ class OpenAIProvider:
         # per candidate/tool call) to keep the increase bounded.
         if not candidates:
             return []
+        # Budget-critical, not correctness-critical (see
+        # _rank_evidence_for_need's own docstring): keep the K=6 budget,
+        # but fill it by relevance to `need` and path-diversity instead of
+        # arrival order, so all 6 slots don't end up as near-duplicates
+        # from whichever single file happened to be searched first.
+        visible = _diversify_by_path(_rank_evidence_for_need(evidence, need))[:6]
         evidence_text = "\n".join(
             f"[{index}] {item.path}:{item.line_start}-{item.line_end}\n{item.quote[:600]}"
-            for index, item in enumerate(evidence[:6])
+            for index, item in enumerate(visible)
         )
         prompt = (
             "You are deciding which candidate strings are worth a follow-up "
@@ -502,9 +509,15 @@ class OpenAIProvider:
         # target -- an empty plan is a legitimate answer ("already enough").
         if not candidate_symbols or max_actions <= 0:
             return []
+        # Budget-critical, not correctness-critical (see
+        # _rank_evidence_for_need's own docstring): keep the K=8 budget,
+        # but fill it by relevance to `need` and path-diversity instead of
+        # arrival order, so all 8 slots don't end up as near-duplicates
+        # from whichever single file happened to be searched first.
+        visible = _diversify_by_path(_rank_evidence_for_need(evidence, need))[:8]
         evidence_text = "\n".join(
             f"[{index}] {item.path}:{item.line_start}-{item.line_end}\n{item.quote[:600]}"
-            for index, item in enumerate(evidence[:8])
+            for index, item in enumerate(visible)
         )
         tool_descriptions = {
             "navigate": "jump to a symbol's own definition/implementation block",
@@ -1757,6 +1770,52 @@ def _with_latency_and_cost(result: ResponseResult, model: str, start: float) -> 
         }
     )
     return ResponseResult(text=result.text, usage=usage, raw=result.raw)
+
+
+def _rank_evidence_for_need(evidence: list[Evidence], need: str) -> list[Evidence]:
+    """The same canonical relevance scoring _rank_global_evidence (in
+    coordinator/local.py) uses before final synthesis, reused here for the
+    two budget-critical action-selection prompts (select_lookups,
+    plan_worker_actions) that only ever show a bounded top-K slice of
+    `evidence`. Replaces sorting by arrival order (no epistemic meaning)
+    with sorting by actual relevance to `need` -- the budget itself (K)
+    is unchanged, only which K items fill it.
+    """
+    terms = extract_terms(need)
+
+    def score(item: Evidence) -> int:
+        return score_evidence(
+            quote=item.quote,
+            path=item.path,
+            reason=item.reason,
+            terms=terms,
+            dense_score=item.dense_score,
+            symbol_name=item.symbols[0] if item.symbols else "",
+        )
+
+    return sorted(evidence, key=score, reverse=True)
+
+
+def _diversify_by_path(evidence: list[Evidence]) -> list[Evidence]:
+    """Round-robins ranked evidence across distinct paths (each path's own
+    internal rank order preserved) so a bounded top-K slice taken after
+    this can't end up as K near-duplicate quotes from the same file/region
+    just because that one file scored well -- representative, not just
+    top-scoring.
+    """
+    by_path: dict[str, list[Evidence]] = {}
+    order: list[str] = []
+    for item in evidence:
+        if item.path not in by_path:
+            by_path[item.path] = []
+            order.append(item.path)
+        by_path[item.path].append(item)
+    diversified: list[Evidence] = []
+    while any(by_path[path] for path in order):
+        for path in order:
+            if by_path[path]:
+                diversified.append(by_path[path].pop(0))
+    return diversified
 
 
 def _is_json_object(text: str) -> bool:
