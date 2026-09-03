@@ -1066,3 +1066,184 @@ def test_evolve_workers_specializes_a_flat_directory_via_route_semantic_clusteri
     # they must not be silently swept into either child's territory.
     assert not any("flat/beta.py" in child_files for child_files in files_by_child)
     assert not any("flat/delta.py" in child_files for child_files in files_by_child)
+
+
+class _StrengthenRouteReasoner(_AlwaysVetoReasoner):
+    def decide_episode_action(
+        self, *, strategy, need_terms, occurrences, successes, total_evidence_gain, workers
+    ):
+        return "strengthen_route"
+
+
+def test_strengthen_route_does_not_stale_its_source_workers_own_other_routes(
+    tmp_path: Path,
+) -> None:
+    # Regression test for a real bug found live on qibo: evolve_workers
+    # unioned source_worker_ids from EVERY episode-driven event kind into
+    # removed_worker_ids, including "strengthen_route" -- which reinforces
+    # a route, it does not remove anyone. mark_stale(removed_worker_ids)
+    # then invalidated worker-a's OWN pre-existing, perfectly valid route
+    # as pure collateral damage, even though worker-a was never removed.
+    index_path = tmp_path / ".ant"
+    worker = WorkerCard(id="worker-a", territory_id="a", name="a", root="a", files=["a.py"])
+    IndexStore(index_path).save([Territory(id="a", root="a", files=["a.py"])], [worker])
+    memory = ColonyMemoryStore(index_path)
+    memory.save_route(
+        MemoryRoute(
+            need_terms=["legacy"], worker_ids=["worker-a"], weight=4.0, is_high_quality=True
+        )
+    )
+    for need in ("task one", "task two"):
+        memory.record_episode(
+            CollaborationEpisode(
+                need=need, workers=["worker-a"], strategy="normal",
+                outcome="progress", evidence_gain=3,
+            )
+        )
+
+    result = evolve_workers(
+        index_path,
+        reasoner=_StrengthenRouteReasoner(),
+        min_coalition_count=99,
+        retire_empty=False,
+        merge_overlap=0.99,
+        min_episode_count=2,
+    )
+
+    strengthen_events = [event for event in result.events if event.kind == "strengthen_route"]
+    assert len(strengthen_events) == 1
+    assert strengthen_events[0].source_worker_ids == ["worker-a"]
+    stored_worker_ids = {worker.id for worker in IndexStore(index_path).load_workers()}
+    assert stored_worker_ids == {"worker-a"}
+    active_need_terms = {tuple(route.need_terms) for route in memory.all_routes()}
+    assert ("legacy",) in active_need_terms
+
+
+def test_episode_birth_does_not_stale_its_source_workers_own_other_routes(
+    tmp_path: Path,
+) -> None:
+    # Same bug, birth side: source_worker_ids on a "birth" event names the
+    # coalition that produced the new bridge, not anyone being removed --
+    # worker-a and worker-b both keep existing, now alongside the bridge.
+    index_path = tmp_path / ".ant"
+    workers = [
+        WorkerCard(id="worker-a", territory_id="a", name="a", root="a", files=["a.py"]),
+        WorkerCard(id="worker-b", territory_id="b", name="b", root="b", files=["b.py"]),
+    ]
+    territories = [
+        Territory(id=worker.territory_id, root=worker.root, files=worker.files)
+        for worker in workers
+    ]
+    IndexStore(index_path).save(territories, workers)
+    memory = ColonyMemoryStore(index_path)
+    memory.save_route(
+        MemoryRoute(
+            need_terms=["legacy-a"], worker_ids=["worker-a"], weight=4.0, is_high_quality=True
+        )
+    )
+    memory.save_route(
+        MemoryRoute(
+            need_terms=["legacy-b"], worker_ids=["worker-b"], weight=4.0, is_high_quality=True
+        )
+    )
+    for need in ("proxy validation boundary task one", "proxy validation boundary task two"):
+        memory.record_episode(
+            CollaborationEpisode(
+                need=need,
+                workers=["worker-a", "worker-b"],
+                strategy="temporary_bridge",
+                outcome="progress",
+                evidence_gain=3,
+            )
+        )
+
+    result = evolve_workers(
+        index_path,
+        reasoner=_BirthBridgeOnRecurringPatternReasoner(),
+        min_coalition_count=99,
+        retire_empty=False,
+        merge_overlap=0.99,
+        min_episode_count=2,
+    )
+
+    birth_events = [event for event in result.events if event.kind == "birth"]
+    assert len(birth_events) == 1
+    stored_worker_ids = {worker.id for worker in IndexStore(index_path).load_workers()}
+    assert {"worker-a", "worker-b"} <= stored_worker_ids
+    active_need_terms = {tuple(route.need_terms) for route in memory.all_routes()}
+    assert ("legacy-a",) in active_need_terms
+    assert ("legacy-b",) in active_need_terms
+
+
+class _MergeReasoner(_AlwaysVetoReasoner):
+    def decide_episode_action(
+        self, *, strategy, need_terms, occurrences, successes, total_evidence_gain, workers
+    ):
+        return "merge"
+
+
+def test_episode_merge_stales_only_the_two_workers_actually_removed(tmp_path: Path) -> None:
+    # The other side of the same fix: a REAL removal (merge, specialize,
+    # retire) must still correctly stale the workers it actually consumes
+    # -- this fix must not overcorrect into never staling anyone. worker-c
+    # is an unrelated bystander and must be left completely alone.
+    index_path = tmp_path / ".ant"
+    workers = [
+        WorkerCard(id="worker-a", territory_id="a", name="a", root="a", files=["a.py"]),
+        WorkerCard(id="worker-b", territory_id="b", name="b", root="b", files=["b.py"]),
+        WorkerCard(id="worker-c", territory_id="c", name="c", root="c", files=["c.py"]),
+    ]
+    territories = [
+        Territory(id=worker.territory_id, root=worker.root, files=worker.files)
+        for worker in workers
+    ]
+    IndexStore(index_path).save(territories, workers)
+    memory = ColonyMemoryStore(index_path)
+    memory.save_route(
+        MemoryRoute(
+            need_terms=["route-a"], worker_ids=["worker-a"], weight=4.0, is_high_quality=True
+        )
+    )
+    memory.save_route(
+        MemoryRoute(
+            need_terms=["route-b"], worker_ids=["worker-b"], weight=4.0, is_high_quality=True
+        )
+    )
+    memory.save_route(
+        MemoryRoute(
+            need_terms=["route-c"], worker_ids=["worker-c"], weight=4.0, is_high_quality=True
+        )
+    )
+    for need in ("task one", "task two"):
+        memory.record_episode(
+            CollaborationEpisode(
+                need=need,
+                workers=["worker-a", "worker-b"],
+                strategy="coalition",
+                outcome="progress",
+                evidence_gain=3,
+            )
+        )
+
+    result = evolve_workers(
+        index_path,
+        reasoner=_MergeReasoner(),
+        min_coalition_count=99,
+        retire_empty=False,
+        merge_overlap=0.99,
+        min_episode_count=2,
+    )
+
+    merge_events = [event for event in result.events if event.kind == "merge"]
+    assert len(merge_events) == 1
+    assert sorted(merge_events[0].source_worker_ids) == ["worker-a", "worker-b"]
+
+    stored_worker_ids = {worker.id for worker in IndexStore(index_path).load_workers()}
+    assert "worker-a" not in stored_worker_ids
+    assert "worker-b" not in stored_worker_ids
+    assert "worker-c" in stored_worker_ids
+
+    active_need_terms = {tuple(route.need_terms) for route in memory.all_routes()}
+    assert ("route-c",) in active_need_terms
+    assert ("route-a",) not in active_need_terms
+    assert ("route-b",) not in active_need_terms

@@ -91,6 +91,7 @@ def run_gen_compare(
     slow_gen1_results_path = run_dir / "slow-gen1-results.jsonl"
     fast_gen1_results_path = run_dir / "fast-gen1-results.jsonl"
     gen0_index_snapshot = run_dir / "_gen0_index_snapshot"
+    evolution_metadata_path = run_dir / "slow-gen1-evolution.json"
 
     # run_batch's own _run_example resolves its REAL per-repo index to
     # index_path / _repo_basename(example.repo) whenever a dataset row's
@@ -175,6 +176,25 @@ def run_gen_compare(
         )
         evolution_events = evolution_result.events
         slow_worker_count = evolution_result.worker_count
+        # Persist alongside gen0/slow-gen1's own *-results.jsonl so a LATER
+        # call against this same run_dir that skips slow-gen1 (e.g. this
+        # project's own two-call pattern for "owner/repo"-formatted
+        # datasets: a separate --no-slow-gen1 --fast-gen1 call) can still
+        # report it -- see the reload branch below. Regression fix for a
+        # real bug: without this, that later call re-initialized
+        # evolution_events=[]/slow_worker_count=gen0_worker_count above and
+        # its own summary.json write silently overwrote this call's real,
+        # non-empty telemetry with those defaults.
+        evolution_metadata_path.write_text(
+            json.dumps(
+                {
+                    "events": [event.model_dump() for event in evolution_events],
+                    "worker_count": slow_worker_count,
+                },
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
         run_batch(
             examples=examples,
             repo_root=repo_root,
@@ -186,6 +206,10 @@ def run_gen_compare(
             state_dump_dir=run_dir,
             state_dump_prefix="slow-gen1-",
         )
+    elif evolution_metadata_path.exists():
+        metadata = json.loads(evolution_metadata_path.read_text(encoding="utf-8"))
+        evolution_events = [EvolutionEvent.model_validate(event) for event in metadata["events"]]
+        slow_worker_count = metadata["worker_count"]
     slow_gen1_scores = _load_or_rebuild_scores(
         results_path=slow_gen1_results_path,
         run_dir=run_dir,

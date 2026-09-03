@@ -27,6 +27,54 @@ TOKEN_RE = re.compile(r"[A-Za-z][A-Za-z0-9_]{2,}")
 # underneath that judgment call, not a replacement for it.
 _MIN_EPISODE_SUCCESS_RATIO = 0.5
 
+# Only these event kinds actually remove a worker from the pool -- a
+# specialize replaces its one parent with children, a merge replaces both
+# its sources with the merged worker, a retire drops a now-empty worker
+# (added to removed_worker_ids directly at the retire site, not via this
+# set). "birth" and "strengthen_route" both carry source_worker_ids too
+# (which workers a recurring pattern involved), but neither one removes
+# those workers -- they keep existing exactly as before, now alongside a
+# new bridge sibling or with a reinforced route. Explicit allowlist rather
+# than an exclusion list: an event kind added later defaults to NOT
+# removing anyone unless it's deliberately added here.
+_WORKER_REMOVING_EVENT_KINDS = frozenset({"specialize", "merge"})
+
+
+def _removed_worker_ids_from(events: list[EvolutionEvent]) -> set[str]:
+    """Regression fix for a real bug found live on qibo: evolve_workers used
+    to union source_worker_ids from EVERY episode-driven event kind into
+    removed_worker_ids, including "strengthen_route" and "birth" -- neither
+    of which removes a worker. mark_stale(removed_worker_ids) then
+    invalidated those still-present workers' OTHER, perfectly valid routes
+    as pure collateral damage (confirmed live: 9 real strengthen_route
+    events on qibo wrongly staled 49 routes, including all 3 of gen0's own
+    legitimate high-quality ones, while every "removed" worker was still
+    present in the final worker list, unchanged). See
+    _WORKER_REMOVING_EVENT_KINDS' own docstring for which kinds legitimately
+    belong here.
+    """
+    return {
+        worker_id
+        for event in events
+        if event.kind in _WORKER_REMOVING_EVENT_KINDS
+        for worker_id in event.source_worker_ids
+    }
+
+
+# --- TEMPORARY DIAGNOSTIC TELEMETRY (2026-09-03) ---------------------------
+# Purely additive print-based tracing to root-cause a live discrepancy: DB
+# side effects (mark_stale rows, weight=5.0 strengthen_route rows) prove
+# evolve_workers executed real structural/episode actions on a real qibo
+# run, but the EvolutionResult it returned reported events=[] and an
+# unchanged worker_count. No control flow, gating, or return value below is
+# changed by any _tel(...) call -- remove this block and every _tel(...)
+# call site once the discrepancy is root-caused.
+def _tel(*parts: object) -> None:
+    print("[EVOTEL]", *parts, flush=True)
+
+
+# --- END TEMPORARY DIAGNOSTIC TELEMETRY -------------------------------------
+
 
 def _with_routing_summary(card: WorkerCard, reasoner: EvolutionReasoner | None) -> WorkerCard:
     """Generate/refresh routing_summary for a card that was just born,
@@ -95,6 +143,14 @@ def evolve_workers(
         for worker_id in route.worker_ids:
             routes_by_worker[worker_id].append(route)
 
+    _tel("ENTRY workers_before=", len(workers), "ids=", sorted(w.id for w in workers))
+    _tel(
+        "ENTRY candidate recurring_coalitions=",
+        len(memory.recurring_coalitions(min_count=min_coalition_count)),
+        "candidate aggregate_episodes=",
+        len(memory.aggregate_episodes(min_count=min_episode_count)),
+    )
+
     workers, specialize_events = _specialize_overloaded_workers(
         workers,
         routes_by_worker,
@@ -109,8 +165,11 @@ def evolve_workers(
         min_semantic_cluster_file_support=min_semantic_cluster_file_support,
     )
     events.extend(specialize_events)
-    removed_worker_ids.update(
-        worker_id for event in specialize_events for worker_id in event.source_worker_ids
+    removed_worker_ids.update(_removed_worker_ids_from(specialize_events))
+    _tel(
+        "AFTER specialize: events+=", len(specialize_events),
+        "removed_worker_ids=", sorted(removed_worker_ids),
+        "workers_after=", len(workers),
     )
 
     worker_by_id = {worker.id: worker for worker in workers}
@@ -118,11 +177,16 @@ def evolve_workers(
         bridge_suffix = "-".join(worker_id.removeprefix("worker-") for worker_id in worker_ids)
         bridge_id = f"worker-bridge-{bridge_suffix}"
         if bridge_id in worker_by_id:
+            _tel("COALITION-BIRTH candidate=", worker_ids, "REJECT: bridge_id already exists")
             continue
         source_workers = [
             worker_by_id[worker_id] for worker_id in worker_ids if worker_id in worker_by_id
         ]
         if len(source_workers) < 2:
+            _tel(
+                "COALITION-BIRTH candidate=", worker_ids,
+                "REJECT: fewer than 2 source workers still present",
+            )
             continue
         if all(
             _is_worker_healthy(
@@ -134,6 +198,10 @@ def evolve_workers(
             # record of good answers -- birthing a dedicated bridge worker
             # is for coalitions that are *struggling* together, not ones
             # that already work fine split apart.
+            _tel(
+                "COALITION-BIRTH candidate=", worker_ids,
+                "REJECT: all source workers already healthy",
+            )
             continue
         files = sorted({file for worker in source_workers for file in worker.files})
         terms = sorted({term for worker in source_workers for term in worker.searchable_terms})[:32]
@@ -146,6 +214,7 @@ def evolve_workers(
         # file set against every current worker (not just the two sources)
         # catches this regardless of which source carried the redundancy.
         if _overlaps_existing_worker(files, workers, merge_overlap):
+            _tel("COALITION-BIRTH candidate=", worker_ids, "REJECT: _overlaps_existing_worker")
             continue
         # File sets can be genuinely distinct while the two workers still
         # cover the same *specialty* -- a birthed bridge's routing_summary
@@ -157,13 +226,15 @@ def evolve_workers(
         # coverage. Same underlying question should_merge already answers
         # for two *existing* overlapping workers, asked here before this
         # candidate is even born.
-        if _is_redundant_with_existing(
+        redundant_with = _is_redundant_with_existing(
             f"Combines {', '.join(worker.id for worker in source_workers)}; "
             f"key terms: {', '.join(terms[:12])}",
             files,
             workers,
             reasoner,
-        ):
+        )
+        if redundant_with:
+            _tel("COALITION-BIRTH candidate=", worker_ids, "REJECT: redundant with", redundant_with)
             continue
         bridge = _with_routing_summary(
             WorkerCard(
@@ -182,6 +253,7 @@ def evolve_workers(
         )
         workers.append(bridge)
         worker_by_id[bridge.id] = bridge
+        _tel("COALITION-BIRTH candidate=", worker_ids, "ACCEPT: birthed", bridge.id)
         events.append(
             EvolutionEvent(
                 kind="birth",
@@ -190,6 +262,12 @@ def evolve_workers(
                 source_worker_ids=worker_ids,
             )
         )
+        _tel("EVENT APPENDED:", events[-1].model_dump())
+
+    _tel(
+        "AFTER coalition-birth loop: workers=", len(workers),
+        "events total=", len(events),
+    )
 
     if retire_empty:
         kept = []
@@ -197,6 +275,7 @@ def evolve_workers(
             if worker.files:
                 kept.append(worker)
                 continue
+            _tel("RETIRE:", worker.id, "(no owned files after refresh)")
             events.append(
                 EvolutionEvent(
                     kind="retire",
@@ -206,7 +285,13 @@ def evolve_workers(
             )
             removed_worker_ids.add(worker.id)
         workers = kept
+    _tel(
+        "AFTER retire: workers=", len(workers),
+        "events total=", len(events),
+        "removed_worker_ids so far=", sorted(removed_worker_ids),
+    )
 
+    workers_before_merge_ids = sorted(w.id for w in workers)
     workers, merge_events = _merge_overlapping_workers(
         workers,
         threshold=merge_overlap,
@@ -216,18 +301,32 @@ def evolve_workers(
         reasoner=reasoner,
     )
     events.extend(merge_events)
-    removed_worker_ids.update(
-        worker_id for event in merge_events for worker_id in event.source_worker_ids
+    removed_worker_ids.update(_removed_worker_ids_from(merge_events))
+    _tel(
+        "AFTER merge: merge_events=", [e.model_dump() for e in merge_events],
+        "workers_before_ids=", workers_before_merge_ids,
+        "workers_after_ids=", sorted(w.id for w in workers),
+        "events total=", len(events),
+        "removed_worker_ids so far=", sorted(removed_worker_ids),
     )
 
     if reasoner is not None:
+        workers_before_episode_ids = sorted(w.id for w in workers)
         workers, episode_events = _apply_episode_actions(
             workers, memory, reasoner, min_episode_count, merge_overlap
         )
         events.extend(episode_events)
-        removed_worker_ids.update(
-            worker_id for event in episode_events for worker_id in event.source_worker_ids
+        removed_worker_ids.update(_removed_worker_ids_from(episode_events))
+        _tel(
+            "AFTER _apply_episode_actions: episode_events=",
+            [e.model_dump() for e in episode_events],
+            "workers_before_ids=", workers_before_episode_ids,
+            "workers_after_ids=", sorted(w.id for w in workers),
+            "events total=", len(events),
+            "removed_worker_ids so far=", sorted(removed_worker_ids),
         )
+    else:
+        _tel("SKIPPED _apply_episode_actions: reasoner is None")
 
     territories = [
         Territory(
@@ -238,14 +337,29 @@ def evolve_workers(
         )
         for worker in workers
     ]
+    _tel(
+        "PRE-RETURN: events=", len(events), "will_save=", bool(events),
+        "worker_count=", len(workers), "worker_ids=", sorted(w.id for w in workers),
+        "removed_worker_ids=", sorted(removed_worker_ids),
+        "will_mark_stale=", bool(removed_worker_ids),
+    )
     if events:
         store.save(territories, workers)
+        _tel("store.save() called with", len(workers), "workers")
+    else:
+        _tel("store.save() SKIPPED (events is empty)")
     if removed_worker_ids:
-        ColonyMemoryStore(index_path).mark_stale(
+        marked = ColonyMemoryStore(index_path).mark_stale(
             sorted(removed_worker_ids),
             reason="Worker retired/specialized/merged away by colony evolution.",
         )
-    return EvolutionResult(events=events, worker_count=len(workers))
+        _tel("mark_stale() called for", sorted(removed_worker_ids), "-> rows marked stale:", marked)
+    result = EvolutionResult(events=events, worker_count=len(workers))
+    _tel(
+        "RETURN: events=", [e.model_dump() for e in result.events],
+        "worker_count=", result.worker_count,
+    )
+    return result
 
 
 def _apply_episode_actions(

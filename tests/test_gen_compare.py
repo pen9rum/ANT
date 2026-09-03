@@ -5,7 +5,7 @@ from ant.domain import EvidenceState
 from ant.evaluation.datasets import EvalExample
 from ant.evaluation.gen_compare import _run_fast_gen1, run_gen_compare
 from ant.evaluation.metrics import EvalScore
-from ant.evolution import EvolutionResult
+from ant.evolution import EvolutionEvent, EvolutionResult
 
 
 def test_run_gen_compare_passes_evolve_workers_the_resolved_repo_not_the_raw_parent_dir(
@@ -120,6 +120,100 @@ def test_run_gen_compare_passes_evolve_workers_the_same_index_run_batch_actually
     )
 
     assert captured["index_path"] == resolved_index_path
+
+
+def test_fast_gen1_only_followup_does_not_overwrite_the_earlier_slow_gen1_evolution_metadata(
+    tmp_path: Path, monkeypatch
+) -> None:
+    # Regression test for a real bug found live on qibo: this project's own
+    # documented two-call pattern for "owner/repo"-formatted datasets runs
+    # slow-gen1 in one `gen-compare` call, then fast-gen1 in a SEPARATE
+    # later call against the same run_dir. evolution_events/slow_worker_count
+    # (unlike gen0/slow-gen1/fast-gen1's own score dicts, which always
+    # reload via _load_or_rebuild_scores regardless of which stage ran this
+    # call) were only ever set `if run_slow_gen1:` -- the later fast-gen1-
+    # only call re-initialized them to []/gen0_worker_count and its own
+    # summary write silently discarded the first call's real, non-empty
+    # evolution telemetry. Confirmed live: evolve_workers really did fire 9
+    # strengthen_route events and record them in its own return value, but
+    # the run_dir's on-disk summary.json ended up reporting evolution_events:
+    # [] because the fast-gen1-only call ran after it.
+    run_dir = tmp_path / "run"
+    index_path = tmp_path / ".ant"
+    repo_root = tmp_path / "repos"
+    (repo_root / "myrepo").mkdir(parents=True)
+
+    real_events = [
+        EvolutionEvent(
+            kind="strengthen_route",
+            worker_id="worker-a",
+            reason="Episode-driven.",
+            source_worker_ids=["worker-a"],
+        )
+    ]
+
+    class _StubIndexStore:
+        def __init__(self, path):
+            pass
+
+        def load_workers(self):
+            return []
+
+    def fake_run_batch(**kwargs):
+        return []
+
+    def fake_evolve_workers(index_path, repo_root=None, reasoner=None):
+        return EvolutionResult(events=real_events, worker_count=7)
+
+    def fake_load_or_rebuild_scores(**kwargs):
+        return {}
+
+    examples = [EvalExample(id="q1", question="q", answer="a", repo="someorg/myrepo")]
+
+    monkeypatch.setattr("ant.evaluation.gen_compare.IndexStore", _StubIndexStore)
+    monkeypatch.setattr("ant.evaluation.gen_compare.run_batch", fake_run_batch)
+    monkeypatch.setattr("ant.evaluation.gen_compare.evolve_workers", fake_evolve_workers)
+    monkeypatch.setattr("ant.evaluation.gen_compare.OpenAIProvider", lambda: object())
+    monkeypatch.setattr(
+        "ant.evaluation.gen_compare._load_or_rebuild_scores", fake_load_or_rebuild_scores
+    )
+
+    slow_result = run_gen_compare(
+        examples=examples,
+        repo_root=repo_root,
+        index_path=index_path,
+        run_dir=run_dir,
+        run_gen0=False,
+        run_slow_gen1=True,
+        run_fast_gen1=False,
+    )
+    assert [e.kind for e in slow_result.evolution_events] == ["strengthen_route"]
+    assert slow_result.slow_worker_count == 7
+
+    def fake_run_fast_gen1(**kwargs):
+        return {}
+
+    monkeypatch.setattr("ant.evaluation.gen_compare._run_fast_gen1", fake_run_fast_gen1)
+    # run_gen_compare's own pre-flight check for run_fast_gen1 requires each
+    # example's gen0 trace to already exist on disk under run_dir -- create
+    # a placeholder, since this test's gen0 stage never actually ran.
+    (run_dir / "gen0-q1.json").write_text(
+        EvidenceState(question="q", answer="a").model_dump_json(), encoding="utf-8"
+    )
+
+    fast_only_result = run_gen_compare(
+        examples=examples,
+        repo_root=repo_root / "myrepo",
+        index_path=index_path,
+        run_dir=run_dir,
+        run_gen0=False,
+        run_slow_gen1=False,
+        run_fast_gen1=True,
+    )
+
+    assert [e.kind for e in fast_only_result.evolution_events] == ["strengthen_route"]
+    assert fast_only_result.evolution_events[0].source_worker_ids == ["worker-a"]
+    assert fast_only_result.slow_worker_count == 7
 
 
 def _write_gen0_fixture(run_dir: Path, example_id: str, answer: str, score: dict) -> None:
