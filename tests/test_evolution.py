@@ -19,16 +19,22 @@ class _AlwaysVetoReasoner:
     def should_merge(self, *, worker_a_id, worker_a_summary, worker_b_id, worker_b_summary):
         return False
 
-    def decide_episode_action(
-        self, *, strategy, need_terms, occurrences, successes, total_evidence_gain, workers
-    ):
+    def decide_episode_action(self, *, strategy, need_terms, workers, **kwargs):
         raise AssertionError("this test does not exercise decide_episode_action()")
 
     def summarize_routing(self, *, card):
         return f"stub routing summary for {card.id}"
 
 
-def test_evolve_workers_births_bridge_from_recurring_coalition(tmp_path: Path) -> None:
+def test_recurring_coalition_alone_never_births_without_a_reasoner(tmp_path: Path) -> None:
+    # recurring_coalitions() is a candidate GENERATOR only now, not an
+    # authority -- see _merge_coalition_candidates_into_aggregates. Every
+    # birth decision goes through decide_episode_action, which requires a
+    # reasoner; with none supplied, structural recurrence alone (no matter
+    # how many times observed) must produce no structural change at all.
+    # Regression test for the old behavior this replaces: raw coalition
+    # count used to be sufficient on its own to birth a bridge worker, with
+    # no outcome/task-level judgment involved.
     index_path = tmp_path / ".ant"
     workers = [
         WorkerCard(id="worker-a", territory_id="a", name="a", root="a", files=["a.py"]),
@@ -59,13 +65,9 @@ def test_evolve_workers_births_bridge_from_recurring_coalition(tmp_path: Path) -
 
     result = evolve_workers(index_path, min_coalition_count=2)
 
-    assert result.events[0].kind == "birth"
+    assert result.events == []
     stored_workers = IndexStore(index_path).load_workers()
-    assert any(worker.id.startswith("worker-bridge") for worker in stored_workers)
-    # No reasoner supplied -- routing_summary must still be non-empty (the
-    # zero-cost template fallback), not left at the WorkerCard default "".
-    bridge = next(worker for worker in stored_workers if worker.id.startswith("worker-bridge"))
-    assert bridge.routing_summary
+    assert not any(worker.id.startswith("worker-bridge") for worker in stored_workers)
 
 
 def test_recurring_coalition_birth_uses_the_reasoners_routing_summary_when_supplied(
@@ -82,6 +84,14 @@ def test_recurring_coalition_birth_uses_the_reasoners_routing_summary_when_suppl
     ]
     IndexStore(index_path).save(territories, workers)
     memory = ColonyMemoryStore(index_path)
+    # record_coalition (feeds recurring_coalitions, the candidate
+    # generator) and record_episode with a real success (feeds
+    # aggregate_episodes, the decision signal) together -- matching how
+    # record_task_memory always writes both for the same coalition-formed
+    # task/need in production, so this candidate is decided from real
+    # occurrence/success data, not the zero-evidence synthesized fallback
+    # _merge_coalition_candidates_into_aggregates falls back to when
+    # aggregate_episodes has no matching entry at all.
     for question in ("q1", "q2"):
         memory.record_coalition(
             CoalitionRecord(
@@ -91,8 +101,19 @@ def test_recurring_coalition_birth_uses_the_reasoners_routing_summary_when_suppl
                 unresolved_need_count=0,
             )
         )
+        memory.record_episode(
+            CollaborationEpisode(
+                need=question,
+                workers=["worker-a", "worker-b"],
+                strategy="coalition",
+                outcome="progress",
+                evidence_gain=3,
+            )
+        )
 
-    result = evolve_workers(index_path, reasoner=_AlwaysVetoReasoner(), min_coalition_count=2)
+    result = evolve_workers(
+        index_path, reasoner=_BirthBridgeOnRecurringPatternReasoner(), min_coalition_count=2
+    )
 
     assert result.events[0].kind == "birth"
     bridge = next(
@@ -102,7 +123,7 @@ def test_recurring_coalition_birth_uses_the_reasoners_routing_summary_when_suppl
     )
     # A reasoner was supplied, so routing_summary must come from
     # reasoner.summarize_routing() -- distinguishable from the zero-cost
-    # template fallback the no-reasoner test above gets instead.
+    # template fallback a no-reasoner call would get instead.
     assert bridge.routing_summary == f"stub routing summary for {bridge.id}"
 
 
@@ -524,9 +545,7 @@ class _BirthBridgeOnRecurringPatternReasoner(_AlwaysVetoReasoner):
     its verdict, without needing a real model call.
     """
 
-    def decide_episode_action(
-        self, *, strategy, need_terms, occurrences, successes, total_evidence_gain, workers
-    ):
+    def decide_episode_action(self, *, strategy, need_terms, workers, **kwargs):
         return "birth_bridge"
 
 
@@ -539,9 +558,7 @@ class _NoChangeOnEpisodesReasoner(_AlwaysVetoReasoner):
     should_specialize/should_merge.
     """
 
-    def decide_episode_action(
-        self, *, strategy, need_terms, occurrences, successes, total_evidence_gain, workers
-    ):
+    def decide_episode_action(self, *, strategy, need_terms, workers, **kwargs):
         return "no_change"
 
 
@@ -725,7 +742,12 @@ class _RedundantWithWorkerCReasoner(_AlwaysVetoReasoner):
     """should_merge says yes specifically for worker-c -- proves the
     semantic-redundancy check is doing real LLM-judged work, not just
     vetoing everything the way _AlwaysVetoReasoner's own should_merge
-    (always False) would."""
+    (always False) would. decide_episode_action always approves birth so
+    the candidate actually reaches that redundancy check.
+    """
+
+    def decide_episode_action(self, *, strategy, need_terms, workers, **kwargs):
+        return "birth_bridge"
 
     def should_merge(self, *, worker_a_id, worker_a_summary, worker_b_id, worker_b_summary):
         return worker_b_id == "worker-c"
@@ -782,9 +804,7 @@ def test_recurring_coalition_birth_skips_a_worker_semantically_redundant_with_ex
 
 
 class _BirthBridgeButRedundantReasoner(_AlwaysVetoReasoner):
-    def decide_episode_action(
-        self, *, strategy, need_terms, occurrences, successes, total_evidence_gain, workers
-    ):
+    def decide_episode_action(self, *, strategy, need_terms, workers, **kwargs):
         return "birth_bridge"
 
     def should_merge(self, *, worker_a_id, worker_a_summary, worker_b_id, worker_b_summary):
@@ -1069,9 +1089,7 @@ def test_evolve_workers_specializes_a_flat_directory_via_route_semantic_clusteri
 
 
 class _StrengthenRouteReasoner(_AlwaysVetoReasoner):
-    def decide_episode_action(
-        self, *, strategy, need_terms, occurrences, successes, total_evidence_gain, workers
-    ):
+    def decide_episode_action(self, *, strategy, need_terms, workers, **kwargs):
         return "strengthen_route"
 
 
@@ -1176,9 +1194,7 @@ def test_episode_birth_does_not_stale_its_source_workers_own_other_routes(
 
 
 class _MergeReasoner(_AlwaysVetoReasoner):
-    def decide_episode_action(
-        self, *, strategy, need_terms, occurrences, successes, total_evidence_gain, workers
-    ):
+    def decide_episode_action(self, *, strategy, need_terms, workers, **kwargs):
         return "merge"
 
 
@@ -1247,3 +1263,75 @@ def test_episode_merge_stales_only_the_two_workers_actually_removed(tmp_path: Pa
     assert ("route-c",) in active_need_terms
     assert ("route-a",) not in active_need_terms
     assert ("route-b",) not in active_need_terms
+
+
+def test_a_weakly_supported_recurring_coalition_cannot_birth_via_the_legacy_candidate_path(
+    tmp_path: Path,
+) -> None:
+    # Regression test for a real bug found live on qibo: worker-src/qibo/
+    # gates + worker-src/qibo/models recurred as a formed coalition across
+    # 3 separate tasks -- but only 1 of those 3 tasks actually resolved a
+    # need. The OLD raw recurring_coalitions()-driven birth loop had no
+    # visibility into that outcome at all (it only saw "3 distinct tasks,
+    # not all-healthy, no file/redundancy overlap") and birthed a bridge
+    # unconditionally; the richer episode-level signal, asked separately
+    # moments later, correctly said no_change for the exact same pair --
+    # too late, the worker already existed. Reproduces that exact shape
+    # (3 tasks, 1 resolved) with a reasoner that always says no_change, and
+    # asserts no bridge is ever created: proves the legacy path can no
+    # longer act on its own, and that the ONE decision that does get made
+    # comes from decide_episode_action (this reasoner's should_merge/
+    # should_specialize always veto, so a birth could only have slipped in
+    # through the old unconditional recurring_coalitions()-driven path,
+    # never through a redundancy check happening to approve one).
+    index_path = tmp_path / ".ant"
+    workers = [
+        WorkerCard(
+            id="worker-gates", territory_id="gates", name="gates", root="gates", files=["gates.py"]
+        ),
+        WorkerCard(
+            id="worker-models",
+            territory_id="models",
+            name="models",
+            root="models",
+            files=["models.py"],
+        ),
+    ]
+    territories = [
+        Territory(id=worker.territory_id, root=worker.root, files=worker.files)
+        for worker in workers
+    ]
+    IndexStore(index_path).save(territories, workers)
+    memory = ColonyMemoryStore(index_path)
+    for index, question in enumerate(("q1", "q2", "q3")):
+        memory.record_coalition(
+            CoalitionRecord(
+                worker_ids=["worker-gates", "worker-models"],
+                question=question,
+                evidence_count=2,
+                unresolved_need_count=0,
+            )
+        )
+        memory.record_episode(
+            CollaborationEpisode(
+                need=question,
+                workers=["worker-gates", "worker-models"],
+                strategy="coalition",
+                outcome="progress",
+                evidence_gain=5,
+                # Only the first of the 3 tasks actually resolves a need --
+                # the weak task-level support the richer signal must see.
+                need_reduction=1 if index == 0 else 0,
+            )
+        )
+
+    result = evolve_workers(
+        index_path,
+        reasoner=_NoChangeOnEpisodesReasoner(),
+        min_coalition_count=2,
+        min_episode_count=2,
+    )
+
+    assert not [event for event in result.events if event.kind == "birth"]
+    stored_worker_ids = {worker.id for worker in IndexStore(index_path).load_workers()}
+    assert stored_worker_ids == {"worker-gates", "worker-models"}

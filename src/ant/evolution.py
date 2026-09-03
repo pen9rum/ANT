@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field
 from ant.domain import Territory, WorkerCard
 from ant.indexing.cards import build_worker_cards, template_routing_summary
 from ant.memory import ColonyMemoryStore, IndexStore
-from ant.memory.colony import MemoryRoute
+from ant.memory.colony import EpisodeAggregate, MemoryRoute
 from ant.providers import EvolutionReasoner
 from ant.retrieval.dense import DenseEmbedder, get_shared_embedder
 from ant.scoring_config import DEFAULT_SCORING_CONFIG
@@ -172,102 +172,16 @@ def evolve_workers(
         "workers_after=", len(workers),
     )
 
-    worker_by_id = {worker.id: worker for worker in workers}
-    for worker_ids, count in memory.recurring_coalitions(min_count=min_coalition_count):
-        bridge_suffix = "-".join(worker_id.removeprefix("worker-") for worker_id in worker_ids)
-        bridge_id = f"worker-bridge-{bridge_suffix}"
-        if bridge_id in worker_by_id:
-            _tel("COALITION-BIRTH candidate=", worker_ids, "REJECT: bridge_id already exists")
-            continue
-        source_workers = [
-            worker_by_id[worker_id] for worker_id in worker_ids if worker_id in worker_by_id
-        ]
-        if len(source_workers) < 2:
-            _tel(
-                "COALITION-BIRTH candidate=", worker_ids,
-                "REJECT: fewer than 2 source workers still present",
-            )
-            continue
-        if all(
-            _is_worker_healthy(
-                worker.id, routes_by_worker, min_routes_for_health_check, healthy_route_ratio
-            )
-            for worker in source_workers
-        ):
-            # Every worker in this recurring coalition already has a track
-            # record of good answers -- birthing a dedicated bridge worker
-            # is for coalitions that are *struggling* together, not ones
-            # that already work fine split apart.
-            _tel(
-                "COALITION-BIRTH candidate=", worker_ids,
-                "REJECT: all source workers already healthy",
-            )
-            continue
-        files = sorted({file for worker in source_workers for file in worker.files})
-        terms = sorted({term for worker in source_workers for term in worker.searchable_terms})[:32]
-        # A source that is itself already a bridge/merge (e.g. birthing
-        # "gates+models" bridge together with "models") makes this new
-        # worker's file set a near-duplicate of that existing worker's --
-        # confirmed on a real qibo run: this produced a "bridge of a bridge"
-        # that an in-run merge pass then immediately had to collapse back
-        # down, with an id that concatenated both. Checking the resulting
-        # file set against every current worker (not just the two sources)
-        # catches this regardless of which source carried the redundancy.
-        if _overlaps_existing_worker(files, workers, merge_overlap):
-            _tel("COALITION-BIRTH candidate=", worker_ids, "REJECT: _overlaps_existing_worker")
-            continue
-        # File sets can be genuinely distinct while the two workers still
-        # cover the same *specialty* -- a birthed bridge's routing_summary
-        # can read as near-synonymous with an existing sibling worker's
-        # (confirmed on a real qibo run: "Models and abstractions spanning
-        # qibo core modules" vs "src/qibo/models algorithms and circuit
-        # helpers"), so the Orchestrator keeps selecting both instead of
-        # one -- inflating coalitions/worker_calls without adding real
-        # coverage. Same underlying question should_merge already answers
-        # for two *existing* overlapping workers, asked here before this
-        # candidate is even born.
-        redundant_with = _is_redundant_with_existing(
-            f"Combines {', '.join(worker.id for worker in source_workers)}; "
-            f"key terms: {', '.join(terms[:12])}",
-            files,
-            workers,
-            reasoner,
-        )
-        if redundant_with:
-            _tel("COALITION-BIRTH candidate=", worker_ids, "REJECT: redundant with", redundant_with)
-            continue
-        bridge = _with_routing_summary(
-            WorkerCard(
-                id=bridge_id,
-                territory_id=bridge_id.removeprefix("worker-"),
-                name=" + ".join(worker.name for worker in source_workers[:3]) + " bridge",
-                root="",
-                responsibilities=[
-                    "Cross-territory specialist born from recurring temporary coalition.",
-                    f"Coalition recurred {count} times.",
-                ],
-                searchable_terms=terms,
-                files=files,
-            ),
-            reasoner,
-        )
-        workers.append(bridge)
-        worker_by_id[bridge.id] = bridge
-        _tel("COALITION-BIRTH candidate=", worker_ids, "ACCEPT: birthed", bridge.id)
-        events.append(
-            EvolutionEvent(
-                kind="birth",
-                worker_id=bridge.id,
-                reason=f"Recurring coalition observed {count} times.",
-                source_worker_ids=worker_ids,
-            )
-        )
-        _tel("EVENT APPENDED:", events[-1].model_dump())
-
-    _tel(
-        "AFTER coalition-birth loop: workers=", len(workers),
-        "events total=", len(events),
-    )
+    # recurring_coalitions() is no longer consulted here -- it stays a
+    # candidate GENERATOR (per-task-deduplicated raw co-occurrence), but a
+    # candidate it finds is now merged into _apply_episode_actions' own
+    # aggregate_episodes list (see _merge_coalition_candidates_into_
+    # aggregates) so it gets the exact same task-level-recurrence signal
+    # and exactly one authoritative decide_episode_action decision as any
+    # other birth candidate -- never a separate, cruder count-only birth
+    # that a richer-signal decision elsewhere might have refused the same
+    # cycle. Regression fix for a real bug: see that helper's own
+    # docstring for the live qibo case this closes.
 
     if retire_empty:
         kept = []
@@ -313,7 +227,15 @@ def evolve_workers(
     if reasoner is not None:
         workers_before_episode_ids = sorted(w.id for w in workers)
         workers, episode_events = _apply_episode_actions(
-            workers, memory, reasoner, min_episode_count, merge_overlap
+            workers,
+            memory,
+            reasoner,
+            min_episode_count,
+            merge_overlap,
+            min_coalition_count=min_coalition_count,
+            routes_by_worker=routes_by_worker,
+            min_health_routes=min_routes_for_health_check,
+            healthy_ratio=healthy_route_ratio,
         )
         events.extend(episode_events)
         removed_worker_ids.update(_removed_worker_ids_from(episode_events))
@@ -362,26 +284,101 @@ def evolve_workers(
     return result
 
 
+def _merge_coalition_candidates_into_aggregates(
+    aggregates: list[EpisodeAggregate],
+    memory: ColonyMemoryStore,
+    min_coalition_count: int,
+) -> list[EpisodeAggregate]:
+    """recurring_coalitions() stays a valid CANDIDATE GENERATOR -- it sees
+    per-task-deduplicated raw co-occurrence that a genuinely recurring
+    coalition might not otherwise surface if it fell short of
+    min_episode_count (e.g. custom configs where min_coalition_count is more
+    lenient) -- but it no longer gets to decide anything on its own. Every
+    candidate it finds is folded into the SAME aggregate_episodes list
+    _apply_episode_actions already runs through decide_episode_action, so a
+    coalition discovered this way gets exactly the same task-level-recurrence
+    signal and exactly one authoritative decision as one discovered via
+    episode aggregation -- never a separate, cruder count-only birth.
+
+    Regression fix for a real bug found live on qibo: a coalition
+    (worker-src/qibo/gates, worker-src/qibo/models) recurring 21 times
+    across only 3 tasks -- of which just 1 actually resolved a need --
+    still got born as a permanent bridge worker via the OLD raw-coalition
+    path's own unconditional birth, seconds before the episode-level path
+    (with full visibility into that weak task-level support) correctly
+    said no_change for the exact same pair. Two independent authorities
+    disagreeing and the cruder one winning by running first.
+
+    A coalition worker-set already represented among `aggregates` with
+    strategy="coalition" (the common case: every coalition-forming
+    execution also records a "coalition"-strategy episode for the same
+    task/need, so the two data sources normally coincide) is skipped here
+    -- the richer episode data already covers it. Only a candidate with NO
+    matching episode-level entry gets a synthesized, deliberately
+    conservative stand-in (successes=0, no unique-task/progress detail
+    beyond what recurring_coalitions itself already deduplicates per task)
+    -- honest about having zero outcome signal for it, which the existing
+    low-success gate below already treats as "not enough evidence to
+    promote," not a free pass.
+    """
+    existing_coalition_keys = {
+        tuple(sorted(aggregate.workers))
+        for aggregate in aggregates
+        if aggregate.strategy == "coalition"
+    }
+    merged = list(aggregates)
+    for worker_ids, count in memory.recurring_coalitions(min_count=min_coalition_count):
+        key = tuple(sorted(worker_ids))
+        if key in existing_coalition_keys:
+            continue
+        merged.append(
+            EpisodeAggregate(
+                strategy="coalition",
+                workers=list(key),
+                need_terms=[],
+                occurrences=count,
+                successes=0,
+                total_evidence_gain=0,
+                total_need_reduction=0,
+                unique_task_count=count,
+                tasks_with_progress=0,
+                tasks_with_need_reduction=0,
+            )
+        )
+    merged.sort(key=lambda aggregate: aggregate.occurrences, reverse=True)
+    return merged
+
+
 def _apply_episode_actions(
     workers: list[WorkerCard],
     memory: ColonyMemoryStore,
     reasoner: EvolutionReasoner,
     min_episode_count: int,
     merge_overlap: float,
+    min_coalition_count: int,
+    routes_by_worker: dict[str, list[MemoryRoute]],
+    min_health_routes: int,
+    healthy_ratio: float,
 ) -> tuple[list[WorkerCard], list[EvolutionEvent]]:
     """Acts on ColonyMemoryStore.aggregate_episodes' recurring (strategy,
     worker-set) patterns -- e.g. "temporary_bridge kept resolving a
     proxy-validation-shaped need across 3 separate tasks" -- via
     EvolutionReasoner.decide_episode_action. This is a richer signal than
-    recurring_coalitions (which only sees raw worker co-occurrence, not
-    which specific temporary adaptation actually worked or how often): the
-    same slow, cross-task timescale as the rest of evolve_workers, never
-    reacting to a single task's own outcome.
+    raw worker co-occurrence alone (which worker(s) got selected together,
+    not which specific temporary adaptation actually worked or how often):
+    the same slow, cross-task timescale as the rest of evolve_workers, never
+    reacting to a single task's own outcome. recurring_coalitions'
+    candidates are merged in via _merge_coalition_candidates_into_aggregates
+    -- this is now the ONLY place any birth (coalition-discovered or
+    episode-discovered) actually happens.
     """
     worker_by_id = {worker.id: worker for worker in workers}
     events: list[EvolutionEvent] = []
     consumed: set[str] = set()
-    for aggregate in memory.aggregate_episodes(min_count=min_episode_count):
+    aggregates = _merge_coalition_candidates_into_aggregates(
+        memory.aggregate_episodes(min_count=min_episode_count), memory, min_coalition_count
+    )
+    for aggregate in aggregates:
         source_workers = [
             worker_by_id[worker_id]
             for worker_id in aggregate.workers
@@ -398,6 +395,10 @@ def _apply_episode_actions(
             occurrences=aggregate.occurrences,
             successes=aggregate.successes,
             total_evidence_gain=aggregate.total_evidence_gain,
+            total_need_reduction=aggregate.total_need_reduction,
+            unique_task_count=aggregate.unique_task_count,
+            tasks_with_progress=aggregate.tasks_with_progress,
+            tasks_with_need_reduction=aggregate.tasks_with_need_reduction,
             workers=aggregate.workers,
         )
         reason = (
@@ -443,6 +444,17 @@ def _apply_episode_actions(
                 )
             )
         elif action == "birth_bridge":
+            if all(
+                _is_worker_healthy(worker.id, routes_by_worker, min_health_routes, healthy_ratio)
+                for worker in source_workers
+            ):
+                # Same rationale as the old raw-coalition path's own health
+                # gate (now unified here instead of duplicated): every
+                # source worker already has a track record of good
+                # answers, so birthing a dedicated bridge is for coalitions
+                # that are struggling together, not ones that already work
+                # fine split apart.
+                continue
             bridge_suffix = "-".join(
                 worker_id.removeprefix("worker-") for worker_id in aggregate.workers
             )

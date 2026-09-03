@@ -4,6 +4,7 @@ import json
 import sqlite3
 from collections import defaultdict
 from pathlib import Path
+from uuid import uuid4
 
 from pydantic import BaseModel, Field
 
@@ -42,16 +43,33 @@ class CollaborationEpisode(BaseModel):
     # gather plenty of evidence_gain while never actually resolving
     # anything.
     need_reduction: int = 0
+    # One value per real record_task_memory() call (i.e. per finished
+    # ask()/retry_from_trajectory task), shared by every episode that call
+    # records -- lets aggregate_episodes tell "this pattern recurred across
+    # N separate tasks" apart from "this task got stuck and recruited the
+    # same pattern N times across its own rounds". Defaulted (not required)
+    # so existing call sites/tests that construct one CollaborationEpisode
+    # per intended-distinct-task keep working unchanged -- each gets its
+    # own random id, which is exactly the semantics they already relied on.
+    task_id: str = Field(default_factory=lambda: uuid4().hex)
 
 
 class EpisodeAggregate(BaseModel):
-    """A collaboration pattern that recurred across *separate tasks* (not
-    separate rounds of the same task -- see aggregate_episodes), grouped by
-    (strategy, exact worker set): e.g. "temporary_bridge involving worker-a
-    and worker-b succeeded in 3/3 occurrences". need_terms is a supplementary
-    union of vocabulary seen across those occurrences, not part of the
-    grouping key -- the (strategy, workers) pair is a far more stable
-    identifier than independently LLM-worded need text ever is.
+    """A collaboration pattern aggregated across every recorded episode row
+    for one (strategy, exact worker set) group -- `occurrences` counts
+    EVERY such row, which is one per round this pattern was recruited, so a
+    single task stuck on the same need for 6 rounds contributes 6 all by
+    itself (confirmed live: a 25-occurrence pattern traced back to only 4
+    distinct tasks). `unique_task_count`/`tasks_with_progress`/
+    `tasks_with_need_reduction` (see CollaborationEpisode.task_id) are the
+    task-level counterpart: how many *separate* tasks this pattern actually
+    recurred across, which is the stronger recurrence signal -- within-task
+    repetition from one stuck task is much weaker structural evidence than
+    the same pattern independently recurring across several different
+    tasks. need_terms is a supplementary union of vocabulary seen across
+    those occurrences, not part of the grouping key -- the (strategy,
+    workers) pair is a far more stable identifier than independently
+    LLM-worded need text ever is.
     """
 
     strategy: str
@@ -61,6 +79,9 @@ class EpisodeAggregate(BaseModel):
     successes: int
     total_evidence_gain: int
     total_need_reduction: int = 0
+    unique_task_count: int = 0
+    tasks_with_progress: int = 0
+    tasks_with_need_reduction: int = 0
 
 
 class MemoryRoute(BaseModel):
@@ -131,28 +152,41 @@ class ColonyMemoryStore:
         with sqlite3.connect(self.db_path) as connection:
             _create_schema(connection)
             rows = connection.execute(
-                "select need, strategy, outcome, evidence_gain, payload from episodes"
+                "select id, need, strategy, outcome, evidence_gain, payload from episodes"
             ).fetchall()
-        groups: dict[tuple[str, tuple[str, ...]], list[tuple[str, int, int, list[str]]]] = (
+        groups: dict[tuple[str, tuple[str, ...]], list[tuple[str, int, int, list[str], str]]] = (
             defaultdict(list)
         )
-        for need, strategy, outcome, evidence_gain, payload in rows:
+        for row_id, need, strategy, outcome, evidence_gain, payload in rows:
             payload_data = json.loads(payload)
             workers = tuple(sorted(payload_data.get("workers", [])))
             if not workers:
                 continue
             need_reduction = int(payload_data.get("need_reduction", 0))
+            # Rows recorded before task_id existed have none in their own
+            # payload -- fall back to this row's own db id so each still
+            # counts as its own distinct pseudo-task (the honest reading of
+            # data where real task grouping was never recorded), rather
+            # than silently collapsing them all into one false "task".
+            task_id = payload_data.get("task_id") or f"__legacy_row_{row_id}"
             groups[(strategy, workers)].append(
-                (outcome, evidence_gain, need_reduction, extract_terms(need)[:6])
+                (outcome, evidence_gain, need_reduction, extract_terms(need)[:6], task_id)
             )
         aggregates: list[EpisodeAggregate] = []
         for (strategy, workers), items in groups.items():
             if len(items) < min_count:
                 continue
-            successes = sum(1 for outcome, _, _, _ in items if outcome == "progress")
-            total_gain = sum(gain for _, gain, _, _ in items)
-            total_reduction = sum(reduction for _, _, reduction, _ in items)
-            need_terms = sorted({term for _, _, _, terms in items for term in terms})[:12]
+            successes = sum(1 for outcome, _, _, _, _ in items if outcome == "progress")
+            total_gain = sum(gain for _, gain, _, _, _ in items)
+            total_reduction = sum(reduction for _, _, reduction, _, _ in items)
+            need_terms = sorted({term for _, _, _, terms, _ in items for term in terms})[:12]
+            task_ids = {task_id for _, _, _, _, task_id in items}
+            tasks_with_progress = {
+                task_id for outcome, _, _, _, task_id in items if outcome == "progress"
+            }
+            tasks_with_need_reduction = {
+                task_id for _, _, reduction, _, task_id in items if reduction > 0
+            }
             aggregates.append(
                 EpisodeAggregate(
                     strategy=strategy,
@@ -162,6 +196,9 @@ class ColonyMemoryStore:
                     successes=successes,
                     total_evidence_gain=total_gain,
                     total_need_reduction=total_reduction,
+                    unique_task_count=len(task_ids),
+                    tasks_with_progress=len(tasks_with_progress),
+                    tasks_with_need_reduction=len(tasks_with_need_reduction),
                 )
             )
         aggregates.sort(key=lambda item: item.occurrences, reverse=True)
@@ -429,6 +466,13 @@ def record_task_memory(
     # as episodes here -- a closure check isn't a collaboration (no
     # strategy/workers to attribute it to), it's verification that a
     # decomposition already covered its parent.
+    # One task_id shared by every episode this call records -- lets
+    # aggregate_episodes distinguish "this pattern recurred across several
+    # separate tasks" (strong recurrence signal) from "this one task got
+    # stuck and recruited the same pattern across many of its own rounds"
+    # (weak: it's the same task's own struggle counted multiple times). See
+    # CollaborationEpisode.task_id's own docstring.
+    task_id = uuid4().hex
     for round_state in state.rounds:
         for trace in round_state.node_executions:
             if not trace.need:
@@ -448,6 +492,7 @@ def record_task_memory(
                     ),
                     evidence_gain=trace.evidence_gain,
                     need_reduction=trace.need_reduction,
+                    task_id=task_id,
                 )
             )
 

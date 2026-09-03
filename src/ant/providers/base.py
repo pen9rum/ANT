@@ -387,6 +387,10 @@ class EvolutionReasoner(Protocol):
         occurrences: int,
         successes: int,
         total_evidence_gain: int,
+        total_need_reduction: int,
+        unique_task_count: int,
+        tasks_with_progress: int,
+        tasks_with_need_reduction: int,
         workers: list[str],
     ) -> str:
         """Judges a recurring collaboration-episode pattern aggregated
@@ -398,6 +402,20 @@ class EvolutionReasoner(Protocol):
         temporary adaptation actually worked, and how often -- evolve is
         meant to learn from. Returns one of "no_change", "strengthen_route",
         "birth_bridge", "merge".
+
+        `occurrences`/`successes`/`total_evidence_gain` are episode-level
+        (one row per round this pattern was recruited, so a single task
+        stuck on the same need for 6 rounds contributes 6 to `occurrences`
+        all by itself -- confirmed live on qibo: a 25-occurrence pattern
+        traced back to only 4 distinct tasks, one of which alone
+        contributed 10). `unique_task_count`/`tasks_with_progress`/
+        `tasks_with_need_reduction` are the task-level counterpart -- how
+        many *separate* tasks this pattern actually recurred across, not
+        how many rounds. Weigh task-level recurrence more heavily than raw
+        occurrence count: a pattern repeating within one stuck task is
+        weaker structural evidence than the same pattern independently
+        recurring across several different tasks, even at a lower raw
+        occurrence count.
         """
         ...
 

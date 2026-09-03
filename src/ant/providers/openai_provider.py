@@ -44,6 +44,17 @@ from ant.providers.pricing import estimate_cost_usd
 from ant.retrieval import extract_terms, score_evidence
 from ant.tools.symbol_index import build_symbol_index
 
+
+# --- TEMPORARY DIAGNOSTIC TELEMETRY (2026-09-03) ---------------------------
+# Companion to the [EVOTEL] block in evolution.py -- same rationale, same
+# removal plan (delete once the richer episode-signal change has a clean
+# validation run behind it).
+def _tel_reason(*parts: object) -> None:
+    print("[EVOTEL]", *parts, flush=True)
+
+
+# --- END TEMPORARY DIAGNOSTIC TELEMETRY -------------------------------------
+
 # 512/768 was cutting detailed technical answers off mid-sentence (e.g. a
 # call-path walk-through truncated inside a code block). 8192 gives ample
 # room for a full multi-part answer without meaningfully raising baseline
@@ -1454,6 +1465,10 @@ class OpenAIProvider:
         occurrences: int,
         successes: int,
         total_evidence_gain: int,
+        total_need_reduction: int,
+        unique_task_count: int,
+        tasks_with_progress: int,
+        tasks_with_need_reduction: int,
         workers: list[str],
     ) -> str:
         # evolve_workers' existing birth/merge signals (recurring_coalitions)
@@ -1465,10 +1480,21 @@ class OpenAIProvider:
         # evidence gain, aggregated across tasks by ColonyMemoryStore.
         # aggregate_episodes -- not a single task's outcome, which
         # persistent reorganization must not react to on its own.
+        #
+        # occurrences/successes/total_evidence_gain are EPISODE-level: one
+        # row per round this pattern was recruited, so a single task stuck
+        # on the same need for 6 rounds contributes 6 to occurrences all by
+        # itself -- confirmed live on qibo, a 25-occurrence pattern traced
+        # back to only 4 distinct tasks, one of which alone contributed 10.
+        # unique_task_count/tasks_with_progress/tasks_with_need_reduction
+        # are the TASK-level counterpart -- both are shown below so the
+        # model can weigh task-level recurrence (the stronger structural
+        # signal) against raw episode activity, not just read occurrences
+        # as if it already meant "separate tasks".
         prompt = (
-            "A recurring collaboration pattern was observed across multiple "
-            "separate tasks in a code-navigation colony's memory. Decide what "
-            "the colony's persistent organization should do about it:\n"
+            "A recurring collaboration pattern was observed in a "
+            "code-navigation colony's memory. Decide what the colony's "
+            "persistent organization should do about it:\n"
             "- no_change: not compelling enough evidence yet, or the pattern "
             "does not warrant a structural change.\n"
             "- strengthen_route: reinforce routing so future similar needs "
@@ -1476,18 +1502,42 @@ class OpenAIProvider:
             "- birth_bridge: create a permanent worker dedicated to this "
             "recurring interface between the involved workers' territories.\n"
             "- merge: the involved workers should be combined into one.\n"
+            "Weigh task-level recurrence more heavily than raw episode "
+            "occurrences: a pattern that repeated many times within ONE "
+            "task that got stuck on the same need is weak structural "
+            "evidence, even at a high occurrence count -- that is one "
+            "task's own struggle counted multiple times, not independent "
+            "confirmation. The same pattern recurring across several "
+            "DIFFERENT tasks, even at a lower occurrence count, is the "
+            "stronger basis for a persistent, colony-wide change like "
+            "birth_bridge or merge.\n"
             f"Strategy that kept being used: {strategy}\n"
             f"Need vocabulary in common across occurrences: {', '.join(need_terms)}\n"
             f"Workers involved: {', '.join(workers)}\n"
-            f"Occurrences across separate tasks: {occurrences}\n"
-            f"Of which successful (found genuinely new evidence): {successes}\n"
+            f"Episode occurrences (one per round this pattern was recruited, "
+            f"can include repeats within the same task): {occurrences}\n"
+            f"Of which successful (found genuinely new evidence or resolved "
+            f"a need): {successes}\n"
             f"Total evidence items gained across all occurrences: {total_evidence_gain}\n"
-            "Return JSON with key action: one of no_change, strengthen_route, "
-            "birth_bridge, merge."
+            f"Total needs actually resolved across all occurrences: {total_need_reduction}\n"
+            f"Unique separate tasks this pattern recurred across: {unique_task_count}\n"
+            f"Of which tasks with at least one successful occurrence: "
+            f"{tasks_with_progress}/{unique_task_count}\n"
+            f"Of which tasks that actually resolved a need: "
+            f"{tasks_with_need_reduction}/{unique_task_count}\n"
+            "Return JSON with keys action (one of no_change, strengthen_route, "
+            "birth_bridge, merge) and reason (one sentence explaining the "
+            "call, referencing the task-level vs. episode-level counts "
+            "above)."
         )
-        result = self.responses_json(prompt, max_output_tokens=128)
+        result = self.responses_json(prompt, max_output_tokens=192)
         data = _loads_json_object(result.text)
         action = data.get("action")
+        # reason is diagnostic-only (see the [EVOTEL] telemetry block in
+        # evolution.py) -- not part of this method's return contract, never
+        # persisted, purely so a controlled replay can see WHY the model
+        # called it this way, not just what it called.
+        _tel_reason("decide_episode_action reason:", data.get("reason"))
         if action in ("no_change", "strengthen_route", "birth_bridge", "merge"):
             return action
         # Malformed/empty response: degrade to the conservative default --
