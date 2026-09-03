@@ -53,7 +53,6 @@ from ant.domain import (
     WorkerObservation,
 )
 from ant.indexing.cards import template_routing_summary
-from ant.scoring_config import DEFAULT_SCORING_CONFIG
 from ant.tools import LocalSearchTool
 
 
@@ -1031,79 +1030,6 @@ def test_select_evidence_shows_the_reasoner_every_item_with_no_relevance_cap(
     _select_evidence(_RecordingReasoner(), "question", evidence, LocalSearchTool(tmp_path))
 
     assert seen_counts == [55]
-
-
-def test_select_evidence_backfills_a_path_the_reasoner_dropped_entirely(
-    tmp_path: Path,
-) -> None:
-    # Regression test for a real yt-dlp slow-gen1 trace: a 33-item pool
-    # spanning 10 distinct files, well under keep_limit=16, still got
-    # collapsed by the reasoner's own selection down to 6 items from just
-    # 2 files -- entire files' worth of genuinely distinct evidence (the
-    # registry-consumption side of a mechanism, not just its definition)
-    # got zero representation, even though 10 keep_limit slots went
-    # unused. Not a hard-cap truncation bug (select_evidence already sees
-    # every item) -- the reasoner's own holistic judgment under-selected
-    # on a wide pool. The coverage floor must add back each still-
-    # uncovered path's own best-ranked item until keep_limit is reached.
-    class _DropsMostPathsReasoner(_PassthroughLookupsReasoner):
-        def observe(self, *, question, worker_id, territory_id, evidence):
-            raise AssertionError("this test does not exercise observe()")
-
-        def select_evidence(self, *, question, evidence, limit):
-            # Mimics the live failure: keeps only the first 2 items
-            # (both from src/file_0.py) despite 8 other distinct paths
-            # being available and the limit being far from exhausted.
-            return ["0", "1"], []
-
-    evidence = [
-        Evidence(path="src/file_0.py", line_start=1, line_end=2, quote="a", reason="r"),
-        Evidence(path="src/file_0.py", line_start=3, line_end=4, quote="b", reason="r"),
-    ] + [
-        Evidence(
-            path=f"src/file_{index}.py",
-            line_start=1,
-            line_end=2,
-            quote=f"def function_{index}(): pass",
-            reason="r",
-        )
-        for index in range(1, 9)
-    ]
-
-    result = _select_evidence(
-        _DropsMostPathsReasoner(), "question", evidence, LocalSearchTool(tmp_path)
-    )
-
-    assert {item.path for item in result} == {f"src/file_{i}.py" for i in range(9)}
-    assert len(result) <= DEFAULT_SCORING_CONFIG.routing.llm_evidence_keep_limit
-
-
-def test_select_evidence_coverage_floor_still_respects_keep_limit(tmp_path: Path) -> None:
-    keep_limit = DEFAULT_SCORING_CONFIG.routing.llm_evidence_keep_limit
-
-    class _KeepsOnlyFirstReasoner(_PassthroughLookupsReasoner):
-        def observe(self, *, question, worker_id, territory_id, evidence):
-            raise AssertionError("this test does not exercise observe()")
-
-        def select_evidence(self, *, question, evidence, limit):
-            return ["0"], []
-
-    evidence = [
-        Evidence(
-            path=f"src/file_{index}.py",
-            line_start=1,
-            line_end=2,
-            quote=f"def function_{index}(): pass",
-            reason="r",
-        )
-        for index in range(keep_limit + 10)  # far more distinct paths than the cap
-    ]
-
-    result = _select_evidence(
-        _KeepsOnlyFirstReasoner(), "question", evidence, LocalSearchTool(tmp_path)
-    )
-
-    assert len(result) == keep_limit
 
 
 def test_plan_round_accepts_an_acyclic_plan_without_retrying() -> None:

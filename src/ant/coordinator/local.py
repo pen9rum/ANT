@@ -2079,30 +2079,6 @@ def _select_evidence(
             kept_indices.append(index)
     if not kept_indices:
         kept_indices = list(range(min(keep_limit, len(pool))))
-    # Coverage floor: the reasoner's own selection can collapse a pool
-    # spanning several distinct files down to just one or two of them --
-    # confirmed live on a real yt-dlp slow-gen1 trace, a 33-item pool
-    # across 10 files kept only 6 items from 2 files, well under the
-    # keep_limit=16 budget (10 slots unused), silently zeroing out entire
-    # files' worth of distinct evidence (e.g. the registry-consumption
-    # side of a mechanism, keeping only its definition side). This is not
-    # a hard-cap truncation bug (select_evidence already sees every item,
-    # no arrival-order slice) -- it is the reasoner's own holistic
-    # judgment under-selecting on a wide pool, the same per-call
-    # instability _select_evidence's own docstring already documents
-    # elsewhere. Adds back each still-uncovered path's own best-ranked
-    # item (pool is already relevance-ranked, so its first occurrence per
-    # path is that path's strongest candidate) until keep_limit is hit --
-    # never removes anything the reasoner chose, never exceeds the same
-    # budget it was already working within.
-    kept_paths = {pool[index].path for index in kept_indices}
-    for index, item in enumerate(pool):
-        if len(kept_indices) >= keep_limit:
-            break
-        if item.path in kept_paths:
-            continue
-        kept_paths.add(item.path)
-        kept_indices.append(index)
     reopened_map = _reopen_evidence_by_index(expand_ids, pool, search) if expand_ids else {}
     return [reopened_map.get(index, pool[index]) for index in kept_indices[:keep_limit]]
 
