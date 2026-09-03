@@ -204,6 +204,25 @@ class ColonyMemoryStore:
         aggregates.sort(key=lambda item: item.occurrences, reverse=True)
         return aggregates
 
+    def distinct_task_count(self) -> int:
+        """How many distinct real tasks (record_task_memory calls) have
+        ever contributed an episode to this colony's memory -- the same
+        task_id de-duplication aggregate_episodes' unique_task_count relies
+        on, exposed on its own as a per-generation audit metric (how much
+        real experience has this colony accumulated by the time a given
+        evolve_workers() call runs). Rows from before task_id existed each
+        count as their own distinct pseudo-task, the same conservative
+        fallback aggregate_episodes uses.
+        """
+        with sqlite3.connect(self.db_path) as connection:
+            _create_schema(connection)
+            rows = connection.execute("select id, payload from episodes").fetchall()
+        task_ids = {
+            json.loads(payload).get("task_id") or f"__legacy_row_{row_id}"
+            for row_id, payload in rows
+        }
+        return len(task_ids)
+
     def recurring_coalitions(self, min_count: int = 2) -> list[tuple[list[str], int]]:
         with sqlite3.connect(self.db_path) as connection:
             _create_schema(connection)

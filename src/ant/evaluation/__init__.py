@@ -1,5 +1,5 @@
 from ant.evaluation.datasets import EvalExample, load_examples
-from ant.evaluation.gen_compare import GenCompareResult, run_gen_compare
+from ant.evaluation.gen_compare import GenCompareResult, GenerationSnapshot, run_gen_compare
 from ant.evaluation.metrics import build_reference_idf, evaluate_answer
 from ant.evaluation.report import EvalReport, build_report
 from ant.evaluation.repos import RepoSpec, fetch_repositories, load_repo_specs
@@ -10,6 +10,7 @@ __all__ = [
     "EvalExample",
     "EvalReport",
     "GenCompareResult",
+    "GenerationSnapshot",
     "RepoSpec",
     "build_reference_idf",
     "build_report",

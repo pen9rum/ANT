@@ -3,7 +3,7 @@ from pathlib import Path
 
 from ant.domain import EvidenceState
 from ant.evaluation.datasets import EvalExample
-from ant.evaluation.gen_compare import _run_fast_gen1, run_gen_compare
+from ant.evaluation.gen_compare import _run_fast_generation, run_gen_compare
 from ant.evaluation.metrics import EvalScore
 from ant.evolution import EvolutionEvent, EvolutionResult
 
@@ -28,6 +28,10 @@ def test_run_gen_compare_passes_evolve_workers_the_resolved_repo_not_the_raw_par
     actual_repo.mkdir(parents=True)
 
     index_path = tmp_path / ".ant"
+    # evolve_workers is stubbed below so nothing else creates this on disk,
+    # but run_gen_compare's own post-evolve index snapshot still does a
+    # real shutil.copytree from it.
+    (index_path / "myrepo").mkdir(parents=True)
     run_dir = tmp_path / "run"
 
     captured: dict[str, object] = {}
@@ -61,8 +65,8 @@ def test_run_gen_compare_passes_evolve_workers_the_resolved_repo_not_the_raw_par
         index_path=index_path,
         run_dir=run_dir,
         run_gen0=False,
-        run_slow_gen1=True,
-        run_fast_gen1=False,
+        slow_generations=1,
+        fast_generations=0,
     )
 
     assert captured["repo_root"] == actual_repo.resolve()
@@ -85,6 +89,7 @@ def test_run_gen_compare_passes_evolve_workers_the_same_index_run_batch_actually
     # such run before this fix.
     index_path = tmp_path / ".ant"
     resolved_index_path = index_path / "myrepo"
+    resolved_index_path.mkdir(parents=True)
 
     captured: dict[str, object] = {}
 
@@ -115,31 +120,30 @@ def test_run_gen_compare_passes_evolve_workers_the_same_index_run_batch_actually
         index_path=index_path,
         run_dir=tmp_path / "run",
         run_gen0=False,
-        run_slow_gen1=True,
-        run_fast_gen1=False,
+        slow_generations=1,
+        fast_generations=0,
     )
 
     assert captured["index_path"] == resolved_index_path
 
 
-def test_fast_gen1_only_followup_does_not_overwrite_the_earlier_slow_gen1_evolution_metadata(
+def test_a_fast_only_followup_does_not_lose_the_earlier_slow_gen1_generation_snapshot(
     tmp_path: Path, monkeypatch
 ) -> None:
     # Regression test for a real bug found live on qibo: this project's own
     # documented two-call pattern for "owner/repo"-formatted datasets runs
-    # slow-gen1 in one `gen-compare` call, then fast-gen1 in a SEPARATE
-    # later call against the same run_dir. evolution_events/slow_worker_count
-    # (unlike gen0/slow-gen1/fast-gen1's own score dicts, which always
-    # reload via _load_or_rebuild_scores regardless of which stage ran this
-    # call) were only ever set `if run_slow_gen1:` -- the later fast-gen1-
-    # only call re-initialized them to []/gen0_worker_count and its own
-    # summary write silently discarded the first call's real, non-empty
-    # evolution telemetry. Confirmed live: evolve_workers really did fire 9
-    # strengthen_route events and record them in its own return value, but
-    # the run_dir's on-disk summary.json ended up reporting evolution_events:
-    # [] because the fast-gen1-only call ran after it.
+    # slow-gen1 in one `gen-compare` call, then a fast pass in a SEPARATE
+    # later call against the same run_dir. The evolution telemetry used to
+    # live in flat evolution_events/slow_worker_count fields that were only
+    # ever set on the call that actually ran slow-gen1 -- a later
+    # fast-only call re-initialized them to []/default and its own summary
+    # write silently discarded the first call's real, non-empty telemetry.
+    # Now each generation persists its own slow-gen{k}-evolution.json, and
+    # a later call that keeps that generation in its reported range (even
+    # without recomputing it) reloads that file instead of re-initializing.
     run_dir = tmp_path / "run"
     index_path = tmp_path / ".ant"
+    (index_path / "myrepo").mkdir(parents=True)
     repo_root = tmp_path / "repos"
     (repo_root / "myrepo").mkdir(parents=True)
 
@@ -184,19 +188,21 @@ def test_fast_gen1_only_followup_does_not_overwrite_the_earlier_slow_gen1_evolut
         index_path=index_path,
         run_dir=run_dir,
         run_gen0=False,
-        run_slow_gen1=True,
-        run_fast_gen1=False,
+        slow_generations=1,
+        fast_generations=0,
     )
-    assert [e.kind for e in slow_result.evolution_events] == ["strengthen_route"]
-    assert slow_result.slow_worker_count == 7
+    assert [e.kind for e in slow_result.generation_snapshots[1].events] == ["strengthen_route"]
+    assert slow_result.generation_snapshots[1].worker_count == 7
 
-    def fake_run_fast_gen1(**kwargs):
+    def fake_run_fast_generation(**kwargs):
         return {}
 
-    monkeypatch.setattr("ant.evaluation.gen_compare._run_fast_gen1", fake_run_fast_gen1)
-    # run_gen_compare's own pre-flight check for run_fast_gen1 requires each
-    # example's gen0 trace to already exist on disk under run_dir -- create
-    # a placeholder, since this test's gen0 stage never actually ran.
+    monkeypatch.setattr(
+        "ant.evaluation.gen_compare._run_fast_generation", fake_run_fast_generation
+    )
+    # run_gen_compare's own pre-flight check for a fast pass requires that
+    # generation's own trajectory to already exist on disk under run_dir --
+    # create a placeholder, since this test's gen0 stage never actually ran.
     (run_dir / "gen0-q1.json").write_text(
         EvidenceState(question="q", answer="a").model_dump_json(), encoding="utf-8"
     )
@@ -207,13 +213,20 @@ def test_fast_gen1_only_followup_does_not_overwrite_the_earlier_slow_gen1_evolut
         index_path=index_path,
         run_dir=run_dir,
         run_gen0=False,
-        run_slow_gen1=False,
-        run_fast_gen1=True,
+        # Keep generation 1 in the reported range (so its real snapshot is
+        # read back) without recomputing it (start_generation=2 keeps it
+        # below the "actually run evolve_workers" threshold).
+        slow_generations=1,
+        start_generation=2,
+        # fast-gen0 only -- anchored to gen0's own trajectory.
+        fast_generations=1,
     )
 
-    assert [e.kind for e in fast_only_result.evolution_events] == ["strengthen_route"]
-    assert fast_only_result.evolution_events[0].source_worker_ids == ["worker-a"]
-    assert fast_only_result.slow_worker_count == 7
+    assert [e.kind for e in fast_only_result.generation_snapshots[1].events] == [
+        "strengthen_route"
+    ]
+    assert fast_only_result.generation_snapshots[1].events[0].source_worker_ids == ["worker-a"]
+    assert fast_only_result.generation_snapshots[1].worker_count == 7
 
 
 def _write_gen0_fixture(run_dir: Path, example_id: str, answer: str, score: dict) -> None:
@@ -231,7 +244,7 @@ def _write_gen0_fixture(run_dir: Path, example_id: str, answer: str, score: dict
     (run_dir / "gen0-results.jsonl").write_text(json.dumps(row) + "\n", encoding="utf-8")
 
 
-def test_run_fast_gen1_reuses_gen0_score_when_the_monotonic_gate_leaves_the_answer_untouched(
+def test_run_fast_generation_reuses_the_anchors_score_when_the_monotonic_gate_leaves_it_untouched(
     tmp_path: Path, monkeypatch
 ) -> None:
     # Regression test for a real finding on a fresh yt-dlp run: 6/10
@@ -242,8 +255,8 @@ def test_run_fast_gen1_reuses_gen0_score_when_the_monotonic_gate_leaves_the_answ
     # apart -- f1 (a deterministic metric) was identical both times, only
     # the LLM judge's own rubric scores moved. That is pure judge-sampling
     # noise on a case where nothing about the actual answer changed at
-    # all. Reusing gen0's own already-judged score removes it, at zero
-    # extra judge cost.
+    # all. Reusing the anchor generation's own already-judged score
+    # removes it, at zero extra judge cost.
     run_dir = tmp_path / "run"
     gen0_score = {
         "exact_match": False,
@@ -273,7 +286,7 @@ def test_run_fast_gen1_reuses_gen0_score_when_the_monotonic_gate_leaves_the_answ
 
     def fake_judge_answer(**kwargs):
         judge_calls.append(kwargs)
-        raise AssertionError("judge_answer must not be called when reusing gen0's score")
+        raise AssertionError("judge_answer must not be called when reusing the anchor's score")
 
     monkeypatch.setattr("ant.evaluation.gen_compare.IndexStore", _StubIndexStore)
     monkeypatch.setattr("ant.evaluation.gen_compare.LocalCoordinator", _StubCoordinator)
@@ -282,11 +295,13 @@ def test_run_fast_gen1_reuses_gen0_score_when_the_monotonic_gate_leaves_the_answ
 
     examples = [EvalExample(id="q1", question="q", answer="expected", repo="someorg/myrepo")]
 
-    scores = _run_fast_gen1(
+    scores = _run_fast_generation(
         examples=examples,
         repo_root=tmp_path / "repos",
-        gen0_index=tmp_path / ".ant",
+        anchor_index=tmp_path / ".ant",
         run_dir=run_dir,
+        trace_prefix="gen0-",
+        out_prefix="fast-gen0-",
         max_rounds=1,
         judge="openai",
     )
@@ -295,7 +310,7 @@ def test_run_fast_gen1_reuses_gen0_score_when_the_monotonic_gate_leaves_the_answ
     assert scores["q1"] == EvalScore.model_validate(gen0_score)
 
 
-def test_run_fast_gen1_still_judges_when_the_answer_actually_changed(
+def test_run_fast_generation_still_judges_when_the_answer_actually_changed(
     tmp_path: Path, monkeypatch
 ) -> None:
     # The reuse optimization must not become a blanket skip -- a retry
@@ -344,14 +359,139 @@ def test_run_fast_gen1_still_judges_when_the_answer_actually_changed(
 
     examples = [EvalExample(id="q1", question="q", answer="expected", repo="someorg/myrepo")]
 
-    scores = _run_fast_gen1(
+    scores = _run_fast_generation(
         examples=examples,
         repo_root=tmp_path / "repos",
-        gen0_index=tmp_path / ".ant",
+        anchor_index=tmp_path / ".ant",
         run_dir=run_dir,
+        trace_prefix="gen0-",
+        out_prefix="fast-gen0-",
         max_rounds=1,
         judge="openai",
     )
 
     assert len(judge_calls) == 1
     assert scores["q1"].f1 == 0.9
+
+
+def test_slow_generations_are_cumulative_evolve_workers_runs_once_per_generation(
+    tmp_path: Path, monkeypatch
+) -> None:
+    # The core new invariant: --slow-generations N evolves the SAME,
+    # ever-accumulating index N times in a row (slow-gen2 evolves whatever
+    # slow-gen1's own run left behind, not a fresh copy of gen0's), each
+    # producing its own named results/evolution-metadata/index-snapshot,
+    # never overwriting an earlier generation's.
+    repo_root = tmp_path / "repos"
+    (repo_root / "myrepo").mkdir(parents=True)
+    index_path = tmp_path / ".ant"
+    (index_path / "myrepo").mkdir(parents=True)
+    run_dir = tmp_path / "run"
+
+    evolve_calls: list[int] = []
+    run_batch_calls: list[str] = []
+
+    class _StubIndexStore:
+        def __init__(self, path):
+            pass
+
+        def load_workers(self):
+            return []
+
+    def fake_run_batch(**kwargs):
+        run_batch_calls.append(kwargs["state_dump_prefix"])
+        return []
+
+    def fake_evolve_workers(index_path, repo_root=None, reasoner=None):
+        evolve_calls.append(len(evolve_calls) + 1)
+        return EvolutionResult(events=[], worker_count=len(evolve_calls))
+
+    monkeypatch.setattr("ant.evaluation.gen_compare.run_batch", fake_run_batch)
+    monkeypatch.setattr("ant.evaluation.gen_compare.evolve_workers", fake_evolve_workers)
+    monkeypatch.setattr("ant.evaluation.gen_compare.IndexStore", _StubIndexStore)
+    monkeypatch.setattr("ant.evaluation.gen_compare.OpenAIProvider", lambda: object())
+
+    examples = [EvalExample(id="q1", question="q", answer="a", repo="someorg/myrepo")]
+
+    result = run_gen_compare(
+        examples=examples,
+        repo_root=repo_root,
+        index_path=index_path,
+        run_dir=run_dir,
+        run_gen0=False,
+        slow_generations=3,
+        fast_generations=0,
+    )
+
+    assert evolve_calls == [1, 2, 3]
+    assert run_batch_calls == ["slow-gen1-", "slow-gen2-", "slow-gen3-"]
+    assert set(result.slow_generations) == {1, 2, 3}
+    assert set(result.generation_snapshots) == {1, 2, 3}
+    assert [
+        result.generation_snapshots[g].worker_count for g in (1, 2, 3)
+    ] == [1, 2, 3]
+    for generation in (1, 2, 3):
+        assert (run_dir / f"slow-gen{generation}-evolution.json").exists()
+        assert (run_dir / f"_gen{generation}_index_snapshot").exists()
+
+
+def test_start_generation_resumes_without_recomputing_earlier_generations(
+    tmp_path: Path, monkeypatch
+) -> None:
+    repo_root = tmp_path / "repos"
+    (repo_root / "myrepo").mkdir(parents=True)
+    index_path = tmp_path / ".ant"
+    (index_path / "myrepo").mkdir(parents=True)
+    run_dir = tmp_path / "run"
+
+    evolve_calls: list[int] = []
+
+    class _StubIndexStore:
+        def __init__(self, path):
+            pass
+
+        def load_workers(self):
+            return []
+
+    def fake_run_batch(**kwargs):
+        return []
+
+    def fake_evolve_workers(index_path, repo_root=None, reasoner=None):
+        evolve_calls.append(len(evolve_calls) + 1)
+        return EvolutionResult(events=[], worker_count=len(evolve_calls))
+
+    monkeypatch.setattr("ant.evaluation.gen_compare.run_batch", fake_run_batch)
+    monkeypatch.setattr("ant.evaluation.gen_compare.evolve_workers", fake_evolve_workers)
+    monkeypatch.setattr("ant.evaluation.gen_compare.IndexStore", _StubIndexStore)
+    monkeypatch.setattr("ant.evaluation.gen_compare.OpenAIProvider", lambda: object())
+
+    examples = [EvalExample(id="q1", question="q", answer="a", repo="someorg/myrepo")]
+
+    # First call reaches generation 2.
+    run_gen_compare(
+        examples=examples,
+        repo_root=repo_root,
+        index_path=index_path,
+        run_dir=run_dir,
+        run_gen0=False,
+        slow_generations=2,
+        fast_generations=0,
+    )
+    assert evolve_calls == [1, 2]
+
+    # A second call asking for generation 3 with start_generation=3 must
+    # NOT re-run evolve_workers for generations 1 or 2 -- only generation 3
+    # is new work -- yet must still report 1 and 2 in its own summary.
+    result = run_gen_compare(
+        examples=examples,
+        repo_root=repo_root,
+        index_path=index_path,
+        run_dir=run_dir,
+        run_gen0=False,
+        slow_generations=3,
+        start_generation=3,
+        fast_generations=0,
+    )
+
+    assert evolve_calls == [1, 2, 3]
+    assert set(result.generation_snapshots) == {1, 2, 3}

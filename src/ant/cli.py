@@ -207,26 +207,38 @@ def gen_compare(
     fast_max_rounds: int | None = None,
     judge: str = "heuristic",
     gen0: bool = typer.Option(True, "--gen0/--no-gen0"),
-    slow_gen1: bool = typer.Option(True, "--slow-gen1/--no-slow-gen1"),
-    fast_gen1: bool = typer.Option(True, "--fast-gen1/--no-fast-gen1"),
+    slow_generations: int = typer.Option(1, "--slow-generations", min=0),
+    fast_generations: int = typer.Option(0, "--fast-generations", min=0),
+    start_generation: int = typer.Option(1, "--start-generation", min=1),
 ) -> None:
-    """Unified gen0 -> slow-gen1 (colony evolution) -> fast-gen1
-    (task-conditioned retry) comparison over one dataset. Every stage's
+    """Unified gen0 -> up to --slow-generations CUMULATIVE colony-evolution
+    generations -> an optional --fast-generations per-generation
+    task-conditioned repair pass, over one dataset. Every stage's
     per-question EvidenceState JSON is saved under the run directory
-    (gen0-<id>.json, slow-gen1-<id>.json, fast-gen1-<id>.json, plus a
+    (gen0-<id>.json, slow-gen{k}-<id>.json, fast-gen{k}-<id>.json, plus a
     *-results.jsonl per stage) and one summary.json aggregates each stage's
-    per-question EvalScore -- the same on-disk shape every prior gen0/gen1
-    comparison run of this project's own ad-hoc scripts produced by hand,
-    now from one committed, reusable command.
+    per-question EvalScore, plus a per-generation population/evolution
+    audit trail (worker count, added/removed workers, event kinds, route
+    memory stats, accumulated task count) -- see run_gen_compare's own
+    docstring for the full generation semantics (SLOW is cumulative, FAST
+    is always anchored to one generation's own trajectory, never stacked).
 
-    Each of --gen0/--slow-gen1/--fast-gen1 can be switched off independently
-    (all four combinations that make sense: everything, gen0 only, slow-gen1
-    only, fast-gen1 only) -- e.g. `--no-gen0 --no-slow-gen1` re-runs only
-    fast-gen1 against this same --run-dir's already-saved gen0 traces, so a
-    fix that only touches fast-gen1's own code path doesn't require paying
-    for gen0/slow-gen1 again. A skipped stage's numbers are still read back
-    from this run_dir's own earlier *-results.jsonl into the summary, if one
-    is already there.
+    --slow-generations 3 runs gen0 -> slow-gen1 -> slow-gen2 -> slow-gen3,
+    each evolving the PREVIOUS generation's own accumulated memory (not a
+    fresh one). --fast-generations 3 additionally runs a fast repair pass
+    for population states 0, 1, 2 (fast-gen0 repairs gen0's own trajectory,
+    fast-gen1 repairs slow-gen1's own trajectory, etc.) -- each one needs
+    that generation's own trajectory to already exist on disk (from
+    --slow-generations, or an earlier call), and raises rather than
+    silently skipping it if it doesn't.
+
+    --start-generation lets a later call resume from generation K instead
+    of recomputing everything: --no-gen0 --start-generation 3
+    --slow-generations 3 against a run_dir that already has gen0 through
+    slow-gen2 on disk picks up at exactly slow-gen3. A generation this call
+    doesn't (re)compute still has its numbers read back from this run_dir's
+    own earlier *-results.jsonl/evolution.json into the summary, if
+    present.
     """
     resolved_run_dir = _resolve_run_dir(run_id=run_id, run_dir=run_dir)
     examples = load_examples(dataset, split=split, limit=limit)
@@ -239,8 +251,9 @@ def gen_compare(
         fast_max_rounds=fast_max_rounds,
         judge=judge,
         run_gen0=gen0,
-        run_slow_gen1=slow_gen1,
-        run_fast_gen1=fast_gen1,
+        slow_generations=slow_generations,
+        fast_generations=fast_generations,
+        start_generation=start_generation,
     )
     summary_path = resolved_run_dir / "summary.json"
     summary_path.write_text(json.dumps(result.model_dump(), indent=2), encoding="utf-8")

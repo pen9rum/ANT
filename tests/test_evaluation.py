@@ -304,6 +304,11 @@ def test_run_gen_compare_freezes_the_gen0_worker_snapshot_before_evolve_mutates_
         repo_root=repo,
         index_path=index_path,
         run_dir=run_dir,
+        # fast_generations=1 -> fast-gen0, anchored to gen0's own trajectory
+        # (never slow-gen1's) -- this is what proves the pre-evolve snapshot
+        # actually got used, same intent the old default-True fast-gen1
+        # flag covered.
+        fast_generations=1,
     )
 
     assert calls == [
@@ -313,11 +318,11 @@ def test_run_gen_compare_freezes_the_gen0_worker_snapshot_before_evolve_mutates_
         "retry_from_trajectory",
     ]
     assert result.gen0_worker_count == gen0_worker_count
-    assert result.slow_worker_count == gen0_worker_count + 1
-    assert "q1" in result.fast_gen1
-    assert (run_dir / "fast-gen1-q1.json").exists()
+    assert result.generation_snapshots[1].worker_count == gen0_worker_count + 1
+    assert "q1" in result.fast_generations[0]
+    assert (run_dir / "fast-gen0-q1.json").exists()
     fast_state = EvidenceState.model_validate_json(
-        (run_dir / "fast-gen1-q1.json").read_text(encoding="utf-8")
+        (run_dir / "fast-gen0-q1.json").read_text(encoding="utf-8")
     )
     assert fast_state.answer == "fast answer"
 
@@ -388,13 +393,13 @@ def test_run_gen_compare_skips_slow_and_fast_stages_when_asked(tmp_path: Path, m
         repo_root=repo,
         index_path=index_path,
         run_dir=tmp_path / "run",
-        run_slow_gen1=False,
-        run_fast_gen1=False,
+        slow_generations=0,
+        fast_generations=0,
     )
 
     assert calls == ["run_batch:gen0-"]
-    assert result.slow_gen1 == {}
-    assert result.fast_gen1 == {}
+    assert result.slow_generations == {}
+    assert result.fast_generations == {}
 
 
 def test_run_gen_compare_rebuilds_a_missing_results_jsonl_from_saved_traces_instead_of_erasing_it(
@@ -452,13 +457,13 @@ def test_run_gen_compare_rebuilds_a_missing_results_jsonl_from_saved_traces_inst
         index_path=index_path,
         run_dir=run_dir,
         run_gen0=False,
-        run_slow_gen1=False,
-        run_fast_gen1=False,
+        slow_generations=0,
+        fast_generations=0,
     )
 
     assert judge_calls == ["gen0 answer"]
     assert result.gen0["q1"].correctness == 7
-    assert result.slow_gen1 == {}
+    assert result.slow_generations == {}
     # The rebuild is persisted -- a second call must not re-judge.
     assert (run_dir / "gen0-results.jsonl").exists()
     judge_calls.clear()
@@ -468,8 +473,8 @@ def test_run_gen_compare_rebuilds_a_missing_results_jsonl_from_saved_traces_inst
         index_path=index_path,
         run_dir=run_dir,
         run_gen0=False,
-        run_slow_gen1=False,
-        run_fast_gen1=False,
+        slow_generations=0,
+        fast_generations=0,
     )
     assert judge_calls == []
 
@@ -531,15 +536,23 @@ def test_run_gen_compare_fast_gen1_only_reuses_saved_gen0_traces_and_prior_stage
         index_path=index_path,
         run_dir=run_dir,
         run_gen0=False,
-        run_slow_gen1=False,
-        run_fast_gen1=True,
+        # slow_generations=1 keeps generation 1 in the reported range (so
+        # its pre-existing slow-gen1-results.jsonl is read back), but
+        # start_generation=2 keeps it below the "actually (re)compute"
+        # threshold -- nothing for evolve_workers/run_batch to do.
+        slow_generations=1,
+        start_generation=2,
+        # fast_generations=1 -> fast-gen0 only, anchored to gen0's own
+        # trajectory (never slow-gen1's) -- matches the old fast-gen1's
+        # always-gen0-anchored behavior this test was written against.
+        fast_generations=1,
     )
 
     assert result.gen0["q1"] == prior_score
-    assert result.slow_gen1["q1"] == prior_score
-    assert result.fast_gen1["q1"].evidence_count == 0
+    assert result.slow_generations[1]["q1"] == prior_score
+    assert result.fast_generations[0]["q1"].evidence_count == 0
     fast_state = EvidenceState.model_validate_json(
-        (run_dir / "fast-gen1-q1.json").read_text(encoding="utf-8")
+        (run_dir / "fast-gen0-q1.json").read_text(encoding="utf-8")
     )
     assert fast_state.answer == "fast answer"
 
@@ -573,8 +586,8 @@ def test_run_gen_compare_fast_gen1_only_raises_clearly_when_a_gen0_trace_is_miss
             index_path=index_path,
             run_dir=run_dir,
             run_gen0=False,
-            run_slow_gen1=False,
-            run_fast_gen1=True,
+            slow_generations=0,
+            fast_generations=1,
         )
         raise AssertionError("expected FileNotFoundError")
     except FileNotFoundError as exc:
