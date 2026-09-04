@@ -388,7 +388,21 @@ class EvolutionReasoner(Protocol):
         worker_summary: str,
         candidate_groups: dict[str, list[str]],
         route_summaries: list[str],
-    ) -> bool: ...
+    ) -> bool:
+        """`candidate_groups` may come from directory structure or from
+        semantic clustering of the worker's own recurring route history
+        (see evolution.py's _semantic_groups, tried first and preferred --
+        directory structure is one candidate signal, not a prerequisite);
+        judge the substance, not which one produced the grouping. The real
+        question: do these groups represent genuinely distinct, reusable
+        RESPONSIBILITY MODES (different kinds of work worth a dedicated
+        specialist), or is it the same underlying responsibility just
+        phrased with different vocabulary across different questions
+        (superficial wording/topic variance)? Modes are repository-specific
+        and must be inferred per call, never assumed from a fixed
+        category list.
+        """
+        ...
 
     def should_merge(
         self,

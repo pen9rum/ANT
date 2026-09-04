@@ -1313,6 +1313,93 @@ def test_evolve_workers_specializes_a_flat_directory_via_route_semantic_clusteri
     assert not any("flat/delta.py" in child_files for child_files in files_by_child)
 
 
+def test_semantic_clustering_is_preferred_over_directory_structure_when_both_qualify(
+    tmp_path: Path, monkeypatch
+) -> None:
+    # Phase 4 of the multi-generation organizational evolution redesign:
+    # directory structure must NOT be a prerequisite for specialization --
+    # semantic clustering of actual recurring workload is tried first and
+    # preferred even when a directory split also exists. This worker's
+    # files sit under two subdirectories (sub1={alpha,beta}, sub2=
+    # {gamma,delta}), but its real recurring route history clusters
+    # CROSSWISE to that (alpha+gamma vs. beta+delta) -- if directory
+    # structure won, children would be {alpha,beta}/{gamma,delta}; if
+    # semantic clustering wins as designed, children are {alpha,gamma}/
+    # {beta,delta}.
+    repo_root = tmp_path / "repo"
+    (repo_root / "pkg" / "sub1").mkdir(parents=True)
+    (repo_root / "pkg" / "sub2").mkdir(parents=True)
+    (repo_root / "pkg" / "sub1" / "alpha.py").write_text(
+        "class AlphaWidgetService:\n    def build_alpha_widget(self):\n        pass\n",
+        encoding="utf-8",
+    )
+    (repo_root / "pkg" / "sub2" / "gamma.py").write_text(
+        "class GammaWidgetService:\n    def build_gamma_widget(self):\n        pass\n",
+        encoding="utf-8",
+    )
+    (repo_root / "pkg" / "sub1" / "beta.py").write_text(
+        "class BetaGadgetService:\n    def build_beta_gadget(self):\n        pass\n",
+        encoding="utf-8",
+    )
+    (repo_root / "pkg" / "sub2" / "delta.py").write_text(
+        "class DeltaGadgetService:\n    def build_delta_gadget(self):\n        pass\n",
+        encoding="utf-8",
+    )
+    files = ["pkg/sub1/alpha.py", "pkg/sub2/gamma.py", "pkg/sub1/beta.py", "pkg/sub2/delta.py"]
+    worker = WorkerCard(
+        id="worker-pkg", territory_id="pkg", name="pkg worker", root="pkg", files=files
+    )
+    index_path = tmp_path / ".ant"
+    IndexStore(index_path).save([Territory(id="pkg", root="pkg", files=files)], [worker])
+
+    memory = ColonyMemoryStore(index_path)
+    for _ in range(2):
+        memory.save_route(
+            MemoryRoute(
+                need_terms=["alpha", "widget"],
+                worker_ids=["worker-pkg"],
+                weight=2.0,
+                is_high_quality=False,
+            )
+        )
+    for _ in range(2):
+        memory.save_route(
+            MemoryRoute(
+                need_terms=["beta", "gadget"],
+                worker_ids=["worker-pkg"],
+                weight=2.0,
+                is_high_quality=False,
+            )
+        )
+
+    embedder = _RouteClusterFakeEmbedder(
+        {"alpha widget": [1.0, 0.0], "beta gadget": [0.0, 1.0]}
+    )
+    monkeypatch.setattr("ant.evolution.get_shared_embedder", lambda: embedder)
+    monkeypatch.setattr("ant.tools.local.get_shared_embedder", lambda: None)
+
+    result = evolve_workers(
+        index_path,
+        repo_root=repo_root,
+        min_coalition_count=99,
+        retire_empty=False,
+        merge_overlap=0.99,
+        min_specialization_routes=4,
+        min_specialization_group_routes=2,
+    )
+
+    specialize_events = [event for event in result.events if event.kind == "specialize"]
+    assert len(specialize_events) == 2
+    stored_workers = {worker.id: worker for worker in IndexStore(index_path).load_workers()}
+    files_by_child = {
+        frozenset(w.files) for wid, w in stored_workers.items() if wid != "worker-pkg"
+    }
+    # Semantic clusters (crosswise to the directory split), not the
+    # directory groups.
+    assert frozenset({"pkg/sub1/alpha.py", "pkg/sub2/gamma.py"}) in files_by_child
+    assert frozenset({"pkg/sub1/beta.py", "pkg/sub2/delta.py"}) in files_by_child
+
+
 class _StrengthenRouteReasoner(_AlwaysVetoReasoner):
     def decide_episode_action(self, *, strategy, need_terms, workers, **kwargs):
         return "strengthen_route"

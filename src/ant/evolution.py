@@ -749,9 +749,17 @@ def _specialize_overloaded_workers(
             result.append(worker)
             continue
 
-        groups = _subdirectory_groups(worker)
-        if len(groups) < 2 and repo_root is not None:
-            groups = _semantic_groups(
+        # Semantic clustering (what recurring workload actually shows,
+        # regardless of filesystem shape) is tried FIRST and preferred --
+        # directory structure is one candidate signal, not a prerequisite
+        # (Phase 4 of the multi-generation organizational evolution
+        # redesign). _subdirectory_groups is the fallback for a worker with
+        # too little route history to cluster yet, or no shared embedder
+        # available at all -- structural grouping some evolve_workers()
+        # environments (tests, no dense extra installed) can still use with
+        # zero setup.
+        groups = (
+            _semantic_groups(
                 worker,
                 worker_routes,
                 repo_root,
@@ -759,6 +767,11 @@ def _specialize_overloaded_workers(
                 similarity_threshold=semantic_cluster_similarity_threshold,
                 min_file_support=min_semantic_cluster_file_support,
             )
+            if repo_root is not None
+            else {}
+        )
+        if len(groups) < 2:
+            groups = _subdirectory_groups(worker)
         groups = _fold_colliding_groups(groups, worker, workers)
         if len(groups) < 2:
             result.append(worker)
