@@ -187,6 +187,7 @@ class WorkerReasoner(Protocol):
         repair_guidance: str = "",
         stuck_tried_workers: dict[str, list[str]] | None = None,
         candidate_probes: dict[str, dict[str, list[Evidence]]] | None = None,
+        worker_need_attempt_states: dict[str, dict[str, str]] | None = None,
     ) -> RoundPlan:
         """The single per-round Orchestrator planning call: replaces
         select_workers/decide_local_action and the hand-coded escalation

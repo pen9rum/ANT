@@ -188,6 +188,7 @@ class MockLLMProvider:
         repair_guidance: str = "",
         stuck_tried_workers: dict[str, list[str]] | None = None,
         candidate_probes: dict[str, dict[str, list[Evidence]]] | None = None,
+        worker_need_attempt_states: dict[str, dict[str, str]] | None = None,
     ) -> RoundPlan:
         # Deterministic stand-in, same rationale as the rest of this mock:
         # assign every ready-frontier node to the first available worker,

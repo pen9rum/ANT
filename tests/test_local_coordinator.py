@@ -9,6 +9,7 @@ from ant.coordinator.local import (
     ProposalCluster,
     RecoveryState,
     StuckEpisode,
+    WorkerNeedAttempt,
     _apply_consolidation_decisions,
     _build_temporary_bridge,
     _candidate_hints_for_proposals,
@@ -17,15 +18,20 @@ from ant.coordinator.local import (
     _collect_proposals,
     _cumulative_need_evidence,
     _dedupe_evidence,
+    _enforce_local_exhaustion,
     _expand_cluster_decisions,
     _matches_term,
     _merge_needs,
+    _need_fingerprint,
     _plan_round_with_cycle_validation,
     _prune_dangling_edges,
     _rank_global_evidence,
+    _record_worker_need_attempt,
     _reopen_referenced_evidence,
     _resolution_check_need,
     _select_evidence,
+    _worker_need_attempt_state_label,
+    _worker_need_attempt_states_for_prompt,
 )
 from ant.coordinator.worker_retrieval import build_worker_index
 from ant.domain import (
@@ -223,6 +229,7 @@ def test_cross_repo_experience_reaches_plan_round(tmp_path: Path) -> None:
             repair_guidance="",
             stuck_tried_workers=None,
             candidate_probes=None,
+            worker_need_attempt_states=None,
         ):
             received.append(cross_repo_experience)
             return RoundPlan()
@@ -295,6 +302,7 @@ def test_ask_threads_probe_results_into_plan_round(tmp_path: Path) -> None:
             repair_guidance="",
             stuck_tried_workers=None,
             candidate_probes=None,
+            worker_need_attempt_states=None,
         ):
             received.append(candidate_probes)
             return RoundPlan()
@@ -487,6 +495,7 @@ def test_ask_narrows_plan_round_workers_and_records_candidates_in_the_trace(
             repair_guidance="",
             stuck_tried_workers=None,
             candidate_probes=None,
+            worker_need_attempt_states=None,
         ):
             captured_worker_counts.append(len(workers))
             return RoundPlan(assignments={need_id: [workers[0].id] for need_id in frontier.ready})
@@ -604,6 +613,7 @@ class _PassthroughLookupsReasoner:
         repair_guidance="",
         stuck_tried_workers=None,
         candidate_probes=None,
+        worker_need_attempt_states=None,
     ):
         # TODO(Phase 7): every scenario reasoner below this class exercises
         # the old routing/escalation-specific ask() mechanics, which the
@@ -1065,6 +1075,7 @@ def test_plan_round_accepts_an_acyclic_plan_without_retrying() -> None:
             repair_guidance="",
             stuck_tried_workers=None,
             candidate_probes=None,
+            worker_need_attempt_states=None,
         ):
             calls.append(validation_feedback)
             return RoundPlan(assignments={"n1": ["worker-a"]})
@@ -1112,6 +1123,7 @@ def test_plan_round_rejects_a_cyclic_plan_and_retries_with_the_cycle_described()
             repair_guidance="",
             stuck_tried_workers=None,
             candidate_probes=None,
+            worker_need_attempt_states=None,
         ):
             calls.append(validation_feedback)
             if not validation_feedback:
@@ -1181,6 +1193,7 @@ def test_plan_round_accepts_the_retry_even_if_it_is_still_cyclic() -> None:
             repair_guidance="",
             stuck_tried_workers=None,
             candidate_probes=None,
+            worker_need_attempt_states=None,
         ):
             calls.append(validation_feedback)
             return RoundPlan(
@@ -1247,6 +1260,7 @@ class _AlwaysStuckAndAlwaysProposesBridgeReasoner(_PassthroughLookupsReasoner):
         repair_guidance="",
         stuck_tried_workers=None,
         candidate_probes=None,
+        worker_need_attempt_states=None,
     ):
         assignments = {need_id: [workers[0].id] for need_id in frontier.ready}
         special_tactics = {
@@ -1365,6 +1379,7 @@ class _DecomposesRootIntoTwoChildrenReasoner(_PassthroughLookupsReasoner):
         repair_guidance="",
         stuck_tried_workers=None,
         candidate_probes=None,
+        worker_need_attempt_states=None,
     ):
         self._round += 1
         if self._round == 1:
@@ -1461,6 +1476,7 @@ class _AssignsSameWorkerToTwoIndependentNeedsReasoner(_PassthroughLookupsReasone
         repair_guidance="",
         stuck_tried_workers=None,
         candidate_probes=None,
+        worker_need_attempt_states=None,
     ):
         worker_id = workers[0].id
         if not self._added_aux_need:
@@ -1597,6 +1613,7 @@ class _GroundsOnlyOneNamedNeedReasoner(_PassthroughLookupsReasoner):
         repair_guidance="",
         stuck_tried_workers=None,
         candidate_probes=None,
+        worker_need_attempt_states=None,
     ):
         return RoundPlan(assignments={need_id: [workers[0].id] for need_id in frontier.ready})
 
@@ -1660,6 +1677,7 @@ class _NeverAssignsAnyWorkerReasoner(_PassthroughLookupsReasoner):
         repair_guidance="",
         stuck_tried_workers=None,
         candidate_probes=None,
+        worker_need_attempt_states=None,
     ):
         return RoundPlan(assignments={})
 
@@ -1689,6 +1707,7 @@ class _AssignsWhateverIsReadyReasoner(_PassthroughLookupsReasoner):
         repair_guidance="",
         stuck_tried_workers=None,
         candidate_probes=None,
+        worker_need_attempt_states=None,
     ):
         return RoundPlan(assignments={need_id: [workers[0].id] for need_id in frontier.ready})
 
@@ -2215,6 +2234,7 @@ def test_closure_check_survives_a_partial_verdict_creating_a_gap_node(tmp_path: 
             repair_guidance="",
             stuck_tried_workers=None,
             candidate_probes=None,
+            worker_need_attempt_states=None,
         ):
             return RoundPlan(assignments={need_id: [workers[0].id] for need_id in frontier.ready})
 
@@ -2298,6 +2318,7 @@ def test_ask_with_seeded_initial_state_only_works_the_unresolved_part(tmp_path: 
             repair_guidance="",
             stuck_tried_workers=None,
             candidate_probes=None,
+            worker_need_attempt_states=None,
         ):
             assigned_need_ids.extend(frontier.ready)
             return RoundPlan(assignments={need_id: [workers[0].id] for need_id in frontier.ready})
@@ -2354,6 +2375,7 @@ def test_ask_forces_the_given_assignment_at_round_0_only(tmp_path: Path) -> None
             repair_guidance="",
             stuck_tried_workers=None,
             candidate_probes=None,
+            worker_need_attempt_states=None,
         ):
             return RoundPlan(assignments={need_id: ["worker-a"] for need_id in frontier.ready})
 
@@ -2414,6 +2436,7 @@ def test_ask_forces_a_global_search_at_round_0_with_no_stuck_episode_needed(
             repair_guidance="",
             stuck_tried_workers=None,
             candidate_probes=None,
+            worker_need_attempt_states=None,
         ):
             return RoundPlan()
 
@@ -2482,6 +2505,7 @@ def test_ask_does_not_double_execute_global_fallback_when_orchestrator_also_pick
             repair_guidance="",
             stuck_tried_workers=None,
             candidate_probes=None,
+            worker_need_attempt_states=None,
         ):
             return RoundPlan(special_tactics={"root": "global_fallback"})
 
@@ -2553,6 +2577,7 @@ def test_ask_tags_the_global_fallback_special_tactics_evidence_with_need_ids(
             repair_guidance="",
             stuck_tried_workers=None,
             candidate_probes=None,
+            worker_need_attempt_states=None,
         ):
             return RoundPlan(special_tactics={"root": "global_fallback"})
 
@@ -2646,6 +2671,7 @@ def test_ask_does_not_crash_when_a_different_episode_member_hits_an_already_trie
             repair_guidance="",
             stuck_tried_workers=None,
             candidate_probes=None,
+            worker_need_attempt_states=None,
         ):
             # Round 0: need_a executes the tactic for real. Round 1:
             # need_b (never touched before) is proposed the SAME
@@ -2710,6 +2736,7 @@ class _StubbornlyReassignsTriedWorkerReasoner(_PassthroughLookupsReasoner):
         repair_guidance="",
         stuck_tried_workers=None,
         candidate_probes=None,
+        worker_need_attempt_states=None,
     ):
         stuck_members = {need_id for group in frontier.stuck_subgraphs for need_id in group}
         targets = set(frontier.ready) | stuck_members
@@ -2781,6 +2808,7 @@ class _AlwaysUnresolvedSingleWorkerReasoner(_PassthroughLookupsReasoner):
         repair_guidance="",
         stuck_tried_workers=None,
         candidate_probes=None,
+        worker_need_attempt_states=None,
     ):
         assignments = {need_id: [workers[0].id] for need_id in frontier.ready}
         special_tactics = {
@@ -2869,6 +2897,7 @@ class _AlwaysPrefersBrokenWorkerReasoner(_PassthroughLookupsReasoner):
         repair_guidance="",
         stuck_tried_workers=None,
         candidate_probes=None,
+        worker_need_attempt_states=None,
     ):
         return RoundPlan(assignments={need_id: ["worker-broken"] for need_id in frontier.ready})
 
@@ -3173,6 +3202,7 @@ class _NarrowsWordingThenChecksResolutionReasoner(_PassthroughLookupsReasoner):
         repair_guidance="",
         stuck_tried_workers=None,
         candidate_probes=None,
+        worker_need_attempt_states=None,
     ):
         graph_updates = {}
         for need_id in frontier.ready:
@@ -3272,6 +3302,7 @@ class _BirthsThenNarrowsANewNodeReasoner(_PassthroughLookupsReasoner):
         repair_guidance="",
         stuck_tried_workers=None,
         candidate_probes=None,
+        worker_need_attempt_states=None,
     ):
         assignments = {need_id: [workers[0].id] for need_id in frontier.ready}
         if "born-mid-retry" not in graph.nodes:
@@ -3429,6 +3460,7 @@ class _NeverResolvesAssignsEverythingReasoner(_PassthroughLookupsReasoner):
         repair_guidance="",
         stuck_tried_workers=None,
         candidate_probes=None,
+        worker_need_attempt_states=None,
     ):
         return RoundPlan(assignments={need_id: [workers[0].id] for need_id in frontier.ready})
 
@@ -3536,6 +3568,7 @@ class _ProposesAnOffTopicNodeReasoner(_PassthroughLookupsReasoner):
         repair_guidance="",
         stuck_tried_workers=None,
         candidate_probes=None,
+        worker_need_attempt_states=None,
     ):
         graph_updates = {}
         if "off-topic-node" not in graph.nodes:
@@ -4346,6 +4379,7 @@ class _AssignsWorkersToItsOwnSameRoundProposalReasoner(_PassthroughLookupsReason
         repair_guidance="",
         stuck_tried_workers=None,
         candidate_probes=None,
+        worker_need_attempt_states=None,
     ):
         worker_id = workers[0].id
         return RoundPlan(
@@ -4450,6 +4484,7 @@ class _AssignsAlphaThenBetaReasoner(_PassthroughLookupsReasoner):
         repair_guidance="",
         stuck_tried_workers=None,
         candidate_probes=None,
+        worker_need_attempt_states=None,
     ):
         worker_id = "worker-a" if self.plan_round_calls == 0 else "worker-b"
         self.plan_round_calls += 1
@@ -4528,6 +4563,7 @@ class _AlwaysUnresolvedTwoRoundReasoner(_PassthroughLookupsReasoner):
         repair_guidance="",
         stuck_tried_workers=None,
         candidate_probes=None,
+        worker_need_attempt_states=None,
     ):
         worker_id = "worker-a" if self.plan_round_calls == 0 else "worker-b"
         self.plan_round_calls += 1
@@ -4594,6 +4630,7 @@ class _AssignsBothSiblingsInOneRoundReasoner(_PassthroughLookupsReasoner):
         repair_guidance="",
         stuck_tried_workers=None,
         candidate_probes=None,
+        worker_need_attempt_states=None,
     ):
         return RoundPlan(
             assignments={
@@ -4638,3 +4675,303 @@ def test_cumulative_need_evidence_never_leaks_a_sibling_needs_evidence(tmp_path:
     y_paths = reasoner.evidence_paths_by_description["find widget y"]
     assert x_paths and all(path == "x/x.py" for path in x_paths)
     assert y_paths and all(path == "y/y.py" for path in y_paths)
+
+
+def _evidence(path: str, quote: str, worker_id: str = "") -> Evidence:
+    return Evidence(
+        path=path, line_start=1, line_end=2, quote=quote, reason="r", worker_id=worker_id
+    )
+
+
+def _evolved_worker(worker_id: str = "worker-bridge") -> WorkerCard:
+    return WorkerCard(
+        id=worker_id,
+        territory_id="bridge",
+        name="bridge",
+        root="",
+        files=["a.py", "b.py"],
+        parent_worker_ids=["worker-a", "worker-b"],
+        structural_action="birth",
+        generation_created=1,
+        lifecycle_state="probationary",
+    )
+
+
+def _base_worker(worker_id: str = "worker-base") -> WorkerCard:
+    return WorkerCard(id=worker_id, territory_id="base", name="base", root="base", files=["c.py"])
+
+
+def test_need_fingerprint_is_the_needs_own_description() -> None:
+    detail = UnresolvedNeed(description="find the widget")
+    assert _need_fingerprint(detail) == "find the widget"
+
+
+def test_first_attempt_by_an_evolved_worker_is_never_locally_exhausted() -> None:
+    recovery = RecoveryState()
+    worker = _evolved_worker()
+
+    _record_worker_need_attempt(
+        recovery, worker, "root", "the need", [_evidence("a.py", "q1", worker.id)]
+    )
+
+    attempt = recovery.worker_need_attempts[(worker.id, "root")]
+    assert attempt.attempt_count == 1
+    assert attempt.locally_exhausted is False
+    assert attempt.cumulative_unique_evidence_count == 1
+
+
+def test_second_attempt_with_zero_new_evidence_marks_locally_exhausted() -> None:
+    recovery = RecoveryState()
+    worker = _evolved_worker()
+    same_item = _evidence("a.py", "q1", worker.id)
+
+    _record_worker_need_attempt(recovery, worker, "root", "the need", [same_item])
+    _record_worker_need_attempt(recovery, worker, "root", "the need", [same_item])
+
+    attempt = recovery.worker_need_attempts[(worker.id, "root")]
+    assert attempt.attempt_count == 2
+    assert attempt.last_attempt_new_evidence_count == 0
+    assert attempt.locally_exhausted is True
+    # Re-finding the same item does not inflate cumulative unique count.
+    assert attempt.cumulative_unique_evidence_count == 1
+
+
+def test_an_attempt_that_finds_new_evidence_clears_local_exhaustion() -> None:
+    recovery = RecoveryState()
+    worker = _evolved_worker()
+    first = _evidence("a.py", "q1", worker.id)
+    second = _evidence("b.py", "q2", worker.id)
+
+    _record_worker_need_attempt(recovery, worker, "root", "the need", [first])
+    _record_worker_need_attempt(recovery, worker, "root", "the need", [first])  # exhausts it
+    _record_worker_need_attempt(recovery, worker, "root", "the need", [second])  # productive again
+
+    attempt = recovery.worker_need_attempts[(worker.id, "root")]
+    assert attempt.attempt_count == 3
+    assert attempt.locally_exhausted is False
+    assert attempt.cumulative_unique_evidence_count == 2
+
+
+def test_a_base_worker_attempt_is_never_recorded() -> None:
+    recovery = RecoveryState()
+    worker = _base_worker()
+
+    _record_worker_need_attempt(
+        recovery, worker, "root", "the need", [_evidence("c.py", "q1", worker.id)]
+    )
+    _record_worker_need_attempt(
+        recovery, worker, "root", "the need", [_evidence("c.py", "q1", worker.id)]
+    )
+
+    assert recovery.worker_need_attempts == {}
+
+
+def test_a_reframed_need_resets_local_exhaustion_for_the_same_worker() -> None:
+    recovery = RecoveryState()
+    worker = _evolved_worker()
+    same_item = _evidence("a.py", "q1", worker.id)
+
+    _record_worker_need_attempt(recovery, worker, "root", "original wording", [same_item])
+    _record_worker_need_attempt(recovery, worker, "root", "original wording", [same_item])
+    assert recovery.worker_need_attempts[(worker.id, "root")].locally_exhausted is True
+
+    # The Need was substantively reframed (e.g. check_need_resolution's own
+    # "partial" refined_need rewrite, or an Orchestrator graph_updates
+    # edit) -- a fresh attempt against the NEW wording starts over.
+    _record_worker_need_attempt(recovery, worker, "root", "narrowed reframed wording", [same_item])
+
+    attempt = recovery.worker_need_attempts[(worker.id, "root")]
+    assert attempt.need_fingerprint == "narrowed reframed wording"
+    assert attempt.attempt_count == 1
+    assert attempt.locally_exhausted is False
+
+
+def test_worker_need_attempt_state_label_reports_all_three_states() -> None:
+    recovery = RecoveryState()
+    worker = _evolved_worker()
+    same_item = _evidence("a.py", "q1", worker.id)
+
+    assert _worker_need_attempt_state_label(recovery, worker.id, "root", "the need") == "untried"
+
+    _record_worker_need_attempt(recovery, worker, "root", "the need", [same_item])
+    assert (
+        _worker_need_attempt_state_label(recovery, worker.id, "root", "the need") == "productive"
+    )
+
+    _record_worker_need_attempt(recovery, worker, "root", "the need", [same_item])
+    assert (
+        _worker_need_attempt_state_label(recovery, worker.id, "root", "the need")
+        == "locally_exhausted"
+    )
+
+    # A reframe reads as "untried" again, matching _enforce_local_exhaustion's
+    # own reset -- planning-visible state and actual enforcement must never
+    # disagree about whether a reframe cleared an exhaustion.
+    assert _worker_need_attempt_state_label(recovery, worker.id, "root", "new wording") == "untried"
+
+
+def test_worker_need_attempt_states_for_prompt_omits_base_workers() -> None:
+    recovery = RecoveryState()
+    evolved = _evolved_worker()
+    base = _base_worker()
+    graph = NeedGraph(
+        nodes={
+            "root": NeedNode(
+                need_id="root", need="q", detail=UnresolvedNeed(description="the need")
+            )
+        }
+    )
+
+    states = _worker_need_attempt_states_for_prompt(recovery, graph, {"root": [evolved, base]})
+
+    assert states == {"root": {evolved.id: "untried"}}
+
+
+def test_enforce_local_exhaustion_filters_only_the_exhausted_worker_from_a_coalition() -> None:
+    recovery = RecoveryState()
+    exhausted = _evolved_worker("worker-bridge-exhausted")
+    fresh = _evolved_worker("worker-bridge-fresh")
+    same_item = _evidence("a.py", "q1", exhausted.id)
+    _record_worker_need_attempt(recovery, exhausted, "root", "the need", [same_item])
+    _record_worker_need_attempt(recovery, exhausted, "root", "the need", [same_item])
+    assert recovery.worker_need_attempts[(exhausted.id, "root")].locally_exhausted is True
+
+    graph = NeedGraph(
+        nodes={
+            "root": NeedNode(
+                need_id="root", need="q", detail=UnresolvedNeed(description="the need")
+            )
+        }
+    )
+    plan = RoundPlan(assignments={"root": [exhausted.id, fresh.id]})
+    worker_by_id = {exhausted.id: exhausted, fresh.id: fresh}
+
+    _enforce_local_exhaustion(plan, recovery, graph, worker_by_id)
+
+    assert plan.assignments["root"] == [fresh.id]
+
+
+def test_enforce_local_exhaustion_escalates_to_global_fallback_when_everyone_is_exhausted() -> None:
+    recovery = RecoveryState()
+    worker = _evolved_worker()
+    same_item = _evidence("a.py", "q1", worker.id)
+    _record_worker_need_attempt(recovery, worker, "root", "the need", [same_item])
+    _record_worker_need_attempt(recovery, worker, "root", "the need", [same_item])
+
+    graph = NeedGraph(
+        nodes={
+            "root": NeedNode(
+                need_id="root", need="q", detail=UnresolvedNeed(description="the need")
+            )
+        }
+    )
+    plan = RoundPlan(assignments={"root": [worker.id]})
+    worker_by_id = {worker.id: worker}
+
+    _enforce_local_exhaustion(plan, recovery, graph, worker_by_id)
+
+    assert "root" not in plan.assignments
+    assert plan.special_tactics.get("root") == "global_fallback"
+
+
+def test_enforce_local_exhaustion_does_not_touch_base_worker_assignments() -> None:
+    recovery = RecoveryState()
+    base = _base_worker()
+    # Even a (nonsensical for a base worker, but defensively constructed)
+    # exhausted-looking entry must never be consulted for a base worker --
+    # guardrail 4: base-worker execution behavior is unchanged.
+    recovery.worker_need_attempts[(base.id, "root")] = WorkerNeedAttempt(
+        attempt_count=2, need_fingerprint="the need", locally_exhausted=True
+    )
+    graph = NeedGraph(
+        nodes={
+            "root": NeedNode(
+                need_id="root", need="q", detail=UnresolvedNeed(description="the need")
+            )
+        }
+    )
+    plan = RoundPlan(assignments={"root": [base.id]})
+
+    _enforce_local_exhaustion(plan, recovery, graph, {base.id: base})
+
+    assert plan.assignments["root"] == [base.id]
+
+
+def test_a_worker_reassigned_to_the_same_stuck_need_gets_diversified_after_local_exhaustion(
+    tmp_path: Path,
+) -> None:
+    # End-to-end reproduction of the diagnosed qibo 9472b73920d049d9
+    # pattern: an evolved worker kept getting reassigned to the same need
+    # and returning the same evidence with no progress. Uses REAL BM25
+    # search (no LLM) so round 2's re-search over the same files/query
+    # deterministically re-finds exactly what round 1 already found --
+    # the same shape as the real bug, not a mocked stand-in for it.
+    (tmp_path / "a").mkdir()
+    (tmp_path / "a" / "alpha.py").write_text(
+        "def handle_widget_alpha():\n    return True\n", encoding="utf-8"
+    )
+    bridge = WorkerCard(
+        id="worker-bridge",
+        territory_id="bridge",
+        name="bridge",
+        root="a",
+        files=["a/alpha.py"],
+        parent_worker_ids=["worker-a", "worker-b"],
+        structural_action="birth",
+        generation_created=1,
+        lifecycle_state="probationary",
+    )
+
+    class _AlwaysProposesTheBridgeReasoner(_PassthroughLookupsReasoner):
+        def __init__(self) -> None:
+            self.new_evidence_counts: list[int] = []
+
+        def observe(self, *, question, worker_id, territory_id, evidence):
+            return WorkerObservation(worker_id=worker_id, territory_id=territory_id)
+
+        def check_need_resolution(self, *, need, new_evidence, question):
+            self.new_evidence_counts.append(len(new_evidence))
+            return NeedResolution(status="unresolved")
+
+        def plan_round(
+            self,
+            *,
+            question,
+            graph,
+            resolution_results,
+            evidence,
+            workers,
+            memory_hints,
+            frontier,
+            incomplete_parents,
+            cross_repo_experience,
+            validation_feedback="",
+            repair_guidance="",
+            stuck_tried_workers=None,
+            candidate_probes=None,
+            worker_need_attempt_states=None,
+        ):
+            return RoundPlan(assignments={need_id: [bridge.id] for need_id in frontier.ready})
+
+    reasoner = _AlwaysProposesTheBridgeReasoner()
+
+    state = LocalCoordinator(tmp_path, [bridge], reasoner=reasoner).ask(
+        "Where is the widget handled?", max_rounds=3
+    )
+
+    executions_by_round = [
+        [t for t in round_state.node_executions if t.need_id == "root"]
+        for round_state in state.rounds
+    ]
+    # Round 0: the bridge actually runs and finds something.
+    assert executions_by_round[0] and executions_by_round[0][0].worker_ids == ["worker-bridge"]
+    # Round 1: it is proposed again, still runs (not yet exhausted --
+    # exhaustion is only known AFTER an attempt finds nothing new), but
+    # finds nothing new since it is the identical query over the same
+    # files.
+    assert executions_by_round[1] and executions_by_round[1][0].worker_ids == ["worker-bridge"]
+    assert executions_by_round[1][0].evidence_gain == 0
+    # Round 2: the SAME assignment is proposed a third time, but
+    # enforcement now filters worker-bridge out (locally exhausted) --
+    # the identical-evidence loop does not repeat a third time.
+    assert not any(t.worker_ids == ["worker-bridge"] for t in executions_by_round[2])

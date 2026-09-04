@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 import warnings
+from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import cast
@@ -161,6 +162,44 @@ class StuckEpisode:
 
 
 @dataclass
+class WorkerNeedAttempt:
+    """Local exhaustion / attempt-memory for one (worker_id, need_id)
+    pairing within THIS task only -- see RecoveryState.worker_need_attempts'
+    own docstring for scope. `need_fingerprint` is the need's own
+    detail.description at the time of the most recent attempt: a later
+    attempt whose need_id maps to a DIFFERENT current description (the
+    Need was substantively reframed -- an Orchestrator graph_updates edit,
+    or check_need_resolution's own "partial" refined_need rewrite) is
+    treated as a fresh pairing, not a continuation of the old one, so
+    exhaustion does not silently survive a real redefinition of the
+    problem.
+
+    Deterministic by construction: `evidence_fingerprints` reuses the same
+    (path, line_start, line_end, quote) identity _evidence_key/_dedupe_evidence
+    already use everywhere else in this module -- no LLM call, no tuned
+    similarity threshold, just "did this attempt return something whose
+    exact identity was never returned by any of this worker's own prior
+    attempts on this exact need".
+    """
+
+    attempt_count: int = 0
+    evidence_fingerprints: set[tuple[str, int, int, str]] = field(default_factory=set)
+    cumulative_unique_evidence_count: int = 0
+    # The most recent attempt's own count of fingerprints not already in
+    # evidence_fingerprints as of the START of that attempt -- 0 is what
+    # actually triggers locally_exhausted below (after at least one prior
+    # attempt to compare against).
+    last_attempt_new_evidence_count: int = 0
+    need_fingerprint: str = ""
+    # True once the LATEST attempt contributed zero materially new
+    # evidence beyond every prior attempt by this same worker on this same
+    # (fingerprint-matched) need -- see _record_worker_need_attempt for
+    # exactly when this flips. Never true before a second attempt: a
+    # single attempt has nothing prior to be non-novel relative to.
+    locally_exhausted: bool = False
+
+
+@dataclass
 class RecoveryState:
     """Coordinator-local execution bookkeeping for one task's ask() call --
     deliberately NOT part of NeedGraph (which stays pure problem
@@ -254,6 +293,22 @@ class RecoveryState:
     # explicit Alignment Gate reframe verdict (a deliberate, reviewed
     # redefinition of the problem), never by ordinary per-round editing.
     intent_anchors: dict[str, str] = field(default_factory=dict)
+    # Local exhaustion / attempt-memory (execution-stability mechanism):
+    # (worker_id, need_id) -> WorkerNeedAttempt, scoped strictly to THIS
+    # task's own ask() call -- never persisted to colony memory (colony
+    # memory only ever learns from record_task_memory's own summary of the
+    # finished task, which never reads this dict), never consulted across
+    # different tasks or different needs for the same worker. Only ever
+    # populated/enforced for EVOLVED/overlay workers (WorkerCard.
+    # parent_worker_ids non-empty) -- see _record_worker_need_attempt and
+    # _enforce_local_exhaustion's own docstrings for why base-worker
+    # execution behavior is deliberately untouched by this mechanism for
+    # now. "Locally exhausted" means this worker has exhausted its current
+    # strategy for this specific Need in its current framing -- never that
+    # the worker is globally irrelevant: it stays fully usable for every
+    # other need_id, and for this same need_id again the moment the need
+    # is substantively reframed (see WorkerNeedAttempt.need_fingerprint).
+    worker_need_attempts: dict[tuple[str, str], WorkerNeedAttempt] = field(default_factory=dict)
 
     @property
     def excluded_node_ids(self) -> set[str]:
@@ -435,6 +490,14 @@ class LocalCoordinator:
             candidate_probes = self._probe_need_candidates(
                 question, graph, per_need_candidates, search
             )
+            worker_need_attempt_states = _worker_need_attempt_states_for_prompt(
+                recovery,
+                graph,
+                {
+                    need_id: [worker_by_id[wid] for wid in ranks if wid in worker_by_id]
+                    for need_id, ranks in per_need_candidates.items()
+                },
+            )
             plan = _plan_round_with_cycle_validation(
                 self.reasoner,
                 question=question,
@@ -449,8 +512,10 @@ class LocalCoordinator:
                 repair_guidance=repair_guidance,
                 stuck_tried_workers=stuck_tried_workers,
                 candidate_probes=candidate_probes,
+                worker_need_attempt_states=worker_need_attempt_states,
             )
             _enforce_no_repeat_stuck_assignment(plan, stuck_tried_workers)
+            _enforce_local_exhaustion(plan, recovery, graph, worker_by_id)
             if round_index == 0 and forced_first_round_assignments:
                 # Overrides whatever the Orchestrator itself proposed for
                 # these need_ids this round -- a forced repair action must
@@ -547,6 +612,25 @@ class LocalCoordinator:
                     for item in obs.evidence
                     if _evidence_key(item) not in pre_round_evidence_keys
                 ]
+                # Local exhaustion / attempt-memory (execution stability):
+                # recorded against node.detail as it stood entering this
+                # round -- the same reference point _enforce_local_exhaustion
+                # already checked before this round's assignments ran.
+                # Evolved-workers-only; _record_worker_need_attempt itself
+                # no-ops for a base worker.
+                need_fingerprint_this_round = _need_fingerprint(node.detail)
+                new_evidence_by_worker: dict[str, list[Evidence]] = defaultdict(list)
+                for item in new_evidence:
+                    if item.worker_id:
+                        new_evidence_by_worker[item.worker_id].append(item)
+                for worker in selected:
+                    _record_worker_need_attempt(
+                        recovery,
+                        worker,
+                        need_id,
+                        need_fingerprint_this_round,
+                        new_evidence_by_worker.get(worker.id, []),
+                    )
                 resolution_check_need = _resolution_check_need(
                     node.detail, need_id, recovery, enforce_alignment
                 )
@@ -1800,6 +1884,7 @@ def _plan_round_with_cycle_validation(
     repair_guidance: str = "",
     stuck_tried_workers: dict[str, list[str]] | None = None,
     candidate_probes: dict[str, dict[str, list[Evidence]]] | None = None,
+    worker_need_attempt_states: dict[str, dict[str, str]] | None = None,
 ) -> RoundPlan:
     """Calls reasoner.plan_round() and validates the graph its
     graph_updates would produce -- merged onto the existing graph -- has
@@ -1827,6 +1912,7 @@ def _plan_round_with_cycle_validation(
         repair_guidance=repair_guidance,
         stuck_tried_workers=stuck_tried_workers,
         candidate_probes=candidate_probes,
+        worker_need_attempt_states=worker_need_attempt_states,
     )
     cycles = find_cycles(_merge_graph_updates(graph, plan))
     if not cycles:
@@ -1853,6 +1939,7 @@ def _plan_round_with_cycle_validation(
         repair_guidance=repair_guidance,
         stuck_tried_workers=stuck_tried_workers,
         candidate_probes=candidate_probes,
+        worker_need_attempt_states=worker_need_attempt_states,
     )
 
 
@@ -1892,6 +1979,181 @@ def _enforce_no_repeat_stuck_assignment(
             continue  # at least one new worker in the mix -- a real choice
         del plan.assignments[need_id]
         plan.special_tactics.setdefault(need_id, "global_fallback")
+
+
+def _need_fingerprint(detail: UnresolvedNeed) -> str:
+    """Deterministic identity for "is this still the same Need, in the
+    same framing, as last time" -- used by the local-exhaustion mechanism
+    to tell a real reframe (graph_updates edit, or check_need_resolution's
+    own "partial" refined_need rewrite) apart from the same need simply
+    being looked at again. Plain string identity on `description`, not a
+    semantic comparison -- exhaustion resetting on ANY textual change
+    (even a cosmetic reword) is the conservative direction: it can cost an
+    extra attempt against an unchanged need, never silently keep treating
+    a genuinely redefined one as exhausted.
+    """
+    return detail.description
+
+
+def _record_worker_need_attempt(
+    recovery: RecoveryState,
+    worker: WorkerCard,
+    need_id: str,
+    need_fingerprint: str,
+    new_evidence: list[Evidence],
+) -> None:
+    """Local exhaustion / attempt-memory update, called once per (evolved)
+    worker actually run for a need this round -- see RecoveryState.
+    worker_need_attempts' own docstring for scope. Evolved-workers-only by
+    design (Phase: execution stability, guardrail 4 -- base-worker
+    execution behavior is deliberately unchanged for now, this is where
+    the direct causal evidence -- qibo 9472b73920d049d9 -- actually is).
+
+    `new_evidence` is this worker's OWN slice of this round's new finds
+    for this need_id (already filtered to items this worker itself
+    produced, by Evidence.worker_id) -- novelty is judged against
+    `evidence_fingerprints`, everything this SAME worker has ever
+    returned for this SAME (fingerprint-matched) need across every prior
+    attempt this task, using the identical (path, line_start, line_end,
+    quote) identity _dedupe_evidence already uses -- no new similarity
+    judgment.
+
+    locally_exhausted flips to True only once there HAS been a prior
+    attempt (attempt_count was already >= 1 before this call) AND this
+    attempt's own new-relative-to-history count is 0. A worker's very
+    first attempt on a need can never itself be "exhausted" -- there is
+    nothing prior to have failed to improve on yet. A later attempt that
+    DOES find something new flips it back to False: "a worker may
+    continue to be reused as long as it continues to contribute
+    materially new evidence" is the whole point of scoping this to actual
+    novelty rather than a fixed attempt count.
+    """
+    if not worker.parent_worker_ids:
+        return
+    key = (worker.id, need_id)
+    attempt = recovery.worker_need_attempts.get(key)
+    if attempt is None or attempt.need_fingerprint != need_fingerprint:
+        # Fresh pairing, or the Need has been substantively reframed since
+        # the last attempt -- start over rather than carrying stale
+        # exhaustion across a real redefinition of the problem.
+        attempt = WorkerNeedAttempt(need_fingerprint=need_fingerprint)
+    had_prior_attempt = attempt.attempt_count >= 1
+    new_keys = {_evidence_key(item) for item in new_evidence} - attempt.evidence_fingerprints
+    attempt.attempt_count += 1
+    attempt.evidence_fingerprints |= new_keys
+    attempt.cumulative_unique_evidence_count += len(new_keys)
+    attempt.last_attempt_new_evidence_count = len(new_keys)
+    attempt.locally_exhausted = had_prior_attempt and not new_keys
+    recovery.worker_need_attempts[key] = attempt
+
+
+def _worker_need_attempt_state_label(
+    recovery: RecoveryState, worker_id: str, need_id: str, need_fingerprint: str
+) -> str:
+    """"productive" | "untried" | "locally_exhausted" for one (worker_id,
+    need_id) pair, as of the need's CURRENT fingerprint -- an attempt
+    recorded under a since-superseded (reframed) fingerprint reads as
+    "untried" here, matching _enforce_local_exhaustion's own reframe reset
+    (see WorkerNeedAttempt's docstring): planning-visible state and actual
+    enforcement must never disagree about whether a reframe cleared an
+    exhaustion.
+    """
+    attempt = recovery.worker_need_attempts.get((worker_id, need_id))
+    if attempt is None or attempt.need_fingerprint != need_fingerprint:
+        return "untried"
+    return "locally_exhausted" if attempt.locally_exhausted else "productive"
+
+
+def _worker_need_attempt_states_for_prompt(
+    recovery: RecoveryState,
+    graph: NeedGraph,
+    candidate_workers_by_need: dict[str, list[WorkerCard]],
+) -> dict[str, dict[str, str]]:
+    """Builds plan_round's own `worker_need_attempt_states` argument:
+    need_id -> {worker_id: "productive" | "untried" | "locally_exhausted"}
+    -- planner-visible state (Phase: execution stability). Deliberately
+    reports on every EVOLVED candidate for a need, not only ones with an
+    existing attempt entry, so "untried" is visible too, not just
+    exhaustion -- an Orchestrator equipped with this can choose to try an
+    evolved worker it hasn't used yet on this need before falling back to
+    base workers. Base (non-evolved) candidates are omitted entirely: this
+    mechanism does not track or report on them (guardrail 4).
+
+    This is advisory to the Orchestrator's own choice, same as
+    stuck_tried_workers/candidate_probes -- _enforce_local_exhaustion
+    (called after plan_round returns) is what actually GUARANTEES an
+    exhausted pairing cannot execute, independent of whether the model
+    heeded this hint.
+    """
+    states: dict[str, dict[str, str]] = {}
+    for need_id, candidates in candidate_workers_by_need.items():
+        node = graph.nodes.get(need_id)
+        if node is None:
+            continue
+        fingerprint = _need_fingerprint(node.detail)
+        evolved = {worker.id: worker for worker in candidates if worker.parent_worker_ids}
+        if not evolved:
+            continue
+        states[need_id] = {
+            worker_id: _worker_need_attempt_state_label(recovery, worker_id, need_id, fingerprint)
+            for worker_id in evolved
+        }
+    return states
+
+
+def _enforce_local_exhaustion(
+    plan: RoundPlan,
+    recovery: RecoveryState,
+    graph: NeedGraph,
+    worker_by_id: dict[str, WorkerCard],
+) -> None:
+    """Deterministic enforcement (not advisory-only): a locally-exhausted
+    (worker, need) pairing (evolved workers only -- guardrail 4) cannot
+    execute again while the need's own fingerprint is unchanged, no matter
+    what plan_round itself proposed -- this is the guarantee
+    _worker_need_attempt_states_for_prompt's own hint alone cannot make.
+    Mutates `plan` in place, called right after plan_round returns, same
+    pattern as _enforce_no_repeat_stuck_assignment.
+
+    Partial filtering, unlike _enforce_no_repeat_stuck_assignment's
+    all-or-nothing check: an exhausted worker is dropped from a coalition
+    while its non-exhausted co-assignees still run (diversification
+    preference #2 -- "other currently relevant... workers not yet
+    exhausted" -- can already be satisfied by the Orchestrator's own
+    coalition choice this same round, not only on a later one). Only when
+    EVERY proposed worker for a need_id turns out exhausted does this
+    escalate to global_fallback (diversification preference #3), the same
+    escape hatch _enforce_no_repeat_stuck_assignment already uses for the
+    analogous "nothing productive was proposed" case -- never a
+    mechanical substitution of some OTHER specific worker, which stays
+    the Orchestrator's own judgment call for the next round it sees this
+    need with accurate state (guardrail: no global suppression, an
+    exhausted worker remains fully available on every other need_id and
+    on this one again after a reframe).
+    """
+    for need_id, worker_ids in list(plan.assignments.items()):
+        node = graph.nodes.get(need_id)
+        if node is None:
+            continue
+        fingerprint = _need_fingerprint(node.detail)
+        survivors = []
+        for worker_id in worker_ids:
+            worker = worker_by_id.get(worker_id)
+            if worker is None or not worker.parent_worker_ids:
+                survivors.append(worker_id)
+                continue
+            if _worker_need_attempt_state_label(recovery, worker_id, need_id, fingerprint) == (
+                "locally_exhausted"
+            ):
+                continue
+            survivors.append(worker_id)
+        if survivors == worker_ids:
+            continue
+        if survivors:
+            plan.assignments[need_id] = survivors
+        else:
+            del plan.assignments[need_id]
+            plan.special_tactics.setdefault(need_id, "global_fallback")
 
 
 def _merge_graph_updates(graph: NeedGraph, plan: RoundPlan) -> NeedGraph:

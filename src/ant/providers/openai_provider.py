@@ -825,6 +825,7 @@ class OpenAIProvider:
         repair_guidance: str = "",
         stuck_tried_workers: dict[str, list[str]] | None = None,
         candidate_probes: dict[str, dict[str, list[Evidence]]] | None = None,
+        worker_need_attempt_states: dict[str, dict[str, str]] | None = None,
     ) -> RoundPlan:
         # The single per-round Orchestrator call: replaces select_workers/
         # decide_local_action and the hand-coded escalation ladder
@@ -925,6 +926,22 @@ class OpenAIProvider:
                     snippet = (anchor.quote or "").strip().splitlines()
                     first_line = snippet[0][:120] if snippet else ""
                     probe_lines.append(f'        {anchor.path}:{anchor.line_start} "{first_line}"')
+        worker_need_attempt_states = worker_need_attempt_states or {}
+        # Execution-stability mechanism (local exhaustion / attempt-memory):
+        # only ever lists EVOLVED/overlay candidates, never base workers
+        # (this mechanism does not track them -- see
+        # RecoveryState.worker_need_attempts' own docstring). Advisory only
+        # -- LocalCoordinator._enforce_local_exhaustion is what actually
+        # guarantees a locally_exhausted pairing cannot execute, regardless
+        # of whether this hint is heeded -- but showing it lets the
+        # Orchestrator proactively diversify (try an untried evolved
+        # worker, fall back to that bridge's own source/base workers)
+        # instead of only being overridden after the fact.
+        attempt_state_lines = [
+            f"- {need_id}: "
+            + ", ".join(f"{worker_id}={state}" for worker_id, state in states.items())
+            for need_id, states in worker_need_attempt_states.items()
+        ]
         stuck_tried_workers = stuck_tried_workers or {}
         stuck_lines = [
             f"- subgraph {index}: {', '.join(group)}"
@@ -1008,6 +1025,15 @@ class OpenAIProvider:
             "committing -- use what was actually found, not just which "
             "worker's name/description sounds relevant):\n"
             f"{chr(10).join(probe_lines) or '(none)'}\n"
+            "Evolved/bridge worker attempt state per need (productive = "
+            "keep using it; untried = has not been tried on this need yet; "
+            "locally_exhausted = its last attempt on this exact need found "
+            "no new evidence beyond its own prior attempts here -- prefer "
+            "its own source/base workers, another candidate, or a genuine "
+            "reframe/global_fallback instead of reassigning it unchanged; "
+            "an evolved worker not listed for a need has no attempt history "
+            "there yet):\n"
+            f"{chr(10).join(attempt_state_lines) or '(none)'}\n"
             f"Evidence:\n{chr(10).join(evidence_lines) or '(none yet)'}\n"
             "Patterns from OTHER repos' past tasks (reference only -- judge "
             "for yourself whether any of this actually applies here, it is "
