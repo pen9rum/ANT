@@ -1,7 +1,14 @@
 import json
 from pathlib import Path
 
-from ant.domain import EvidenceState, WorkerCard
+from ant.domain import (
+    Evidence,
+    EvidenceState,
+    NodeExecutionTrace,
+    PlanningRound,
+    WorkerCard,
+    WorkerObservation,
+)
 from ant.evaluation.datasets import EvalExample
 from ant.evaluation.gen_compare import _run_fast_generation, run_gen_compare
 from ant.evaluation.metrics import EvalScore
@@ -225,6 +232,138 @@ def test_generation_snapshot_reports_population_lifecycle_and_route_consolidatio
     # total_route_count both correctly read 0 rather than crashing.
     assert snapshot.raw_route_proposals == 0
     assert snapshot.total_route_count == 0
+
+
+def test_evolved_worker_attribution_is_read_only_and_does_not_disturb_existing_results(
+    tmp_path: Path, monkeypatch
+) -> None:
+    # The attribution instrumentation must be provably read-only: it runs
+    # AFTER run_batch/evolve_workers have already fully finished (reading
+    # only their already-saved output), so every pre-existing field this
+    # run_gen_compare call produces (scores, snapshot's own worker_count/
+    # events/route stats) must come out identical to a call that never
+    # touched attribution at all -- this test writes REAL per-question
+    # trace files (unlike the population/lifecycle test above, which never
+    # wrote any) and confirms both: the new worker_usage/attribution file
+    # populate correctly, AND nothing pre-existing changed.
+    run_dir = tmp_path / "run"
+    index_path = tmp_path / ".ant"
+    (index_path / "myrepo").mkdir(parents=True)
+    repo_root = tmp_path / "repos"
+    (repo_root / "myrepo").mkdir(parents=True)
+
+    current_workers = [
+        WorkerCard(id="worker-a", territory_id="a", name="a", root="a", files=["a.py"]),
+        WorkerCard(
+            id="worker-bridge",
+            territory_id="bridge",
+            name="bridge",
+            root="",
+            files=["a.py"],
+            parent_worker_ids=["worker-a"],
+            structural_action="birth",
+            generation_created=1,
+            lifecycle_state="probationary",
+        ),
+    ]
+    real_events = [EvolutionEvent(kind="birth", worker_id="worker-bridge", reason="r")]
+
+    class _StubIndexStore:
+        def __init__(self, path):
+            pass
+
+        def load_workers(self):
+            return current_workers
+
+    def fake_run_batch(**kwargs):
+        # Simulates what a real run_batch call already does: writes each
+        # example's own trace file to state_dump_dir before returning.
+        example_state = EvidenceState(
+            question="q",
+            answer="a",
+            rounds=[
+                PlanningRound(
+                    round_index=0,
+                    node_executions=[
+                        NodeExecutionTrace(
+                            need_id="root",
+                            worker_ids=["worker-bridge"],
+                            candidate_worker_ids=["worker-bridge"],
+                            resolution="resolved",
+                            resolution_before="unresolved",
+                            resolution_after="resolved",
+                            need_reduction=1,
+                            observations=[
+                                WorkerObservation(
+                                    worker_id="worker-bridge",
+                                    territory_id="bridge",
+                                    evidence=[
+                                        Evidence(
+                                            path="a.py",
+                                            line_start=1,
+                                            line_end=2,
+                                            quote="q1",
+                                            reason="r",
+                                            worker_id="worker-bridge",
+                                        )
+                                    ],
+                                )
+                            ],
+                        )
+                    ],
+                )
+            ],
+        )
+        state_dump_dir = kwargs["state_dump_dir"]
+        state_dump_prefix = kwargs["state_dump_prefix"]
+        (state_dump_dir / f"{state_dump_prefix}q1.json").write_text(
+            example_state.model_dump_json(), encoding="utf-8"
+        )
+        return []
+
+    def fake_evolve_workers(index_path, repo_root=None, reasoner=None, generation=0):
+        return EvolutionResult(events=real_events, worker_count=len(current_workers))
+
+    def fake_load_or_rebuild_scores(**kwargs):
+        return {}
+
+    monkeypatch.setattr("ant.evaluation.gen_compare.IndexStore", _StubIndexStore)
+    monkeypatch.setattr("ant.evaluation.gen_compare.run_batch", fake_run_batch)
+    monkeypatch.setattr("ant.evaluation.gen_compare.evolve_workers", fake_evolve_workers)
+    monkeypatch.setattr("ant.evaluation.gen_compare.OpenAIProvider", lambda: object())
+    monkeypatch.setattr(
+        "ant.evaluation.gen_compare._load_or_rebuild_scores", fake_load_or_rebuild_scores
+    )
+
+    examples = [EvalExample(id="q1", question="q", answer="a", repo="someorg/myrepo")]
+    result = run_gen_compare(
+        examples=examples,
+        repo_root=repo_root,
+        index_path=index_path,
+        run_dir=run_dir,
+        run_gen0=False,
+        slow_generations=1,
+        fast_generations=0,
+    )
+
+    snapshot = result.generation_snapshots[1]
+    # Pre-existing fields, unaffected by attribution running.
+    assert snapshot.worker_count == 2
+    assert [e.kind for e in snapshot.events] == ["birth"]
+    assert snapshot.overlay_worker_ids == ["worker-bridge"]
+
+    # New field, correctly populated from the real trace file just written.
+    assert len(snapshot.worker_usage) == 1
+    usage = snapshot.worker_usage[0]
+    assert usage.worker_id == "worker-bridge"
+    assert usage.recruited_task_count == 1
+    assert usage.tasks_with_resolved_need == 1
+    assert usage.evidence_contributed == 1
+
+    attribution_path = run_dir / "slow-gen1-attribution.json"
+    assert attribution_path.exists()
+    saved = json.loads(attribution_path.read_text(encoding="utf-8"))
+    assert saved[0]["example_id"] == "q1"
 
 
 def test_a_fast_only_followup_does_not_lose_the_earlier_slow_gen1_generation_snapshot(

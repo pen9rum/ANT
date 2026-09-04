@@ -8,6 +8,11 @@ from pydantic import BaseModel, Field
 
 from ant.coordinator import LocalCoordinator
 from ant.domain import EvidenceState
+from ant.evaluation.attribution import (
+    GenerationWorkerUsageSummary,
+    aggregate_generation_worker_usage,
+    compute_question_attribution,
+)
 from ant.evaluation.datasets import EvalExample
 from ant.evaluation.judge import judge_answer
 from ant.evaluation.metrics import EvalScore, build_reference_idf
@@ -61,6 +66,14 @@ class GenerationSnapshot(BaseModel):
     # unbounded cardinality growth (the qibo 49->80->117 pattern this whole
     # phase exists to address) while confidence/support keeps accumulating.
     raw_route_proposals: int = 0
+    # Read-only evolved-worker attribution telemetry: for every worker with
+    # real structural lineage, was it even matched, was it recruited, and
+    # what did it actually produce -- computed purely by re-reading this
+    # generation's own already-saved per-question trace files (see
+    # ant.evaluation.attribution's own module docstring: nothing here
+    # influenced routing/candidate-selection/evolution/resolution/synthesis
+    # in the run that produced those traces).
+    worker_usage: list[GenerationWorkerUsageSummary] = Field(default_factory=list)
 
 
 class GenCompareResult(BaseModel):
@@ -236,6 +249,28 @@ def run_gen_compare(
                     lifecycle_counts.get(worker.lifecycle_state, 0) + 1
                 )
             route_stats = memory.route_stats(include_stale=True)
+            # Read-only telemetry (ant.evaluation.attribution): re-reads
+            # this generation's own already-saved per-question trace files
+            # -- run_batch above has already fully finished, nothing here
+            # can influence the run that just happened.
+            workers_by_id = {worker.id: worker for worker in current_workers}
+            question_attributions = []
+            for example in examples:
+                trace_path = run_dir / f"slow-gen{generation}-{example.id}.json"
+                if not trace_path.exists():
+                    continue
+                example_state = EvidenceState.model_validate_json(
+                    trace_path.read_text(encoding="utf-8")
+                )
+                question_attributions.append(
+                    compute_question_attribution(example.id, example_state, workers_by_id)
+                )
+            attribution_path = run_dir / f"slow-gen{generation}-attribution.json"
+            attribution_path.write_text(
+                json.dumps([qa.model_dump() for qa in question_attributions], indent=2),
+                encoding="utf-8",
+            )
+            worker_usage = aggregate_generation_worker_usage(question_attributions)
             snapshot = GenerationSnapshot(
                 generation=generation,
                 worker_count=evolution_result.worker_count,
@@ -253,6 +288,7 @@ def run_gen_compare(
                 lifecycle_counts=lifecycle_counts,
                 structural_action_counts=structural_action_counts,
                 raw_route_proposals=route_stats["raw_route_proposals"],
+                worker_usage=worker_usage,
             )
             metadata_path.write_text(snapshot.model_dump_json(indent=2), encoding="utf-8")
             generation_snapshots[generation] = snapshot
