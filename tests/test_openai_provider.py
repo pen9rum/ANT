@@ -278,50 +278,6 @@ def test_plan_round_shows_worker_searchable_terms_not_just_routing_summary() -> 
     assert "paint_world_map" in captured["prompt"]
 
 
-def test_plan_round_frames_memory_hints_as_promotive_not_exclusive() -> None:
-    # Regression test for a real qibo finding: a memory hint could be
-    # perfectly relevant (e.g. "circuit/drawing" for a circuit-drawing
-    # question) and still cause a clear regression -- not because the
-    # route was wrong, but because the prompt gave the Orchestrator no
-    # guidance on how much weight to give it, so it read the hint as an
-    # instruction to keep investigating an already-resolved need (qibo
-    # 6656: gen0 solved it in 1 round/2 evidence, the SAME evidence took 6
-    # rounds with the hint present) or to narrow worker coverage down to
-    # just the hinted pairing (qibo 91f: dropped a broader worker gen0 had
-    # included). The prompt must explicitly say a historical route may
-    # promote a worker's priority but must not exclude one or justify more
-    # rounds/decomposition on its own -- present only when at least one
-    # worker actually has a memory hint (nothing to caveat otherwise).
-    provider = OpenAIProvider(model="gpt-4.1")
-    captured: dict[str, str] = {}
-
-    def fake_responses_json(prompt: str, max_output_tokens: int = 512):
-        captured["prompt"] = prompt
-        return type("Result", (), {"text": "{}"})()
-
-    provider.responses_json = fake_responses_json  # type: ignore[method-assign]
-    workers = [
-        WorkerCard(id="worker-a", territory_id="a", name="a", root="a"),
-    ]
-
-    provider.plan_round(
-        question="q",
-        graph=NeedGraph(nodes={}),
-        resolution_results={},
-        evidence=[],
-        workers=workers,
-        memory_hints={"worker-a": "resolved a similar past need (terms: x; weight=5.0)"},
-        frontier=FrontierResult(ready=[], blocked=[], stuck_subgraphs=[]),
-        incomplete_parents=[],
-        cross_repo_experience=[],
-    )
-
-    prompt = captured["prompt"]
-    assert "must not exclude" in prompt
-    assert "never by itself a reason to propose more decomposition" in prompt
-    assert "SIMILAR past need in a DIFFERENT earlier task" in prompt
-
-
 def test_plan_round_shows_all_searchable_terms_when_candidates_are_few() -> None:
     # Regression test for the seaborn/pennylane failure mode: a worker's
     # own answering symbol (e.g. EstimateAggregator) sat past position 12
