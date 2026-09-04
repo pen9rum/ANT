@@ -39,7 +39,7 @@ def test_run_gen_compare_passes_evolve_workers_the_resolved_repo_not_the_raw_par
     def fake_run_batch(**kwargs):
         return []
 
-    def fake_evolve_workers(index_path, repo_root=None, reasoner=None):
+    def fake_evolve_workers(index_path, repo_root=None, reasoner=None, generation=0):
         captured["repo_root"] = repo_root
         return EvolutionResult(events=[], worker_count=0)
 
@@ -96,7 +96,7 @@ def test_run_gen_compare_passes_evolve_workers_the_same_index_run_batch_actually
     def fake_run_batch(**kwargs):
         return []
 
-    def fake_evolve_workers(index_path, repo_root=None, reasoner=None):
+    def fake_evolve_workers(index_path, repo_root=None, reasoner=None, generation=0):
         captured["index_path"] = index_path
         return EvolutionResult(events=[], worker_count=0)
 
@@ -166,7 +166,7 @@ def test_a_fast_only_followup_does_not_lose_the_earlier_slow_gen1_generation_sna
     def fake_run_batch(**kwargs):
         return []
 
-    def fake_evolve_workers(index_path, repo_root=None, reasoner=None):
+    def fake_evolve_workers(index_path, repo_root=None, reasoner=None, generation=0):
         return EvolutionResult(events=real_events, worker_count=7)
 
     def fake_load_or_rebuild_scores(**kwargs):
@@ -402,7 +402,7 @@ def test_slow_generations_are_cumulative_evolve_workers_runs_once_per_generation
         run_batch_calls.append(kwargs["state_dump_prefix"])
         return []
 
-    def fake_evolve_workers(index_path, repo_root=None, reasoner=None):
+    def fake_evolve_workers(index_path, repo_root=None, reasoner=None, generation=0):
         evolve_calls.append(len(evolve_calls) + 1)
         return EvolutionResult(events=[], worker_count=len(evolve_calls))
 
@@ -456,7 +456,7 @@ def test_start_generation_resumes_without_recomputing_earlier_generations(
     def fake_run_batch(**kwargs):
         return []
 
-    def fake_evolve_workers(index_path, repo_root=None, reasoner=None):
+    def fake_evolve_workers(index_path, repo_root=None, reasoner=None, generation=0):
         evolve_calls.append(len(evolve_calls) + 1)
         return EvolutionResult(events=[], worker_count=len(evolve_calls))
 

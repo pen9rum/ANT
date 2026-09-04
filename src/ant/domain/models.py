@@ -31,6 +31,30 @@ class WorkerCard(BaseModel):
     # worker's *representation*, not by excluding any worker from
     # consideration.
     routing_summary: str = ""
+    # Structural lineage (multi-generation organizational evolution): who
+    # this worker descended from and what action created it. Empty means
+    # "an original base worker" -- every worker built at index time (or by
+    # a repo's own directory structure) has empty lineage; only a worker
+    # born/specialized/merged by evolve_workers() populates these. Birth,
+    # specialize, and merge are all non-destructive overlays -- the
+    # parent/source workers listed here remain in the pool alongside this
+    # one, not replaced by it (see evolution.py's own module docstring for
+    # why: routing must still be able to recruit an original worker even
+    # after a structural sibling exists for it).
+    parent_worker_ids: list[str] = Field(default_factory=list)
+    structural_action: str = ""  # "" | "birth" | "specialize" | "merge"
+    # Which evolve_workers() cycle created this worker (1-indexed to match
+    # gen_compare's own slow-gen{k} numbering; 0 for an original base
+    # worker, which was never "created" by any generation's evolve call).
+    generation_created: int = 0
+    # "base" (an original worker, or the conservative default for any
+    # worker loaded from an index that predates this field) | "probationary"
+    # (a structural worker not yet evaluated) | "persistent" (promoted
+    # after real usage) | "dormant" (evaluated and found not worth
+    # keeping active -- tracked, never destructively retired in this
+    # phase; see evolve_workers()'s own docstring on why retirement is
+    # deliberately not implemented yet).
+    lifecycle_state: str = "base"
 
 
 class CodeSymbol(BaseModel):

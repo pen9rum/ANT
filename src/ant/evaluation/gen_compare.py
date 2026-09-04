@@ -188,7 +188,10 @@ def run_gen_compare(
             memory = ColonyMemoryStore(resolved_index_path)
             before_worker_ids = {w.id for w in IndexStore(resolved_index_path).load_workers()}
             evolution_result = evolve_workers(
-                resolved_index_path, repo_root=worker_repo_root, reasoner=OpenAIProvider()
+                resolved_index_path,
+                repo_root=worker_repo_root,
+                reasoner=OpenAIProvider(),
+                generation=generation,
             )
             after_worker_ids = {w.id for w in IndexStore(resolved_index_path).load_workers()}
             run_batch(

@@ -192,6 +192,61 @@ def test_evolve_workers_does_not_merge_when_the_reasoner_vetoes_it(tmp_path: Pat
     assert {"worker-a", "worker-b"} <= stored_worker_ids
 
 
+class _AlwaysMergeReasoner(_AlwaysVetoReasoner):
+    def should_merge(self, *, worker_a_id, worker_a_summary, worker_b_id, worker_b_summary):
+        return True
+
+
+def test_a_freshly_specialized_parent_and_child_are_never_merged_back_together(
+    tmp_path: Path,
+) -> None:
+    # Regression test for the non-destructive overlay (Phase 3): a child's
+    # files are a subset of its parent's, so they legitimately have full
+    # file overlap on the child's side -- exactly the shape
+    # _merge_overlapping_workers' structural gate is built to catch. Without
+    # the parent/child lineage guard, an always-merge reasoner would happily
+    # fold a worker back into the very parent it was just specialized out
+    # of, undoing the specialization the same cycle it happened.
+    index_path = tmp_path / ".ant"
+    workers = [
+        WorkerCard(
+            id="worker-parent",
+            territory_id="parent",
+            name="parent",
+            root="pkg",
+            files=["a.py", "b.py"],
+        ),
+        WorkerCard(
+            id="worker-child",
+            territory_id="child",
+            name="child",
+            root="pkg/a",
+            files=["a.py"],
+            parent_worker_ids=["worker-parent"],
+            structural_action="specialize",
+            generation_created=1,
+            lifecycle_state="probationary",
+        ),
+    ]
+    territories = [
+        Territory(id=worker.territory_id, root=worker.root, files=worker.files)
+        for worker in workers
+    ]
+    IndexStore(index_path).save(territories, workers)
+
+    result = evolve_workers(
+        index_path,
+        min_coalition_count=99,
+        retire_empty=False,
+        merge_overlap=0.4,
+        reasoner=_AlwaysMergeReasoner(),
+    )
+
+    assert not [event for event in result.events if event.kind == "merge"]
+    stored_worker_ids = {worker.id for worker in IndexStore(index_path).load_workers()}
+    assert stored_worker_ids == {"worker-parent", "worker-child"}
+
+
 def test_evolve_workers_specializes_worker_overloaded_with_diverse_needs(
     tmp_path: Path,
 ) -> None:
@@ -250,21 +305,25 @@ def test_evolve_workers_specializes_worker_overloaded_with_diverse_needs(
     assert all(event.source_worker_ids == ["worker-mixed"] for event in specialize_events)
 
     stored_workers = {worker.id: worker for worker in IndexStore(index_path).load_workers()}
-    assert "worker-mixed" not in stored_workers
+    # Non-destructive overlay (Phase 3): the parent stays as a fallback,
+    # children are added alongside it -- routing must still be able to
+    # recruit worker-mixed even after these more specific siblings exist.
+    assert "worker-mixed" in stored_workers
+    assert stored_workers["worker-mixed"].lifecycle_state == "base"
     auth_worker = stored_workers["worker-pkg-auth"]
     billing_worker = stored_workers["worker-pkg-billing"]
     assert auth_worker.files == ["pkg/auth/service.py"]
     assert [symbol.name for symbol in auth_worker.symbols] == ["AuthService"]
     assert billing_worker.files == ["pkg/billing/service.py"]
     assert [symbol.name for symbol in billing_worker.symbols] == ["BillingService"]
+    assert auth_worker.parent_worker_ids == ["worker-mixed"]
+    assert auth_worker.structural_action == "specialize"
+    assert auth_worker.lifecycle_state == "probationary"
 
-    # The old worker id is now stale: any memory that pointed at it should not
-    # be served until it is revalidated (and it will be discarded then, since
-    # worker-mixed no longer exists in the colony).
-    assert memory.matching_routes(["auth"]) == []
-    current_worker_ids = {worker.id for worker in IndexStore(index_path).load_workers()}
-    outcome = memory.revalidate_stale(current_worker_ids)
-    assert outcome["discarded"] == 4
+    # Non-destructive overlay (Phase 3): worker-mixed was never removed, so
+    # its own existing routes were never staled -- all 4 (2 auth + 2
+    # billing) are still live (all_routes excludes stale rows by default).
+    assert len(memory.all_routes()) == 4
 
 
 def test_evolve_workers_generates_real_child_cards_when_repo_root_is_supplied(
@@ -1238,8 +1297,14 @@ def test_evolve_workers_specializes_a_flat_directory_via_route_semantic_clusteri
     assert all(event.source_worker_ids == ["worker-flat"] for event in specialize_events)
 
     stored_workers = {worker.id: worker for worker in IndexStore(index_path).load_workers()}
-    assert "worker-flat" not in stored_workers
-    files_by_child = {tuple(w.files) for w in stored_workers.values()}
+    # Non-destructive overlay (Phase 3): worker-flat stays as a fallback --
+    # excluded from files_by_child below, which is specifically about what
+    # the CHILDREN's own territories are (worker-flat's own files
+    # legitimately still include beta.py/delta.py, it just isn't a child).
+    assert "worker-flat" in stored_workers
+    files_by_child = {
+        tuple(w.files) for wid, w in stored_workers.items() if wid != "worker-flat"
+    }
     assert ("flat/alpha.py",) in files_by_child
     assert ("flat/gamma.py",) in files_by_child
     # beta.py/delta.py had no cluster's recurring retrieval support --
@@ -1358,11 +1423,14 @@ class _MergeReasoner(_AlwaysVetoReasoner):
         return "merge"
 
 
-def test_episode_merge_stales_only_the_two_workers_actually_removed(tmp_path: Path) -> None:
-    # The other side of the same fix: a REAL removal (merge, specialize,
-    # retire) must still correctly stale the workers it actually consumes
-    # -- this fix must not overcorrect into never staling anyone. worker-c
-    # is an unrelated bystander and must be left completely alone.
+def test_episode_merge_is_non_destructive_and_stales_nobody(tmp_path: Path) -> None:
+    # Merge is a non-destructive overlay (Phase 3 of the multi-generation
+    # organizational evolution redesign): worker-a and worker-b stay in the
+    # pool exactly as before, a composite is added alongside them -- never
+    # a replacement. Since nothing is actually removed, mark_stale must
+    # never fire for anyone's routes, including the two merge sources
+    # (their own existing routes are still exactly as valid as before) and
+    # worker-c, an unrelated bystander.
     index_path = tmp_path / ".ant"
     workers = [
         WorkerCard(id="worker-a", territory_id="a", name="a", root="a", files=["a.py"]),
@@ -1413,16 +1481,22 @@ def test_episode_merge_stales_only_the_two_workers_actually_removed(tmp_path: Pa
     merge_events = [event for event in result.events if event.kind == "merge"]
     assert len(merge_events) == 1
     assert sorted(merge_events[0].source_worker_ids) == ["worker-a", "worker-b"]
+    composite_id = merge_events[0].worker_id
 
-    stored_worker_ids = {worker.id for worker in IndexStore(index_path).load_workers()}
-    assert "worker-a" not in stored_worker_ids
-    assert "worker-b" not in stored_worker_ids
-    assert "worker-c" in stored_worker_ids
+    stored_workers = {worker.id: worker for worker in IndexStore(index_path).load_workers()}
+    assert {"worker-a", "worker-b", "worker-c", composite_id} <= set(stored_workers)
+    composite = stored_workers[composite_id]
+    assert sorted(composite.parent_worker_ids) == ["worker-a", "worker-b"]
+    assert composite.structural_action == "merge"
+    assert composite.lifecycle_state == "probationary"
 
+    # Nothing was actually removed, so nothing should have been staled --
+    # every route saved above (including worker-a's and worker-b's own)
+    # must still be live.
     active_need_terms = {tuple(route.need_terms) for route in memory.all_routes()}
+    assert ("route-a",) in active_need_terms
+    assert ("route-b",) in active_need_terms
     assert ("route-c",) in active_need_terms
-    assert ("route-a",) not in active_need_terms
-    assert ("route-b",) not in active_need_terms
 
 
 def test_a_weakly_supported_recurring_coalition_cannot_birth_via_the_legacy_candidate_path(

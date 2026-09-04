@@ -27,17 +27,20 @@ TOKEN_RE = re.compile(r"[A-Za-z][A-Za-z0-9_]{2,}")
 # underneath that judgment call, not a replacement for it.
 _MIN_EPISODE_SUCCESS_RATIO = 0.5
 
-# Only these event kinds actually remove a worker from the pool -- a
-# specialize replaces its one parent with children, a merge replaces both
-# its sources with the merged worker, a retire drops a now-empty worker
-# (added to removed_worker_ids directly at the retire site, not via this
-# set). "birth" and "strengthen_route" both carry source_worker_ids too
-# (which workers a recurring pattern involved), but neither one removes
-# those workers -- they keep existing exactly as before, now alongside a
-# new bridge sibling or with a reinforced route. Explicit allowlist rather
-# than an exclusion list: an event kind added later defaults to NOT
-# removing anyone unless it's deliberately added here.
-_WORKER_REMOVING_EVENT_KINDS = frozenset({"specialize", "merge"})
+# No event kind actually removes a worker from the pool anymore (Phase 3
+# of the multi-generation organizational evolution redesign: birth,
+# specialize, and merge are all non-destructive overlays now -- a
+# specialize ADDS children alongside its still-present parent, a merge ADDS
+# a composite alongside its still-present two sources; only "retire" drops
+# a worker, and it's added to removed_worker_ids directly at the retire
+# site, not via this set). Kept as an explicit allowlist (currently empty)
+# rather than an exclusion list, and kept as its own named constant rather
+# than inlined, so a future destructive lifecycle stage (dormant workers
+# actually being dropped -- see WorkerCard.lifecycle_state's own docstring
+# on why that's deliberately not implemented yet) has one obvious place to
+# register itself instead of scattering removal logic across each
+# operator's own branch again.
+_WORKER_REMOVING_EVENT_KINDS: frozenset[str] = frozenset()
 
 
 def _removed_worker_ids_from(events: list[EvolutionEvent]) -> set[str]:
@@ -130,7 +133,13 @@ def evolve_workers(
     min_semantic_cluster_file_support: int = (
         DEFAULT_SCORING_CONFIG.evolution.min_semantic_cluster_file_support
     ),
+    generation: int = 0,
 ) -> EvolutionResult:
+    # `generation` is purely descriptive lineage metadata (stamped onto
+    # WorkerCard.generation_created for every worker this call creates) --
+    # it does not gate or change any decision this function makes. 0 (the
+    # default) means "caller doesn't track generations"; gen_compare's own
+    # cumulative slow-gen{k} loop passes its real k.
     store = IndexStore(index_path)
     memory = ColonyMemoryStore(index_path)
     workers = store.load_workers()
@@ -163,6 +172,7 @@ def evolve_workers(
         reasoner=reasoner,
         semantic_cluster_similarity_threshold=semantic_cluster_similarity_threshold,
         min_semantic_cluster_file_support=min_semantic_cluster_file_support,
+        generation=generation,
     )
     events.extend(specialize_events)
     removed_worker_ids.update(_removed_worker_ids_from(specialize_events))
@@ -213,6 +223,7 @@ def evolve_workers(
         min_health_routes=min_routes_for_health_check,
         healthy_ratio=healthy_route_ratio,
         reasoner=reasoner,
+        generation=generation,
     )
     events.extend(merge_events)
     removed_worker_ids.update(_removed_worker_ids_from(merge_events))
@@ -236,6 +247,7 @@ def evolve_workers(
             routes_by_worker=routes_by_worker,
             min_health_routes=min_routes_for_health_check,
             healthy_ratio=healthy_route_ratio,
+            generation=generation,
         )
         events.extend(episode_events)
         removed_worker_ids.update(_removed_worker_ids_from(episode_events))
@@ -359,6 +371,7 @@ def _apply_episode_actions(
     routes_by_worker: dict[str, list[MemoryRoute]],
     min_health_routes: int,
     healthy_ratio: float,
+    generation: int = 0,
 ) -> tuple[list[WorkerCard], list[EvolutionEvent]]:
     """Acts on ColonyMemoryStore.aggregate_episodes' recurring (strategy,
     worker-set) patterns -- e.g. "temporary_bridge kept resolving a
@@ -524,9 +537,18 @@ def _apply_episode_actions(
                     ],
                     searchable_terms=terms,
                     files=files,
+                    parent_worker_ids=aggregate.workers,
+                    structural_action="birth",
+                    generation_created=generation,
+                    lifecycle_state="probationary",
                 ),
                 reasoner,
             )
+            # Non-destructive overlay (Phase 3): source_workers stay in the
+            # pool exactly as before, the bridge is added alongside them --
+            # never a replacement. Routing must still be able to recruit an
+            # original worker even after a structural sibling exists for
+            # it.
             workers = [*workers, bridge]
             worker_by_id[bridge.id] = bridge
             events.append(
@@ -551,12 +573,21 @@ def _apply_episode_actions(
                         set(first.searchable_terms) | set(second.searchable_terms)
                     ),
                     files=sorted(set(first.files) | set(second.files)),
+                    parent_worker_ids=[first.id, second.id],
+                    structural_action="merge",
+                    generation_created=generation,
+                    lifecycle_state="probationary",
                 ),
                 reasoner,
             )
-            workers = [w for w in workers if w.id not in (first.id, second.id)]
-            workers.append(merged_worker)
-            worker_by_id = {w.id: w for w in workers}
+            # Non-destructive overlay (Phase 3): first/second stay in the
+            # pool -- the composite is a virtual merged role added
+            # alongside them, not a replacement. `consumed` still tracks
+            # them so a LATER aggregate this same cycle can't spend either
+            # one on a second structural action, independent of whether
+            # they physically remain in `workers`.
+            workers = [*workers, merged_worker]
+            worker_by_id[merged_worker.id] = merged_worker
             consumed.update({first.id, second.id})
             events.append(
                 EvolutionEvent(
@@ -576,10 +607,18 @@ def _merge_overlapping_workers(
     min_health_routes: int,
     healthy_ratio: float,
     reasoner: EvolutionReasoner | None = None,
+    generation: int = 0,
 ) -> tuple[list[WorkerCard], list[EvolutionEvent]]:
+    # Non-destructive overlay (Phase 3): every original worker in
+    # `workers` stays in the returned pool unchanged -- a composite is
+    # ADDED alongside its two sources, never a replacement. `consumed`
+    # still exists purely to stop the same worker being spent on two
+    # different composites in one pass (A+B and A+C in the same cycle
+    # would both claim A), independent of the fact that neither A nor B
+    # nor C is ever actually removed.
     events: list[EvolutionEvent] = []
     consumed: set[str] = set()
-    merged: list[WorkerCard] = []
+    composites: list[WorkerCard] = []
     for index, worker in enumerate(workers):
         if worker.id in consumed:
             continue
@@ -587,6 +626,15 @@ def _merge_overlapping_workers(
         partner = None
         for other in workers[index + 1 :]:
             if other.id in consumed:
+                continue
+            # A worker already structurally descended from (or ancestor
+            # of) the other is never a merge candidate against it -- a
+            # freshly specialized parent/child pair, or two siblings,
+            # legitimately share files by design (see
+            # _specialize_overloaded_workers' own non-destructive overlay);
+            # merging them back together the same cycle would just undo
+            # the specialization that just happened.
+            if worker.id in other.parent_worker_ids or other.id in worker.parent_worker_ids:
                 continue
             # Neither side of a merge may already have a track record of
             # good answers: folding an unrelated (even if file-overlapping)
@@ -619,7 +667,6 @@ def _merge_overlapping_workers(
             partner = other
             break
         if partner is None:
-            merged.append(worker)
             continue
         consumed.update({worker.id, partner.id})
         merged_worker = _with_routing_summary(
@@ -636,10 +683,14 @@ def _merge_overlapping_workers(
                     set(worker.searchable_terms) | set(partner.searchable_terms)
                 ),
                 files=sorted(worker_files | set(partner.files)),
+                parent_worker_ids=[worker.id, partner.id],
+                structural_action="merge",
+                generation_created=generation,
+                lifecycle_state="probationary",
             ),
             reasoner,
         )
-        merged.append(merged_worker)
+        composites.append(merged_worker)
         events.append(
             EvolutionEvent(
                 kind="merge",
@@ -648,7 +699,7 @@ def _merge_overlapping_workers(
                 source_worker_ids=[worker.id, partner.id],
             )
         )
-    return merged, events
+    return [*workers, *composites], events
 
 
 def _specialize_overloaded_workers(
@@ -667,6 +718,7 @@ def _specialize_overloaded_workers(
     min_semantic_cluster_file_support: int = (
         DEFAULT_SCORING_CONFIG.evolution.min_semantic_cluster_file_support
     ),
+    generation: int = 0,
 ) -> tuple[list[WorkerCard], list[EvolutionEvent]]:
     """Split a coarse worker into finer workers along its existing directory
     substructure once recurring routes show it is being asked about at least
@@ -742,9 +794,16 @@ def _specialize_overloaded_workers(
             continue
 
         children = [
-            _child_worker(worker, group, files, group_counts.get(group, 0), repo_root, reasoner)
+            _child_worker(
+                worker, group, files, group_counts.get(group, 0), repo_root, reasoner, generation
+            )
             for group, files in sorted(groups.items())
         ]
+        # Non-destructive overlay (Phase 3): the parent stays in the pool
+        # as a fallback, children are ADDED alongside it -- routing must
+        # still be able to recruit the original worker even after these
+        # more specific siblings exist.
+        result.append(worker)
         result.extend(children)
         for child in children:
             events.append(
@@ -1089,12 +1148,19 @@ def _child_worker(
     route_count: int,
     repo_root: Path | None,
     reasoner: EvolutionReasoner | None = None,
+    generation: int = 0,
 ) -> WorkerCard:
     territory_id = _slug(group)
     provenance = (
         f"Specialized from {worker.id} after {route_count} recurring needs "
         "concentrated on this substructure."
     )
+    lineage = {
+        "parent_worker_ids": [worker.id],
+        "structural_action": "specialize",
+        "generation_created": generation,
+        "lifecycle_state": "probationary",
+    }
     if repo_root is not None:
         # Reuse the same real term-frequency/README/symbol extraction used
         # for a repo's *initial* worker cards (see generate_worker_cards),
@@ -1110,7 +1176,8 @@ def _child_worker(
         # zero-cost template; re-derive via the reasoner when one is
         # available so a specialized child's routing_summary gets the same
         # LLM-quality treatment as its should_specialize judgment just did.
-        return _with_routing_summary(build_worker_cards(repo_root, [territory])[0], reasoner)
+        child = build_worker_cards(repo_root, [territory])[0].model_copy(update=lineage)
+        return _with_routing_summary(child, reasoner)
     # Fallback when no repo_root is supplied (existing tests, and any
     # caller that hasn't opted in): the original mechanical derivation from
     # already-indexed worker-card metadata only, no filesystem access.
@@ -1131,6 +1198,7 @@ def _child_worker(
             searchable_terms=terms[:32],
             files=sorted(files),
             symbols=child_symbols,
+            **lineage,
         ),
         reasoner,
     )

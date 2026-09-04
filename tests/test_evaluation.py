@@ -273,7 +273,7 @@ def test_run_gen_compare_freezes_the_gen0_worker_snapshot_before_evolve_mutates_
                 handle.write(json.dumps(row) + "\n")
         return []
 
-    def fake_evolve_workers(index_path, repo_root=None, reasoner=None):
+    def fake_evolve_workers(index_path, repo_root=None, reasoner=None, generation=0):
         calls.append("evolve_workers")
         # Simulate evolution actually mutating the live index -- if the
         # fast-gen1 stage's snapshot were taken AFTER this, it would see
