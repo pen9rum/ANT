@@ -1465,6 +1465,88 @@ class OpenAIProvider:
         # rather than silently blocking every merge on a parse error.
         return True
 
+    def describe_interface_responsibility(
+        self,
+        *,
+        source_workers: list[tuple[str, str]],
+        representative_needs: list[str],
+        need_terms: list[str],
+        unique_task_count: int,
+        occurrences: int,
+    ) -> str:
+        needs_text = (
+            "\n".join(f"- {need}" for need in representative_needs[:8])
+            if representative_needs
+            else "(no representative need text recorded)"
+        )
+        workers_text = "\n".join(
+            f"Worker ({worker_id}): {summary}" for worker_id, summary in source_workers
+        )
+        prompt = (
+            f"{len(source_workers)} workers in a code-navigation colony keep being "
+            "recruited together. Write ONE coherent sentence describing the specific "
+            "cross-boundary function that repeatedly requires all of them -- not a "
+            "summary of each worker individually, and not a mechanical 'combines A "
+            "and B' label. State what the interface between them actually is (e.g. "
+            "'resolving how gate-level symbols get drawn into circuit-level "
+            "visualizations' is a real interface; 'a worker covering both gates and "
+            "models' is not).\n"
+            f"{workers_text}\n"
+            f"This pairing recurred across {unique_task_count} separate tasks "
+            f"({occurrences} total recruitments). Representative needs that "
+            f"actually drove this pairing:\n{needs_text}\n"
+            f"Recurring vocabulary: {', '.join(need_terms[:16]) or '(none recorded)'}\n"
+            "Return JSON with key interface_responsibility: one sentence."
+        )
+        result = self.responses_json(prompt, max_output_tokens=192)
+        data = _loads_json_object(result.text)
+        value = data.get("interface_responsibility")
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+        # Malformed/empty response: fall back to the old mechanical label
+        # rather than leaving the bridge candidate with no description at
+        # all -- a later assess_interface_subsumption call still needs
+        # something to judge.
+        worker_ids = ", ".join(worker_id for worker_id, _ in source_workers)
+        return f"Combines {worker_ids}; key terms: {', '.join(need_terms[:12])}"
+
+    def assess_interface_subsumption(
+        self,
+        *,
+        interface_responsibility: str,
+        existing_worker_id: str,
+        existing_worker_summary: str,
+    ) -> bool:
+        prompt = (
+            "A code-navigation colony is deciding whether to birth a new "
+            "dedicated worker for the cross-boundary interface responsibility "
+            "described below, or whether an existing worker already fully "
+            "handles it on its own.\n"
+            f"Proposed interface responsibility: {interface_responsibility}\n"
+            f"Existing worker under consideration: {existing_worker_id} -- "
+            f"{existing_worker_summary}\n"
+            "Judge ONLY this: does the existing worker, by itself, already "
+            "fully own and perform this exact cross-boundary interface "
+            "function? Sharing a topic, file territory, or vocabulary with "
+            "one side of the interface is NOT sufficient -- that overlap is "
+            "expected and does not by itself mean the interface work is "
+            "already covered. Answer true only if creating a dedicated "
+            "bridge worker would add no meaningful new capability beyond "
+            "what this existing worker already does.\n"
+            "Return JSON with key subsumed: true if the existing worker "
+            "already fully covers this interface responsibility, false "
+            "otherwise."
+        )
+        result = self.responses_json(prompt, max_output_tokens=128)
+        data = _loads_json_object(result.text)
+        value = data.get("subsumed")
+        if isinstance(value, bool):
+            return value
+        # Malformed/empty response: conservative default is False -- a
+        # parse failure must not silently block a birth any more than a
+        # genuine "not subsumed" verdict would.
+        return False
+
     def decide_episode_action(
         self,
         *,

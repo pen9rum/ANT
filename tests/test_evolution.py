@@ -19,6 +19,17 @@ class _AlwaysVetoReasoner:
     def should_merge(self, *, worker_a_id, worker_a_summary, worker_b_id, worker_b_summary):
         return False
 
+    def describe_interface_responsibility(
+        self, *, source_workers, representative_needs, need_terms, unique_task_count, occurrences
+    ):
+        worker_ids = ", ".join(worker_id for worker_id, _ in source_workers)
+        return f"stub interface responsibility for {worker_ids}"
+
+    def assess_interface_subsumption(
+        self, *, interface_responsibility, existing_worker_id, existing_worker_summary
+    ):
+        return False
+
     def decide_episode_action(self, *, strategy, need_terms, workers, **kwargs):
         raise AssertionError("this test does not exercise decide_episode_action()")
 
@@ -739,18 +750,21 @@ def test_recurring_coalition_birth_skips_a_near_duplicate_of_an_existing_bridge(
 
 
 class _RedundantWithWorkerCReasoner(_AlwaysVetoReasoner):
-    """should_merge says yes specifically for worker-c -- proves the
-    semantic-redundancy check is doing real LLM-judged work, not just
-    vetoing everything the way _AlwaysVetoReasoner's own should_merge
-    (always False) would. decide_episode_action always approves birth so
-    the candidate actually reaches that redundancy check.
+    """assess_interface_subsumption says yes specifically for worker-c --
+    proves the semantic-redundancy check is doing real LLM-judged work, not
+    just vetoing everything the way _AlwaysVetoReasoner's own
+    assess_interface_subsumption (always False) would. decide_episode_action
+    always approves birth so the candidate actually reaches that redundancy
+    check.
     """
 
     def decide_episode_action(self, *, strategy, need_terms, workers, **kwargs):
         return "birth_bridge"
 
-    def should_merge(self, *, worker_a_id, worker_a_summary, worker_b_id, worker_b_summary):
-        return worker_b_id == "worker-c"
+    def assess_interface_subsumption(
+        self, *, interface_responsibility, existing_worker_id, existing_worker_summary
+    ):
+        return existing_worker_id == "worker-c"
 
 
 def test_recurring_coalition_birth_skips_a_worker_semantically_redundant_with_existing(
@@ -807,8 +821,10 @@ class _BirthBridgeButRedundantReasoner(_AlwaysVetoReasoner):
     def decide_episode_action(self, *, strategy, need_terms, workers, **kwargs):
         return "birth_bridge"
 
-    def should_merge(self, *, worker_a_id, worker_a_summary, worker_b_id, worker_b_summary):
-        return worker_b_id == "worker-c"
+    def assess_interface_subsumption(
+        self, *, interface_responsibility, existing_worker_id, existing_worker_summary
+    ):
+        return existing_worker_id == "worker-c"
 
 
 def test_episode_birth_bridge_downgrades_to_strengthen_route_when_semantically_redundant(
@@ -854,6 +870,150 @@ def test_episode_birth_bridge_downgrades_to_strengthen_route_when_semantically_r
     assert strengthen_events[0].worker_id == "worker-c"
     stored_worker_ids = {worker.id for worker in IndexStore(index_path).load_workers()}
     assert stored_worker_ids == {"worker-a", "worker-b", "worker-c"}
+
+
+class _RecordsSubsumptionCallsReasoner(_AlwaysVetoReasoner):
+    """Records every assess_interface_subsumption call it receives (which
+    existing_worker_id it was asked about, and what interface_responsibility
+    text) -- proves source workers are genuinely included in the redundancy
+    check (not skipped), and that a False verdict against a source worker
+    does not itself block birth. Always answers False (domain/lexical
+    overlap with a source worker is expected and is not, by itself,
+    grounds for redundancy).
+    """
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, str]] = []
+
+    def decide_episode_action(self, *, strategy, need_terms, workers, **kwargs):
+        return "birth_bridge"
+
+    def describe_interface_responsibility(
+        self, *, source_workers, representative_needs, need_terms, unique_task_count, occurrences
+    ):
+        # Deliberately echoes worker-a's own vocabulary -- a real bridge
+        # candidate's description legitimately does share domain/lexical
+        # content with its own source workers.
+        return "shared domain vocabulary with worker-a"
+
+    def assess_interface_subsumption(
+        self, *, interface_responsibility, existing_worker_id, existing_worker_summary
+    ):
+        self.calls.append((existing_worker_id, interface_responsibility))
+        return False
+
+
+def test_a_source_workers_own_domain_overlap_does_not_automatically_veto_its_own_birth_candidate(
+    tmp_path: Path,
+) -> None:
+    # Regression test for the real qibo bug: every tested birth candidate
+    # got vetoed because the old should_merge-based check asked "is this
+    # the same specialty as a source worker" -- a question a candidate
+    # built from that source worker's own vocabulary answers "yes" almost
+    # by construction. assess_interface_subsumption asks a narrower
+    # question ("does this worker already fully own the interface"), so a
+    # source worker sharing domain vocabulary must NOT automatically veto.
+    index_path = tmp_path / ".ant"
+    workers = [
+        WorkerCard(id="worker-a", territory_id="a", name="a", root="a", files=["a.py"]),
+        WorkerCard(id="worker-b", territory_id="b", name="b", root="b", files=["b.py"]),
+    ]
+    territories = [
+        Territory(id=worker.territory_id, root=worker.root, files=worker.files)
+        for worker in workers
+    ]
+    IndexStore(index_path).save(territories, workers)
+    memory = ColonyMemoryStore(index_path)
+    for need in ("proxy validation boundary task one", "proxy validation boundary task two"):
+        memory.record_episode(
+            CollaborationEpisode(
+                need=need,
+                workers=["worker-a", "worker-b"],
+                strategy="temporary_bridge",
+                outcome="progress",
+                evidence_gain=3,
+            )
+        )
+    reasoner = _RecordsSubsumptionCallsReasoner()
+
+    result = evolve_workers(
+        index_path,
+        reasoner=reasoner,
+        min_coalition_count=99,
+        retire_empty=False,
+        merge_overlap=0.99,
+        min_episode_count=2,
+    )
+
+    # Both source workers (they share no files with each other, but the
+    # candidate's own files union with each) were genuinely asked, not
+    # skipped -- and neither answer being False let the birth through.
+    checked_worker_ids = {worker_id for worker_id, _ in reasoner.calls}
+    assert checked_worker_ids == {"worker-a", "worker-b"}
+    assert all(
+        interface_responsibility == "shared domain vocabulary with worker-a"
+        for _, interface_responsibility in reasoner.calls
+    )
+    birth_events = [event for event in result.events if event.kind == "birth"]
+    assert len(birth_events) == 1
+
+
+class _RecordsRepresentativeNeedsReasoner(_AlwaysVetoReasoner):
+    """Records the representative_needs it was actually handed for the
+    interface_responsibility call -- proves the real Need text recorded in
+    colony memory (not just the mechanically extracted need_terms
+    vocabulary) reaches describe_interface_responsibility."""
+
+    def __init__(self) -> None:
+        self.seen_representative_needs: list[str] = []
+
+    def decide_episode_action(self, *, strategy, need_terms, workers, **kwargs):
+        return "birth_bridge"
+
+    def describe_interface_responsibility(
+        self, *, source_workers, representative_needs, need_terms, unique_task_count, occurrences
+    ):
+        self.seen_representative_needs = list(representative_needs)
+        return "stub interface responsibility"
+
+
+def test_describe_interface_responsibility_receives_real_recorded_need_text(
+    tmp_path: Path,
+) -> None:
+    index_path = tmp_path / ".ant"
+    workers = [
+        WorkerCard(id="worker-a", territory_id="a", name="a", root="a", files=["a.py"]),
+        WorkerCard(id="worker-b", territory_id="b", name="b", root="b", files=["b.py"]),
+    ]
+    territories = [
+        Territory(id=worker.territory_id, root=worker.root, files=worker.files)
+        for worker in workers
+    ]
+    IndexStore(index_path).save(territories, workers)
+    memory = ColonyMemoryStore(index_path)
+    distinctive_need = "how does the gate-symbol table feed the circuit drawing routine"
+    for need in (distinctive_need, "a second, differently worded recurrence"):
+        memory.record_episode(
+            CollaborationEpisode(
+                need=need,
+                workers=["worker-a", "worker-b"],
+                strategy="temporary_bridge",
+                outcome="progress",
+                evidence_gain=3,
+            )
+        )
+    reasoner = _RecordsRepresentativeNeedsReasoner()
+
+    evolve_workers(
+        index_path,
+        reasoner=reasoner,
+        min_coalition_count=99,
+        retire_empty=False,
+        merge_overlap=0.99,
+        min_episode_count=2,
+    )
+
+    assert distinctive_need in reasoner.seen_representative_needs
 
 
 def test_evolve_workers_leaves_episodes_alone_when_reasoner_says_no_change(

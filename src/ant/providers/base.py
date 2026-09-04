@@ -399,6 +399,65 @@ class EvolutionReasoner(Protocol):
         worker_b_summary: str,
     ) -> bool: ...
 
+    def describe_interface_responsibility(
+        self,
+        *,
+        source_workers: list[tuple[str, str]],
+        representative_needs: list[str],
+        need_terms: list[str],
+        unique_task_count: int,
+        occurrences: int,
+    ) -> str:
+        """Synthesizes what cross-boundary function repeatedly requires this
+        coalition's source workers to collaborate, for a birth_bridge
+        candidate -- replaces the old mechanical "Combines A + B; key terms:
+        ..." label (see _interface_subsumed_by_existing's own docstring in
+        evolution.py for why that label made redundancy near-tautological:
+        it always echoed one source worker's own vocabulary back at it).
+        `source_workers` is (worker_id, worker_summary) for every worker in
+        the coalition -- two in the common case, but a coalition can recur
+        across 3+ workers, so this is not fixed to a pair. `representative_needs`
+        is a sample of the actual Need text that recurred across this
+        coalition (see ColonyMemoryStore.representative_needs) -- the real
+        signal for what the interface is actually about, not just the
+        workers' general-purpose responsibilities. The result becomes both
+        the input to assess_interface_subsumption's redundancy judgment and,
+        if birth survives, the bridge worker's own responsibilities text --
+        so it must read as one coherent statement of the joint function, not
+        a concatenation.
+        """
+        ...
+
+    def assess_interface_subsumption(
+        self,
+        *,
+        interface_responsibility: str,
+        existing_worker_id: str,
+        existing_worker_summary: str,
+    ) -> bool:
+        """True only if `existing_worker_id` ALREADY fully owns and handles
+        the cross-boundary interface responsibility described, entirely on
+        its own -- domain or lexical overlap with a source worker's own
+        specialty is EXPECTED (a bridge combining worker-models and
+        worker-tests will always share vocabulary with worker-models) and
+        is NOT sufficient grounds for True. This is a stricter, narrower
+        question than should_merge's "are these two workers' specialties
+        the same" -- it is specifically "does this one existing worker,
+        by itself, already perform the joint/interface function the bridge
+        would exist for", which a source worker sharing a topic/lexicon
+        with the candidate can still legitimately fail (see
+        _is_redundant_with_existing's docstring for the real qibo case this
+        replaces: every one of a run's birth candidates got vetoed this way
+        purely because the candidate's own description was built by
+        combining a source worker's own specialty text, making the old
+        should_merge-based check redundant against itself almost by
+        construction). False is the conservative default on a malformed
+        response -- birth should not be silently blocked by a parse
+        failure any more than by a genuine "no" verdict being required to
+        actually establish subsumption.
+        """
+        ...
+
     def decide_episode_action(
         self,
         *,

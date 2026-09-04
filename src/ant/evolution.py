@@ -467,8 +467,20 @@ def _apply_episode_actions(
             terms = sorted(
                 {term for worker in source_workers for term in worker.searchable_terms}
             )[:32]
-            redundant_with = _is_redundant_with_existing(
-                f"Combines {', '.join(aggregate.workers)}; key terms: {', '.join(terms[:12])}",
+            interface_responsibility = reasoner.describe_interface_responsibility(
+                source_workers=[
+                    (worker.id, "; ".join(worker.responsibilities[:2]) or worker.name)
+                    for worker in source_workers
+                ],
+                representative_needs=memory.representative_needs(
+                    aggregate.strategy, aggregate.workers
+                ),
+                need_terms=aggregate.need_terms,
+                unique_task_count=aggregate.unique_task_count,
+                occurrences=aggregate.occurrences,
+            )
+            redundant_with = _interface_subsumed_by_existing(
+                interface_responsibility,
                 files,
                 workers,
                 reasoner,
@@ -493,7 +505,8 @@ def _apply_episode_actions(
                     EvolutionEvent(
                         kind="strengthen_route",
                         worker_id=redundant_with,
-                        reason=f"{reason} Redundant in specialty with existing "
+                        reason=f"{reason} Interface responsibility "
+                        f"({interface_responsibility!r}) already fully owned by existing "
                         f"worker {redundant_with}; reinforced instead of birthing a clone.",
                         source_worker_ids=aggregate.workers,
                     )
@@ -506,8 +519,8 @@ def _apply_episode_actions(
                     name=" + ".join(worker.name for worker in source_workers[:3]) + " bridge",
                     root="",
                     responsibilities=[
+                        interface_responsibility,
                         "Permanent bridge born from a recurring successful temporary adaptation.",
-                        reason,
                     ],
                     searchable_terms=terms,
                     files=files,
@@ -775,25 +788,41 @@ def _overlaps_existing_worker(
     return False
 
 
-def _is_redundant_with_existing(
-    candidate_description: str,
+def _interface_subsumed_by_existing(
+    interface_responsibility: str,
     candidate_files: list[str],
     workers: list[WorkerCard],
     reasoner: EvolutionReasoner | None,
 ) -> str | None:
-    """Returns the existing worker's id this birth candidate duplicates in
-    *specialty* (per reasoner.should_merge -- the same question already
-    asked for two existing overlapping workers, just asked here before
-    this candidate is even born), or None. _overlaps_existing_worker above
-    catches file-set duplication; this catches the case that slipped past
-    it on a real qibo run: a candidate with a genuinely distinct file set
-    whose routing_summary still reads as the same specialty as an existing
-    sibling worker's, so the Orchestrator keeps selecting both. Only asks
-    about workers that share at least one file with the candidate -- a
-    cheap structural prefilter before spending an LLM call, same shape as
-    every other file-overlap gate in this module. No reasoner means no
-    LLM-judged veto is possible (same rule the structural-only gates
-    already follow), so this returns None.
+    """Returns the existing worker's id that already fully owns this birth
+    candidate's cross-boundary interface responsibility (per
+    reasoner.assess_interface_subsumption), or None. _overlaps_existing_worker
+    above catches file-set duplication; this catches a distinct file set
+    whose actual FUNCTION already belongs entirely to one existing worker.
+
+    Deliberately NOT should_merge's "is this the same specialty" question:
+    a candidate built by combining source worker A's own responsibilities
+    will always share vocabulary with A, so that question made redundancy
+    near-tautological -- confirmed live on a real qibo run, where every
+    tested birth candidate got vetoed this way, 100% of the vetoes landing
+    on the colony's handful of large package-level "hub" workers (the ones
+    most likely to be a source of any coalition in the first place).
+    assess_interface_subsumption asks the narrower, correct question:
+    does this existing worker, alone, already perform the JOINT function --
+    which a hub worker sharing a topic with one source can still
+    legitimately fail, since the interface itself (not either side of it)
+    is what must already be covered.
+
+    Deliberately checks EVERY worker sharing a file with the candidate,
+    including its own source workers -- per describe_interface_responsibility's
+    own docstring, a source worker CAN legitimately turn out to already own
+    the joint interface on its own; skipping source workers here would just
+    trade one systematic blind spot for another. Only asks about workers
+    that share at least one file with the candidate -- a cheap structural
+    prefilter before spending an LLM call, same shape as every other
+    file-overlap gate in this module. No reasoner means no LLM-judged veto
+    is possible (same rule the structural-only gates already follow), so
+    this returns None.
     """
     if reasoner is None:
         return None
@@ -804,11 +833,10 @@ def _is_redundant_with_existing(
         worker_summary = (
             worker.routing_summary or "; ".join(worker.responsibilities[:2]) or worker.name
         )
-        if reasoner.should_merge(
-            worker_a_id="<candidate>",
-            worker_a_summary=candidate_description,
-            worker_b_id=worker.id,
-            worker_b_summary=worker_summary,
+        if reasoner.assess_interface_subsumption(
+            interface_responsibility=interface_responsibility,
+            existing_worker_id=worker.id,
+            existing_worker_summary=worker_summary,
         ):
             return worker.id
     return None

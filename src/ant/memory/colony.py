@@ -204,6 +204,44 @@ class ColonyMemoryStore:
         aggregates.sort(key=lambda item: item.occurrences, reverse=True)
         return aggregates
 
+    def representative_needs(
+        self, strategy: str, workers: list[str], limit: int = 8
+    ) -> list[str]:
+        """A sample of the actual Need text recorded for this exact
+        (strategy, worker-set) group -- the real signal for what a
+        recurring collaboration is actually ABOUT, as opposed to
+        `aggregate_episodes`' own `need_terms` (a mechanically extracted
+        vocabulary union with no sentence structure). Used by
+        EvolutionReasoner.describe_interface_responsibility to synthesize a
+        birth candidate's own interface_responsibility from real Need
+        text, not a "Combines A + B" label built purely from the two
+        workers' own responsibilities. Most-recent-first (insertion order
+        via row id), deduplicated by exact text (the same need can be
+        re-recorded verbatim across a stuck task's own repeated rounds --
+        see CollaborationEpisode.task_id's own docstring -- and a sample
+        should favor breadth over repeating one task's own wording
+        `limit` times).
+        """
+        with sqlite3.connect(self.db_path) as connection:
+            _create_schema(connection)
+            rows = connection.execute(
+                "select id, need, payload from episodes where strategy = ? order by id desc",
+                (strategy,),
+            ).fetchall()
+        target = tuple(sorted(workers))
+        seen: set[str] = set()
+        needs: list[str] = []
+        for _row_id, need, payload in rows:
+            payload_data = json.loads(payload)
+            row_workers = tuple(sorted(payload_data.get("workers", [])))
+            if row_workers != target or need in seen:
+                continue
+            seen.add(need)
+            needs.append(need)
+            if len(needs) >= limit:
+                break
+        return needs
+
     def distinct_task_count(self) -> int:
         """How many distinct real tasks (record_task_memory calls) have
         ever contributed an episode to this colony's memory -- the same
