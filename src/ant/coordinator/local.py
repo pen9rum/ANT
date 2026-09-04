@@ -550,8 +550,10 @@ class LocalCoordinator:
                 resolution_check_need = _resolution_check_need(
                     node.detail, need_id, recovery, enforce_alignment
                 )
+                resolution_before = node.resolution
+                cumulative_evidence = _cumulative_need_evidence(evidence, need_id)
                 resolution = self.reasoner.check_need_resolution(
-                    need=resolution_check_need, new_evidence=new_evidence, question=question
+                    need=resolution_check_need, new_evidence=cumulative_evidence, question=question
                 )
                 resolution, grounded_update = self._apply_evidence_upgrade_gate(
                     resolution=resolution,
@@ -580,6 +582,9 @@ class LocalCoordinator:
                         coalition_formed=coalition_formed,
                         resolution=resolution.status,
                         evidence_gain=len(new_evidence),
+                        cumulative_evidence_count=len(cumulative_evidence),
+                        resolution_before=resolution_before,
+                        resolution_after=resolution.status,
                         need_reduction=int(resolution.status == "resolved"),
                         observations=observations,
                         candidate_worker_ids=sorted(need_candidates),
@@ -619,8 +624,12 @@ class LocalCoordinator:
                     resolution_check_need = _resolution_check_need(
                         node.detail, need_id, recovery, enforce_alignment
                     )
+                    resolution_before = node.resolution
+                    cumulative_evidence = _cumulative_need_evidence(evidence, need_id)
                     resolution = self.reasoner.check_need_resolution(
-                        need=resolution_check_need, new_evidence=new_evidence, question=question
+                        need=resolution_check_need,
+                        new_evidence=cumulative_evidence,
+                        question=question,
                     )
                     resolution, grounded_update = self._apply_evidence_upgrade_gate(
                         resolution=resolution,
@@ -643,6 +652,9 @@ class LocalCoordinator:
                             resolution=resolution.status,
                             special_tactic="global_fallback",
                             evidence_gain=len(new_evidence),
+                            cumulative_evidence_count=len(cumulative_evidence),
+                            resolution_before=resolution_before,
+                            resolution_after=resolution.status,
                             need_reduction=int(resolution.status == "resolved"),
                             observations=[
                                 WorkerObservation(
@@ -694,6 +706,11 @@ class LocalCoordinator:
                             resolution=node.resolution,
                             special_tactic=tactic,
                             evidence_gain=0,
+                            cumulative_evidence_count=len(
+                                _cumulative_need_evidence(evidence, need_id)
+                            ),
+                            resolution_before=node.resolution,
+                            resolution_after=node.resolution,
                             need_reduction=0,
                         )
                     )
@@ -766,8 +783,10 @@ class LocalCoordinator:
                 resolution_check_need = _resolution_check_need(
                     node.detail, need_id, recovery, enforce_alignment
                 )
+                resolution_before = node.resolution
+                cumulative_evidence = _cumulative_need_evidence(evidence, need_id)
                 resolution = self.reasoner.check_need_resolution(
-                    need=resolution_check_need, new_evidence=new_evidence, question=question
+                    need=resolution_check_need, new_evidence=cumulative_evidence, question=question
                 )
                 resolution, grounded_update = self._apply_evidence_upgrade_gate(
                     resolution=resolution,
@@ -791,6 +810,9 @@ class LocalCoordinator:
                         resolution=resolution.status,
                         special_tactic=tactic,
                         evidence_gain=len(new_evidence),
+                        cumulative_evidence_count=len(cumulative_evidence),
+                        resolution_before=resolution_before,
+                        resolution_after=resolution.status,
                         need_reduction=int(resolution.status == "resolved"),
                         observations=observations,
                     )
@@ -3165,6 +3187,30 @@ def _dedupe_evidence(evidence: list[Evidence]) -> list[Evidence]:
         index_by_key[key] = len(deduped)
         deduped.append(item)
     return deduped
+
+
+def _cumulative_need_evidence(evidence: list[Evidence], need_id: str) -> list[Evidence]:
+    """Every evidence item linked to `need_id` gathered so far this task,
+    deduped -- what check_need_resolution should judge a need's status
+    against (see that method's own docstring for the bug this fixes).
+    Provenance comes from Evidence.need_ids, stamped once at collection
+    time (_run_selected_workers) and never rewritten later, so this
+    correctly accumulates across every round that has touched this
+    need_id so far, not just the round currently executing -- confirmed
+    live via controlled replay on a real qibo trace
+    (b93c31147ace128d/root): evidence gathered across round 0 and round 1
+    was jointly sufficient to resolve the need, but round 1's own new
+    evidence alone was not, and the need stayed unresolved for 5 wasted
+    rounds because the old call only ever saw that round's own new items.
+
+    Deliberately NOT the whole task's global `evidence` pool -- a sibling
+    need's own findings must never count toward THIS need's resolution,
+    which is what keeps this a correctness fix rather than a loosening of
+    the check. `evidence` here is the shared list `ask()`'s round loop
+    already mutates in place, so it already contains this round's own
+    finds by the time this is called.
+    """
+    return _dedupe_evidence([item for item in evidence if need_id in item.need_ids])
 
 
 def _last_coalition_workers(rounds: list[PlanningRound]) -> list[str]:

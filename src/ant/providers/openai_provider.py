@@ -645,11 +645,19 @@ class OpenAIProvider:
         # need_type (data_flow, call_path, behavior_flow, negative_presence,
         # unknown -- the majority) was never auto-closed at all, so it just
         # got re-raised, cosmetically reworded, round after round. This
-        # judges every need_type the same way: did the evidence gathered
-        # *since* this need was raised (not the whole accumulated pool --
-        # that would mark a need "resolved" by evidence a much earlier round
-        # already had and had already failed to resolve it with) actually
-        # satisfy it, partially narrow it down, or leave it no better off.
+        # judges every need_type the same way: does the evidence gathered
+        # for this need actually satisfy it, partially narrow it down, or
+        # leave it no better off.
+        #
+        # `new_evidence` is this need's CUMULATIVE, need-scoped, deduped
+        # pool (see this method's own docstring in providers/base.py), not
+        # just whatever round is currently executing -- confirmed live via
+        # controlled replay that scoping this to "only this round's own new
+        # finds" was itself a bug: two rounds each individually insufficient
+        # but jointly sufficient left a real qibo need "unresolved" for 5
+        # wasted rounds. Nothing here needs a separate staleness guard on
+        # top of that scoping -- an item genuinely linked to this need is
+        # never stale just for having arrived in an earlier round.
         if not new_evidence:
             return NeedResolution(status="unresolved")
         # No count cap on `new_evidence`: resolved/partial/unresolved is
@@ -667,27 +675,27 @@ class OpenAIProvider:
             for index, item in enumerate(new_evidence)
         )
         prompt = (
-            "Judge whether the NEW evidence below actually resolves the "
+            "Judge whether the evidence below actually resolves the "
             "unresolved need, given the original question. Three outcomes:\n"
-            "- resolved: the new evidence directly answers what was missing.\n"
-            "- partial: the new evidence narrows the gap (e.g. rules out one "
+            "- resolved: the evidence directly answers what was missing.\n"
+            "- partial: the evidence narrows the gap (e.g. rules out one "
             "possibility, points at the right file/module without the exact "
             "symbol, or answers half of a two-part need) but does not fully "
             "answer it -- in this case also produce a refined need that is "
             "MORE SPECIFIC than the original given what was just learned, not "
             "a restatement of it.\n"
-            "- unresolved: the new evidence does not meaningfully advance this "
+            "- unresolved: the evidence does not meaningfully advance this "
             "need at all.\n"
             f"Original question: {question}\n"
             f"Unresolved need: {need.missing or need.description} "
             f"(need_type={need.need_type}, scope={need.scope})\n"
-            f"New evidence since this need was raised:\n{evidence_text}\n"
+            f"All evidence gathered so far for this need:\n{evidence_text}\n"
             "Return JSON with key status (one of resolved, partial, "
             "unresolved) and, only when status is partial, key refined_need: "
             "an object with description, missing, need_type, scope, "
             "suggested_terms (list), and suggested_territories (list), "
             "using the same conventions as the original need but sharpened by "
-            "what the new evidence showed."
+            "what the evidence showed."
         )
         result = self.responses_json(prompt, max_output_tokens=512)
         data = _loads_json_object(result.text)

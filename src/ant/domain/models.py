@@ -344,7 +344,24 @@ class NodeExecutionTrace(BaseModel):
     coalition_formed: bool = False
     resolution: str = "unresolved"  # this node's resolution status after this execution
     special_tactic: str = ""  # "" | "temporary_bridge" | "global_fallback"
+    # This round's own new finds for this need -- doubles as
+    # new_evidence_count; kept under this older name since it is already
+    # read throughout evolution.py/colony.py (episode memory, aggregation,
+    # the SQL schema itself) with this exact meaning.
     evidence_gain: int = 0
+    # Size of the cumulative, need-scoped, deduped evidence pool
+    # check_need_resolution actually judged this execution against (see
+    # LocalCoordinator._cumulative_need_evidence) -- always >= evidence_gain,
+    # since it includes every earlier round's own finds for this same
+    # need_id too, not just this round's.
+    cumulative_evidence_count: int = 0
+    # This node's resolution status immediately before this execution's
+    # own check_need_resolution call, and the verdict it produced --
+    # together let an audit see a status FLIP (e.g. unresolved ->
+    # resolved) directly from the trace, without having to diff
+    # consecutive rounds' `resolution` fields by hand.
+    resolution_before: str = "unresolved"
+    resolution_after: str = "unresolved"
     need_reduction: int = 0  # 0 or 1, direct only -- see docstring above
     observations: list[WorkerObservation] = Field(default_factory=list)
     # This need's own retrieval-ranked candidate set for the round it was

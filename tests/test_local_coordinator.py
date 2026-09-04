@@ -15,6 +15,7 @@ from ant.coordinator.local import (
     _close_resolved_needs,
     _cluster_pending_proposals,
     _collect_proposals,
+    _cumulative_need_evidence,
     _dedupe_evidence,
     _expand_cluster_decisions,
     _matches_term,
@@ -4383,3 +4384,257 @@ def test_an_assignment_to_a_same_round_proposed_need_id_is_filtered_not_executed
     # only the bogus same-round self-assignment was filtered.
     assert "root" in executed_need_ids
     assert "phantom-child" not in executed_need_ids
+
+
+def test_cumulative_need_evidence_scopes_by_need_id_and_dedupes() -> None:
+    # Unit test for the helper itself: check_need_resolution's correctness
+    # fix (see its docstring in providers/base.py) depends entirely on this
+    # returning the right set -- every item genuinely linked to `need_id`,
+    # nothing linked only to a sibling need, and no inflation from a chunk
+    # re-surfaced more than once.
+    for_x = Evidence(path="x.py", line_start=1, line_end=1, quote="q", reason="r", need_ids=["x"])
+    for_x_again = Evidence(
+        path="x.py", line_start=1, line_end=1, quote="q", reason="r", need_ids=["x"]
+    )
+    for_y = Evidence(path="y.py", line_start=1, line_end=1, quote="q", reason="r", need_ids=["y"])
+    shared = Evidence(
+        path="z.py", line_start=1, line_end=1, quote="q", reason="r", need_ids=["x", "y"]
+    )
+
+    result = _cumulative_need_evidence([for_x, for_x_again, for_y, shared], "x")
+
+    assert {item.path for item in result} == {"x.py", "z.py"}
+
+
+class _AssignsAlphaThenBetaReasoner(_PassthroughLookupsReasoner):
+    """Regression fixture for the check_need_resolution scoping bug
+    (controlled replay confirmed on a real qibo trace,
+    b93c31147ace128d/root): round 0 assigns only worker-a (finds evidence
+    A alone), round 1 assigns only worker-b (finds evidence B alone) for
+    the SAME need_id. This stub only resolves once it has been shown 2+
+    evidence items, so A alone or B alone is deliberately insufficient --
+    only their union is. Records the length of `new_evidence` it was
+    actually handed on each call so the test can assert round 1 saw the
+    cumulative pool (2), not just its own round's new find (1).
+    """
+
+    def __init__(self) -> None:
+        self.plan_round_calls = 0
+        self.new_evidence_counts: list[int] = []
+
+    def observe(self, *, question, worker_id, territory_id, evidence):
+        return WorkerObservation(worker_id=worker_id, territory_id=territory_id)
+
+    def check_need_resolution(self, *, need, new_evidence, question):
+        self.new_evidence_counts.append(len(new_evidence))
+        if len(new_evidence) >= 2:
+            return NeedResolution(status="resolved")
+        return NeedResolution(status="unresolved")
+
+    def verify_evidence_upgrade(self, *, need, epistemic_state, new_evidence, question):
+        return EvidenceUpgradeVerdict(approved=False)
+
+    def plan_round(
+        self,
+        *,
+        question,
+        graph,
+        resolution_results,
+        evidence,
+        workers,
+        memory_hints,
+        frontier,
+        incomplete_parents,
+        cross_repo_experience,
+        validation_feedback="",
+        repair_guidance="",
+        stuck_tried_workers=None,
+        candidate_probes=None,
+    ):
+        worker_id = "worker-a" if self.plan_round_calls == 0 else "worker-b"
+        self.plan_round_calls += 1
+        return RoundPlan(assignments={need_id: [worker_id] for need_id in frontier.ready})
+
+
+def _widget_repo_fixture(tmp_path: Path) -> tuple[WorkerCard, WorkerCard]:
+    (tmp_path / "a").mkdir()
+    (tmp_path / "a" / "alpha.py").write_text(
+        "def handle_widget_alpha():\n    return True\n", encoding="utf-8"
+    )
+    (tmp_path / "b").mkdir()
+    (tmp_path / "b" / "beta.py").write_text(
+        "def handle_widget_beta():\n    return True\n", encoding="utf-8"
+    )
+    worker_a = WorkerCard(id="worker-a", territory_id="a", name="a", root="a", files=["a/alpha.py"])
+    worker_b = WorkerCard(id="worker-b", territory_id="b", name="b", root="b", files=["b/beta.py"])
+    return worker_a, worker_b
+
+
+def test_check_need_resolution_sees_cumulative_evidence_across_rounds_not_just_this_rounds_own(
+    tmp_path: Path,
+) -> None:
+    # Direct end-to-end regression test for the scoping bug: round 0's own
+    # new find (worker-a's) is, alone, insufficient; round 1's own new find
+    # (worker-b's) is, alone, also insufficient -- only their union resolves
+    # the need. Before the fix, round 1 would have handed check_need_resolution
+    # only its own 1 new item and the need would have stayed "unresolved"
+    # forever, exactly like the real qibo b93c31147ace128d/root case.
+    worker_a, worker_b = _widget_repo_fixture(tmp_path)
+    reasoner = _AssignsAlphaThenBetaReasoner()
+
+    state = LocalCoordinator(tmp_path, [worker_a, worker_b], reasoner=reasoner).ask(
+        "Where is the widget handled?", max_rounds=2
+    )
+
+    assert reasoner.new_evidence_counts == [1, 2]
+    assert state.final_need_graph["root"].resolution == "resolved"
+
+
+class _AlwaysUnresolvedTwoRoundReasoner(_PassthroughLookupsReasoner):
+    """Same two-worker/two-round shape as _AssignsAlphaThenBetaReasoner, but
+    never resolves -- proves the cumulative-evidence fix only WIDENS what
+    check_need_resolution sees, it never manufactures a positive verdict on
+    its own: a need the reasoner genuinely judges insufficient (like
+    6656/obs-0 and 9472b739/analyze_state_data_transfer in the real qibo
+    audit -- both stayed unresolved even against full cumulative evidence)
+    must stay unresolved, cumulative evidence or not.
+    """
+
+    def __init__(self) -> None:
+        self.plan_round_calls = 0
+
+    def observe(self, *, question, worker_id, territory_id, evidence):
+        return WorkerObservation(worker_id=worker_id, territory_id=territory_id)
+
+    def check_need_resolution(self, *, need, new_evidence, question):
+        return NeedResolution(status="unresolved")
+
+    def verify_evidence_upgrade(self, *, need, epistemic_state, new_evidence, question):
+        return EvidenceUpgradeVerdict(approved=False)
+
+    def plan_round(
+        self,
+        *,
+        question,
+        graph,
+        resolution_results,
+        evidence,
+        workers,
+        memory_hints,
+        frontier,
+        incomplete_parents,
+        cross_repo_experience,
+        validation_feedback="",
+        repair_guidance="",
+        stuck_tried_workers=None,
+        candidate_probes=None,
+    ):
+        worker_id = "worker-a" if self.plan_round_calls == 0 else "worker-b"
+        self.plan_round_calls += 1
+        return RoundPlan(assignments={need_id: [worker_id] for need_id in frontier.ready})
+
+
+def test_check_need_resolution_fix_does_not_force_a_resolution_the_reasoner_never_gave(
+    tmp_path: Path,
+) -> None:
+    worker_a, worker_b = _widget_repo_fixture(tmp_path)
+    reasoner = _AlwaysUnresolvedTwoRoundReasoner()
+
+    state = LocalCoordinator(tmp_path, [worker_a, worker_b], reasoner=reasoner).ask(
+        "Where is the widget handled?", max_rounds=2
+    )
+
+    assert state.final_need_graph["root"].resolution == "unresolved"
+    # The new telemetry fields are populated and honestly reflect that the
+    # cumulative pool DID grow to 2 by round 1, even though the verdict
+    # correctly never flipped -- proving the fix widened visibility without
+    # touching the reasoner's own judgment.
+    round1_trace = state.rounds[1].node_executions[0]
+    assert round1_trace.cumulative_evidence_count == 2
+    assert round1_trace.resolution_before == "unresolved"
+    assert round1_trace.resolution_after == "unresolved"
+
+
+class _AssignsBothSiblingsInOneRoundReasoner(_PassthroughLookupsReasoner):
+    """Two independent, sibling leaf needs (no relation to each other),
+    assigned to two different workers in the SAME round. Records each
+    call's own evidence paths keyed by which need it was judging, so the
+    test can assert cross-contamination never happens even though both
+    needs' evidence lands in the shared pool at the same time.
+    """
+
+    def __init__(self) -> None:
+        self.evidence_paths_by_description: dict[str, list[str]] = {}
+
+    def observe(self, *, question, worker_id, territory_id, evidence):
+        return WorkerObservation(worker_id=worker_id, territory_id=territory_id)
+
+    def check_need_resolution(self, *, need, new_evidence, question):
+        self.evidence_paths_by_description[need.description] = [
+            item.path for item in new_evidence
+        ]
+        return NeedResolution(status="unresolved")
+
+    def verify_evidence_upgrade(self, *, need, epistemic_state, new_evidence, question):
+        return EvidenceUpgradeVerdict(approved=False)
+
+    def plan_round(
+        self,
+        *,
+        question,
+        graph,
+        resolution_results,
+        evidence,
+        workers,
+        memory_hints,
+        frontier,
+        incomplete_parents,
+        cross_repo_experience,
+        validation_feedback="",
+        repair_guidance="",
+        stuck_tried_workers=None,
+        candidate_probes=None,
+    ):
+        return RoundPlan(
+            assignments={
+                "need-x": ["worker-x"],
+                "need-y": ["worker-y"],
+            }
+        )
+
+
+def test_cumulative_need_evidence_never_leaks_a_sibling_needs_evidence(tmp_path: Path) -> None:
+    (tmp_path / "x").mkdir()
+    (tmp_path / "x" / "x.py").write_text(
+        "def handle_widget_x():\n    return True\n", encoding="utf-8"
+    )
+    (tmp_path / "y").mkdir()
+    (tmp_path / "y" / "y.py").write_text(
+        "def handle_widget_y():\n    return True\n", encoding="utf-8"
+    )
+    worker_x = WorkerCard(id="worker-x", territory_id="x", name="x", root="x", files=["x/x.py"])
+    worker_y = WorkerCard(id="worker-y", territory_id="y", name="y", root="y", files=["y/y.py"])
+    initial_graph = NeedGraph(
+        nodes={
+            "need-x": NeedNode(
+                need_id="need-x",
+                need="find widget x",
+                detail=UnresolvedNeed(description="find widget x"),
+            ),
+            "need-y": NeedNode(
+                need_id="need-y",
+                need="find widget y",
+                detail=UnresolvedNeed(description="find widget y"),
+            ),
+        }
+    )
+    reasoner = _AssignsBothSiblingsInOneRoundReasoner()
+
+    LocalCoordinator(tmp_path, [worker_x, worker_y], reasoner=reasoner).ask(
+        "Where are the widgets handled?", max_rounds=1, initial_graph=initial_graph
+    )
+
+    x_paths = reasoner.evidence_paths_by_description["find widget x"]
+    y_paths = reasoner.evidence_paths_by_description["find widget y"]
+    assert x_paths and all(path == "x/x.py" for path in x_paths)
+    assert y_paths and all(path == "y/y.py" for path in y_paths)

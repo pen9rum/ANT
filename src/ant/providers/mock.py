@@ -152,7 +152,9 @@ class MockLLMProvider:
         # means this new check never additionally closes/refines a need on
         # its own, so every existing test's assumptions about which needs
         # persist across rounds stay exactly as they were before this
-        # method existed.
+        # method existed. `new_evidence` is whatever the caller passes (the
+        # cumulative, need-scoped pool -- see the real implementation's own
+        # docstring); this mock ignores its contents either way.
         return NeedResolution(status="unresolved")
 
     def verify_evidence_upgrade(

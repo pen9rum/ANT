@@ -44,13 +44,33 @@ class WorkerReasoner(Protocol):
         question: str,
     ) -> NeedResolution:
         """Generalizes the old 3-need_type heuristic closure check to every
-        need_type via real judgment: does the evidence gathered *since* this
-        need was raised actually satisfy it (resolved), make real headway
-        without fully closing it (partial -- refine the need instead of
-        re-raising it verbatim), or leave it no better off (unresolved)?
-        `new_evidence` is this round's own additions, not the full
-        accumulated pool, so the verdict reflects what just happened, not
-        what an earlier round already established.
+        need_type via real judgment: does the evidence gathered for this
+        need actually satisfy it (resolved), make real headway without
+        fully closing it (partial -- refine the need instead of re-raising
+        it verbatim), or leave it no better off (unresolved)?
+
+        `new_evidence` is the CUMULATIVE, need-scoped, deduped evidence
+        pool for this exact need_id -- everything linked to it (via
+        Evidence.need_ids) across every round that has touched it so far,
+        not just this round's own new finds (see
+        LocalCoordinator._cumulative_need_evidence). It is NOT the whole
+        task's global evidence pool either -- a sibling need's own
+        findings never count toward this one.
+
+        This was previously scoped to "this round's own new additions
+        only", on the theory that resolving a need against evidence "a
+        much earlier round already had and had already failed to resolve
+        it with" was double-counting. Confirmed live via controlled
+        replay on a real qibo trace (b93c31147ace128d/root) that this
+        reasoning was wrong in practice: two rounds each gathered evidence
+        that was individually insufficient but jointly sufficient, and the
+        need stayed "unresolved" for 5 wasted rounds because no single
+        round's own slice was ever self-sufficient. The anti-staleness
+        protection this call needs comes from need-scoping (this need's
+        own evidence only) and deduplication (a re-found chunk doesn't
+        inflate the pool), not from a time window -- historical evidence
+        genuinely linked to this need is not stale; only evidence that was
+        never actually about this need is.
         """
         ...
 
