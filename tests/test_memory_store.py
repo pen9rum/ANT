@@ -113,6 +113,101 @@ def test_colony_memory_returns_matching_routes(tmp_path: Path) -> None:
     assert routes[0].worker_ids == ["worker-backends"]
 
 
+def test_save_route_consolidates_equivalent_routes_onto_one_row(tmp_path: Path) -> None:
+    # Phase 6 of the multi-generation organizational evolution redesign:
+    # same worker_ids set, same need_terms set, same need_type/scope ->
+    # one row accumulating occurrence_count, not a fresh row every call.
+    # Confirmed live on qibo: total_route_count grew 49->80->117 across 3
+    # generations from exactly this kind of raw re-insertion.
+    memory = ColonyMemoryStore(tmp_path)
+    for _ in range(3):
+        memory.save_route(
+            MemoryRoute(need_terms=["draw", "circuit"], worker_ids=["worker-models"], weight=2.0)
+        )
+
+    routes = memory.all_routes()
+    assert len(routes) == 1
+    assert routes[0].occurrence_count == 3
+
+
+def test_save_route_consolidation_is_order_independent(tmp_path: Path) -> None:
+    # Same underlying route, need_terms/worker_ids listed in a different
+    # order each call -- must still consolidate onto the same row (a
+    # caller has no reason to guarantee stable ordering across calls), and
+    # must NOT silently reorder what is actually stored for either field
+    # (several consumers, e.g. embedding text construction, build directly
+    # from a route's own need_terms order).
+    memory = ColonyMemoryStore(tmp_path)
+    memory.save_route(
+        MemoryRoute(
+            need_terms=["draw", "circuit"], worker_ids=["worker-a", "worker-b"], weight=2.0
+        )
+    )
+    memory.save_route(
+        MemoryRoute(
+            need_terms=["circuit", "draw"], worker_ids=["worker-b", "worker-a"], weight=2.0
+        )
+    )
+
+    routes = memory.all_routes()
+    assert len(routes) == 1
+    assert routes[0].occurrence_count == 2
+    assert routes[0].need_terms == ["draw", "circuit"]
+    assert routes[0].worker_ids == ["worker-a", "worker-b"]
+
+
+def test_save_route_keeps_distinct_responsibilities_separate(tmp_path: Path) -> None:
+    memory = ColonyMemoryStore(tmp_path)
+    memory.save_route(
+        MemoryRoute(need_terms=["draw", "circuit"], worker_ids=["worker-models"], weight=2.0)
+    )
+    memory.save_route(
+        MemoryRoute(need_terms=["backend", "execution"], worker_ids=["worker-models"], weight=2.0)
+    )
+    memory.save_route(
+        MemoryRoute(need_terms=["draw", "circuit"], worker_ids=["worker-gates"], weight=2.0)
+    )
+
+    routes = memory.all_routes()
+    assert len(routes) == 3
+    assert all(route.occurrence_count == 1 for route in routes)
+
+
+def test_save_route_high_quality_sticks_once_demonstrated(tmp_path: Path) -> None:
+    memory = ColonyMemoryStore(tmp_path)
+    memory.save_route(
+        MemoryRoute(
+            need_terms=["draw"], worker_ids=["worker-models"], weight=2.0, is_high_quality=True
+        )
+    )
+    memory.save_route(
+        MemoryRoute(
+            need_terms=["draw"], worker_ids=["worker-models"], weight=2.0, is_high_quality=False
+        )
+    )
+
+    routes = memory.all_routes()
+    assert len(routes) == 1
+    assert routes[0].is_high_quality is True
+    assert routes[0].occurrence_count == 2
+
+
+def test_route_stats_tracks_raw_proposals_separately_from_consolidated_count(
+    tmp_path: Path,
+) -> None:
+    memory = ColonyMemoryStore(tmp_path)
+    for _ in range(5):
+        memory.save_route(
+            MemoryRoute(need_terms=["draw", "circuit"], worker_ids=["worker-models"], weight=2.0)
+        )
+    memory.save_route(
+        MemoryRoute(need_terms=["backend"], worker_ids=["worker-backends"], weight=2.0)
+    )
+
+    stats = memory.route_stats()
+    assert stats == {"raw_route_proposals": 6, "consolidated_active_route_count": 2}
+
+
 def test_mark_stale_hides_route_until_revalidated(tmp_path: Path) -> None:
     memory = ColonyMemoryStore(tmp_path)
     memory.save_route(

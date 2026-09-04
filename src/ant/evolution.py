@@ -772,8 +772,15 @@ def _specialize_overloaded_workers(
     result: list[WorkerCard] = []
     for worker in workers:
         worker_routes = routes_by_worker.get(worker.id, [])
+        # sum(occurrence_count), not len(worker_routes): route consolidation
+        # (Phase 6) means the same recurring pattern accumulates onto one
+        # row's occurrence_count instead of growing row count -- every
+        # threshold here must weigh by occurrence_count or consolidation
+        # would silently starve this gate no matter how much real
+        # recurrence accumulated.
+        total_route_occurrences = sum(route.occurrence_count for route in worker_routes)
         if (
-            len(worker_routes) < min_routes
+            total_route_occurrences < min_routes
             or _is_worker_healthy(worker.id, routes_by_worker, min_health_routes, healthy_ratio)
             or _mostly_negative_presence(worker_routes, negative_presence_gate_ratio)
         ):
@@ -813,7 +820,10 @@ def _specialize_overloaded_workers(
         for route in worker_routes:
             group = _assign_route_to_group(route, groups)
             if group:
-                group_counts[group] += 1
+                # occurrence_count, not +1 -- see _is_worker_healthy's own
+                # docstring on why every threshold here must weigh by it
+                # (route consolidation, Phase 6).
+                group_counts[group] += route.occurrence_count
                 group_terms[group].update(route.need_terms[:6])
         qualifying_groups = {
             group for group, count in group_counts.items() if count >= min_group_routes
@@ -952,18 +962,26 @@ def _is_worker_healthy(
     healthy_ratio: float,
 ) -> bool:
     """A worker counts as "already working well enough to leave alone" once
-    it has at least `min_routes` recorded routes and at least
+    it has at least `min_routes` recorded route OCCURRENCES and at least
     `healthy_ratio` of them are flagged is_high_quality. With fewer than
-    `min_routes` routes there isn't enough evidence to call it either way,
-    so this returns False (not healthy, not exempt) rather than True -- a
-    worker with no track record yet should not be shielded from evolution
-    just because it also hasn't failed yet.
+    `min_routes` occurrences there isn't enough evidence to call it either
+    way, so this returns False (not healthy, not exempt) rather than True
+    -- a worker with no track record yet should not be shielded from
+    evolution just because it also hasn't failed yet.
+
+    Counts occurrence_count, not row count (see MemoryRoute.occurrence_count
+    and ColonyMemoryStore.save_route's own docstring -- route consolidation
+    means a worker recruited for the same recurring pattern 10 times now
+    stores as ONE row with occurrence_count=10, not 10 rows; every
+    threshold here must weigh by occurrence_count or consolidation would
+    silently starve every route-count-based gate in this module).
     """
     routes = routes_by_worker.get(worker_id, [])
-    if len(routes) < min_routes:
+    total = sum(route.occurrence_count for route in routes)
+    if total < min_routes:
         return False
-    healthy = sum(1 for route in routes if route.is_high_quality)
-    return healthy / len(routes) >= healthy_ratio
+    healthy = sum(route.occurrence_count for route in routes if route.is_high_quality)
+    return healthy / total >= healthy_ratio
 
 
 def _mostly_negative_presence(routes: list[MemoryRoute], gate_ratio: float) -> bool:
@@ -979,13 +997,18 @@ def _mostly_negative_presence(routes: list[MemoryRoute], gate_ratio: float) -> b
     Only routes with a known need_type count (the task-level aggregate
     route, and any route predating this field, carry ""); with none, there
     is nothing to judge, so this returns False rather than gating on an
-    empty sample.
+    empty sample. Weighs by occurrence_count, not row count -- see
+    _is_worker_healthy's own docstring on why every threshold here must
+    (route consolidation, Phase 6).
     """
     typed = [route for route in routes if route.need_type]
     if not typed:
         return False
-    negative = sum(1 for route in typed if route.need_type == "negative_presence")
-    return negative / len(typed) >= gate_ratio
+    total = sum(route.occurrence_count for route in typed)
+    negative = sum(
+        route.occurrence_count for route in typed if route.need_type == "negative_presence"
+    )
+    return negative / total >= gate_ratio
 
 
 def _subdirectory_groups(worker: WorkerCard) -> dict[str, list[str]]:
@@ -1074,13 +1097,23 @@ def _semantic_groups(
     routes worth clustering, or fewer than two clusters clear both the
     route-count and file-support bars -- the same "no split" signal
     _subdirectory_groups gives by returning a dict of length < 2.
+
+    Route-count bars here are weighed by occurrence_count, not row count
+    -- see _is_worker_healthy's own docstring on why (route consolidation,
+    Phase 6: a big recurring cluster can now be a single row with a high
+    occurrence_count instead of many rows).
     """
     embedder = get_shared_embedder()
-    if embedder is None or len(worker_routes) < min_group_routes * 2:
+    total_route_occurrences = sum(route.occurrence_count for route in worker_routes)
+    if embedder is None or total_route_occurrences < min_group_routes * 2:
         return {}
 
     clusters = _cluster_routes_by_need_terms(worker_routes, embedder, similarity_threshold)
-    qualifying = [cluster for cluster in clusters if len(cluster) >= min_group_routes]
+    qualifying = [
+        cluster
+        for cluster in clusters
+        if sum(route.occurrence_count for route in cluster) >= min_group_routes
+    ]
     if len(qualifying) < 2:
         return {}
 
@@ -1096,7 +1129,14 @@ def _semantic_groups(
             hit_paths |= {
                 evidence.path for evidence in tools.dense_search(query, worker.files, limit=6)
             }
-            support.update(hit_paths)
+            # Weighted by occurrence_count, not a flat +1 per row -- see
+            # _is_worker_healthy's own docstring on why (route
+            # consolidation, Phase 6: a route this worker was actually
+            # recruited for N times is N routes' worth of support for
+            # whatever files its own query retrieves, even though it is
+            # now one row, not N).
+            for path in hit_paths:
+                support[path] += route.occurrence_count
         supported_files = sorted(
             path for path, count in support.items() if count >= min_file_support
         )

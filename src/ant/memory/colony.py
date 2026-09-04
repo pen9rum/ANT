@@ -106,6 +106,18 @@ class MemoryRoute(BaseModel):
     # generic "low quality" signal.
     need_type: str = ""
     scope: str = ""
+    # Route consolidation (Phase 6 of the multi-generation organizational
+    # evolution redesign): how many times save_route() has been asked to
+    # save a route equivalent to this one (same worker_ids set, same
+    # need_terms set, same need_type/scope) -- accumulated onto ONE row
+    # instead of each call inserting a fresh duplicate. Confirmed live on
+    # qibo: total_route_count grew 49->80->117 across 3 generations purely
+    # from raw re-insertion of what was very often the SAME recurring
+    # (worker-set, need-vocabulary) pattern -- this field lets "how much
+    # confidence/support does this route have" grow without route
+    # cardinality growing with it. 1 on first save (this call IS the first
+    # occurrence).
+    occurrence_count: int = 1
 
 
 class ColonyMemoryStore:
@@ -278,11 +290,77 @@ class ColonyMemoryStore:
         return [(row[0].split(","), int(row[1])) for row in rows if row[0]]
 
     def save_route(self, route: MemoryRoute) -> None:
+        """Consolidates onto an existing equivalent route instead of always
+        inserting a fresh row (Phase 6 of the multi-generation
+        organizational evolution redesign): "equivalent" means the same
+        worker_ids set, the same need_terms set, and the same
+        need_type/scope -- a conservative, exact-match starting point (a
+        future looser "similar enough" pass over near-duplicate vocabulary
+        is a natural follow-up, not attempted here). Confirmed live on
+        qibo: total_route_count grew 49->80->117 across 3 generations
+        purely from raw re-insertion of what was very often the SAME
+        recurring pattern -- this lets a route's own accumulated confidence
+        (occurrence_count) grow without route cardinality growing with it.
+
+        A stale route is never consolidated onto -- a fresh row is
+        inserted instead, so a route invalidated by mark_stale (its owning
+        worker's territory changed) never silently absorbs a new,
+        potentially-no-longer-accurate occurrence under its old identity.
+
+        Deliberately does NOT reorder/normalize what actually gets stored
+        for `route.need_terms`/`route.worker_ids` on a fresh insert (only
+        the MATCH decision is order-independent, via set comparison) --
+        several callers build embedding/display text directly from a
+        route's own need_terms order (e.g. _cluster_routes_by_need_terms),
+        and silently resorting it here would change what they see with no
+        relation to consolidation's own actual purpose.
+        """
+        worker_id_set = set(route.worker_ids)
+        need_term_set = set(route.need_terms)
         with sqlite3.connect(self.db_path) as connection:
             _create_schema(connection)
+            candidates = connection.execute(
+                "select id, need_terms, worker_ids, weight, is_high_quality, occurrence_count "
+                "from routes where stale = 0 and need_type = ? and scope = ?",
+                (route.need_type, route.scope),
+            ).fetchall()
+            match = next(
+                (
+                    row
+                    for row in candidates
+                    if set(json.loads(row[2])) == worker_id_set
+                    and set(json.loads(row[1])) == need_term_set
+                ),
+                None,
+            )
+            if match is not None:
+                (
+                    row_id,
+                    _need_terms_json,
+                    _worker_ids_json,
+                    existing_weight,
+                    existing_high_quality,
+                    existing_count,
+                ) = match
+                connection.execute(
+                    "update routes set weight = ?, is_high_quality = ?, occurrence_count = ? "
+                    "where id = ?",
+                    (
+                        max(existing_weight, route.weight),
+                        # Once high-quality, always high-quality: a route
+                        # that has ever demonstrably produced a good answer
+                        # stays trusted as a routing precedent even if a
+                        # later occurrence of the exact same pattern
+                        # didn't score as well that particular time.
+                        int(bool(existing_high_quality) or route.is_high_quality),
+                        existing_count + 1,
+                        row_id,
+                    ),
+                )
+                return
             connection.execute(
                 "insert into routes(need_terms, worker_ids, weight, is_high_quality, "
-                "need_type, scope) values (?, ?, ?, ?, ?, ?)",
+                "need_type, scope, occurrence_count) values (?, ?, ?, ?, ?, ?, ?)",
                 (
                     json.dumps(route.need_terms),
                     json.dumps(route.worker_ids),
@@ -290,6 +368,7 @@ class ColonyMemoryStore:
                     int(route.is_high_quality),
                     route.need_type,
                     route.scope,
+                    route.occurrence_count,
                 ),
             )
 
@@ -300,7 +379,8 @@ class ColonyMemoryStore:
         # sub-topic", not "did the final answer score well" -- see
         # MemoryRoute.is_high_quality.
         query = (
-            "select need_terms, worker_ids, weight, is_high_quality, need_type, scope from routes"
+            "select need_terms, worker_ids, weight, is_high_quality, need_type, scope, "
+            "occurrence_count from routes"
         )
         if not include_stale:
             query += " where stale = 0"
@@ -315,9 +395,33 @@ class ColonyMemoryStore:
                 is_high_quality=bool(is_high_quality),
                 need_type=need_type or "",
                 scope=scope or "",
+                occurrence_count=int(occurrence_count),
             )
-            for need_terms_json, worker_ids_json, weight, is_high_quality, need_type, scope in rows
+            for (
+                need_terms_json,
+                worker_ids_json,
+                weight,
+                is_high_quality,
+                need_type,
+                scope,
+                occurrence_count,
+            ) in rows
         ]
+
+    def route_stats(self, include_stale: bool = False) -> dict[str, int]:
+        """Track both -- raw route proposals (what route count WOULD be
+        without consolidation, i.e. the sum of every occurrence_count) and
+        consolidated_active_route_count (the actual row count, what
+        evolve_workers/routing see day to day) -- so the effect of
+        consolidation (Phase 6) is directly auditable per generation
+        instead of only inferable from watching total_route_count stop
+        growing.
+        """
+        routes = self.all_routes(include_stale=include_stale)
+        return {
+            "raw_route_proposals": sum(route.occurrence_count for route in routes),
+            "consolidated_active_route_count": len(routes),
+        }
 
     def matching_routes(self, terms: list[str], limit: int = 5) -> list[MemoryRoute]:
         # Filtered to is_high_quality: this is the accessor the query-time
@@ -676,6 +780,10 @@ def _create_schema(connection: sqlite3.Connection) -> None:
     # no single need_type/scope -- only the new per-need routes below do.
     _ensure_column(connection, "routes", "need_type", "text not null default ''")
     _ensure_column(connection, "routes", "scope", "text not null default ''")
+    # Default 1: every route saved before this column existed was, by
+    # construction, its own first (and, since consolidation didn't exist
+    # yet, only) occurrence.
+    _ensure_column(connection, "routes", "occurrence_count", "integer not null default 1")
     _ensure_column(connection, "stale_memory", "worker_id", "text")
 
 

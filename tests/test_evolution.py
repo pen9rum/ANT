@@ -321,9 +321,12 @@ def test_evolve_workers_specializes_worker_overloaded_with_diverse_needs(
     assert auth_worker.lifecycle_state == "probationary"
 
     # Non-destructive overlay (Phase 3): worker-mixed was never removed, so
-    # its own existing routes were never staled -- all 4 (2 auth + 2
-    # billing) are still live (all_routes excludes stale rows by default).
-    assert len(memory.all_routes()) == 4
+    # its own existing routes were never staled -- all 4 occurrences (2
+    # auth + 2 billing, consolidated onto 2 rows -- Phase 6) are still
+    # live (all_routes excludes stale rows by default).
+    live_routes = memory.all_routes()
+    assert len(live_routes) == 2
+    assert sum(route.occurrence_count for route in live_routes) == 4
 
 
 def test_evolve_workers_generates_real_child_cards_when_repo_root_is_supplied(
