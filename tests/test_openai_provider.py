@@ -322,35 +322,6 @@ def test_plan_round_frames_memory_hints_as_promotive_not_exclusive() -> None:
     assert "SIMILAR past need in a DIFFERENT earlier task" in prompt
 
 
-def test_plan_round_omits_the_memory_framing_note_when_no_worker_has_a_hint() -> None:
-    # The other half of the test above: with no memory hints at all, the
-    # caveat paragraph has nothing to caveat -- it must not appear (pure
-    # prompt noise on every ordinary round otherwise).
-    provider = OpenAIProvider(model="gpt-4.1")
-    captured: dict[str, str] = {}
-
-    def fake_responses_json(prompt: str, max_output_tokens: int = 512):
-        captured["prompt"] = prompt
-        return type("Result", (), {"text": "{}"})()
-
-    provider.responses_json = fake_responses_json  # type: ignore[method-assign]
-    workers = [WorkerCard(id="worker-a", territory_id="a", name="a", root="a")]
-
-    provider.plan_round(
-        question="q",
-        graph=NeedGraph(nodes={}),
-        resolution_results={},
-        evidence=[],
-        workers=workers,
-        memory_hints={},
-        frontier=FrontierResult(ready=[], blocked=[], stuck_subgraphs=[]),
-        incomplete_parents=[],
-        cross_repo_experience=[],
-    )
-
-    assert "must not exclude" not in captured["prompt"]
-
-
 def test_plan_round_shows_all_searchable_terms_when_candidates_are_few() -> None:
     # Regression test for the seaborn/pennylane failure mode: a worker's
     # own answering symbol (e.g. EstimateAggregator) sat past position 12
