@@ -264,6 +264,12 @@ def evolve_workers(
     else:
         _tel("SKIPPED _apply_episode_actions: reasoner is None")
 
+    workers, promotion_events = _promote_probationary_workers(
+        workers, routes_by_worker, min_routes_for_health_check, healthy_route_ratio
+    )
+    events.extend(promotion_events)
+    _tel("AFTER promote: promotion_events=", [e.model_dump() for e in promotion_events])
+
     territories = [
         Territory(
             id=worker.territory_id,
@@ -982,6 +988,57 @@ def _is_worker_healthy(
         return False
     healthy = sum(route.occurrence_count for route in routes if route.is_high_quality)
     return healthy / total >= healthy_ratio
+
+
+def _promote_probationary_workers(
+    workers: list[WorkerCard],
+    routes_by_worker: dict[str, list[MemoryRoute]],
+    min_health_routes: int,
+    healthy_ratio: float,
+) -> tuple[list[WorkerCard], list[EvolutionEvent]]:
+    """Structural lifecycle (Phase 7): a worker born/specialized/merged this
+    cycle or an earlier one starts "probationary" (see WorkerCard.
+    lifecycle_state's own docstring) and is evaluated using internal
+    signals only -- never a benchmark judge score, which this function has
+    no access to and evolve_workers is never given. Reuses the exact same
+    bar _is_worker_healthy already applies to every base worker (enough
+    recorded route occurrences, mostly is_high_quality) rather than
+    inventing a second, structural-worker-specific threshold: "has this
+    worker actually been recruited enough, and done well when it was" is
+    the same question for a base worker and a structural one, and a
+    worker's own routes already carry real usage signal (occurrence_count
+    is literally "how many times was this worker recruited",
+    is_high_quality "did that recruitment's task end well") without
+    needing new instrumentation.
+
+    Deliberately promotion-only. A probationary worker that never reaches
+    the bar simply stays probationary -- no "dormant" classification and
+    no destructive retirement here (see WorkerCard.lifecycle_state's own
+    docstring on why that's intentionally deferred until the additive
+    system is validated across multiple repositories).
+    """
+    promoted: list[WorkerCard] = []
+    events: list[EvolutionEvent] = []
+    for worker in workers:
+        if worker.lifecycle_state != "probationary" or not _is_worker_healthy(
+            worker.id, routes_by_worker, min_health_routes, healthy_ratio
+        ):
+            promoted.append(worker)
+            continue
+        promoted.append(worker.model_copy(update={"lifecycle_state": "persistent"}))
+        events.append(
+            EvolutionEvent(
+                kind="promote",
+                worker_id=worker.id,
+                reason=(
+                    f"Promoted from probationary to persistent: reached the same "
+                    f"recruitment-volume/quality bar ({min_health_routes}+ occurrences, "
+                    f">= {healthy_ratio:.0%} high-quality) applied to any base worker."
+                ),
+                source_worker_ids=worker.parent_worker_ids,
+            )
+        )
+    return promoted, events
 
 
 def _mostly_negative_presence(routes: list[MemoryRoute], gate_ratio: float) -> bool:

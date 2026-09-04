@@ -247,6 +247,91 @@ def test_a_freshly_specialized_parent_and_child_are_never_merged_back_together(
     assert stored_worker_ids == {"worker-parent", "worker-child"}
 
 
+def test_probationary_worker_is_promoted_once_it_reaches_the_health_bar(tmp_path: Path) -> None:
+    # Phase 7 of the multi-generation organizational evolution redesign: a
+    # structural worker starts probationary; once its own accumulated
+    # routes (real recruitment/quality signal, no benchmark score
+    # involved) clear the same bar a base worker uses for "healthy", it
+    # gets promoted to persistent.
+    index_path = tmp_path / ".ant"
+    worker = WorkerCard(
+        id="worker-bridge-a-b",
+        territory_id="bridge-a-b",
+        name="a+b bridge",
+        root="",
+        files=["a.py", "b.py"],
+        parent_worker_ids=["worker-a", "worker-b"],
+        structural_action="birth",
+        generation_created=1,
+        lifecycle_state="probationary",
+    )
+    territories = [Territory(id=worker.territory_id, root=worker.root, files=worker.files)]
+    IndexStore(index_path).save(territories, [worker])
+    memory = ColonyMemoryStore(index_path)
+    for _ in range(3):
+        memory.save_route(
+            MemoryRoute(
+                need_terms=["auth"],
+                worker_ids=["worker-bridge-a-b"],
+                weight=2.0,
+                is_high_quality=True,
+            )
+        )
+
+    result = evolve_workers(
+        index_path,
+        min_coalition_count=99,
+        retire_empty=False,
+        min_routes_for_health_check=3,
+        healthy_route_ratio=0.7,
+    )
+
+    promote_events = [event for event in result.events if event.kind == "promote"]
+    assert len(promote_events) == 1
+    assert promote_events[0].worker_id == "worker-bridge-a-b"
+    assert promote_events[0].source_worker_ids == ["worker-a", "worker-b"]
+    stored = {w.id: w for w in IndexStore(index_path).load_workers()}
+    assert stored["worker-bridge-a-b"].lifecycle_state == "persistent"
+
+
+def test_probationary_worker_with_too_little_usage_stays_probationary(tmp_path: Path) -> None:
+    index_path = tmp_path / ".ant"
+    worker = WorkerCard(
+        id="worker-bridge-a-b",
+        territory_id="bridge-a-b",
+        name="a+b bridge",
+        root="",
+        files=["a.py", "b.py"],
+        parent_worker_ids=["worker-a", "worker-b"],
+        structural_action="birth",
+        generation_created=1,
+        lifecycle_state="probationary",
+    )
+    territories = [Territory(id=worker.territory_id, root=worker.root, files=worker.files)]
+    IndexStore(index_path).save(territories, [worker])
+    memory = ColonyMemoryStore(index_path)
+    memory.save_route(
+        MemoryRoute(
+            need_terms=["auth"],
+            worker_ids=["worker-bridge-a-b"],
+            weight=2.0,
+            is_high_quality=True,
+        )
+    )
+
+    result = evolve_workers(
+        index_path,
+        min_coalition_count=99,
+        retire_empty=False,
+        min_routes_for_health_check=3,
+        healthy_route_ratio=0.7,
+    )
+
+    assert not [event for event in result.events if event.kind == "promote"]
+    stored = {w.id: w for w in IndexStore(index_path).load_workers()}
+    assert stored["worker-bridge-a-b"].lifecycle_state == "probationary"
+
+
 def test_evolve_workers_specializes_worker_overloaded_with_diverse_needs(
     tmp_path: Path,
 ) -> None:
