@@ -134,6 +134,7 @@ def evolve_workers(
         DEFAULT_SCORING_CONFIG.evolution.min_semantic_cluster_file_support
     ),
     generation: int = 0,
+    needs_overlap_threshold: float = DEFAULT_SCORING_CONFIG.evolution.needs_overlap_threshold,
 ) -> EvolutionResult:
     # `generation` is purely descriptive lineage metadata (stamped onto
     # WorkerCard.generation_created for every worker this call creates) --
@@ -224,6 +225,7 @@ def evolve_workers(
         healthy_ratio=healthy_route_ratio,
         reasoner=reasoner,
         generation=generation,
+        needs_overlap_threshold=needs_overlap_threshold,
     )
     events.extend(merge_events)
     removed_worker_ids.update(_removed_worker_ids_from(merge_events))
@@ -600,6 +602,24 @@ def _apply_episode_actions(
     return workers, events
 
 
+def _needs_overlap(
+    worker_a_routes: list[MemoryRoute], worker_b_routes: list[MemoryRoute]
+) -> float:
+    """Jaccard overlap of two workers' own recorded need_terms vocabularies
+    -- a route/responsibility-overlap merge-candidacy signal independent of
+    file overlap (see EvolutionConfig.needs_overlap_threshold's own
+    docstring for why this deliberately does not need embedding
+    similarity). 0.0 whenever either side has no route history yet -- no
+    signal, not "definitely distinct".
+    """
+    terms_a = {term for route in worker_a_routes for term in route.need_terms}
+    terms_b = {term for route in worker_b_routes for term in route.need_terms}
+    if not terms_a or not terms_b:
+        return 0.0
+    union = terms_a | terms_b
+    return len(terms_a & terms_b) / len(union)
+
+
 def _merge_overlapping_workers(
     workers: list[WorkerCard],
     threshold: float,
@@ -608,6 +628,7 @@ def _merge_overlapping_workers(
     healthy_ratio: float,
     reasoner: EvolutionReasoner | None = None,
     generation: int = 0,
+    needs_overlap_threshold: float = DEFAULT_SCORING_CONFIG.evolution.needs_overlap_threshold,
 ) -> tuple[list[WorkerCard], list[EvolutionEvent]]:
     # Non-destructive overlay (Phase 3): every original worker in
     # `workers` stays in the returned pool unchanged -- a composite is
@@ -648,15 +669,25 @@ def _merge_overlapping_workers(
                 continue
             other_files = set(other.files)
             union = worker_files | other_files
-            if not union:
+            file_overlap = len(worker_files & other_files) / len(union) if union else 0.0
+            # File overlap is one candidacy signal now, not the sole
+            # prerequisite (Phase 5): a pair with near-zero file overlap
+            # but a highly overlapping recurring need_terms vocabulary --
+            # two workers repeatedly answering the same KIND of question
+            # from genuinely disjoint files -- is still a real merge
+            # candidate worth asking the reasoner about.
+            needs_overlap = _needs_overlap(
+                routes_by_worker.get(worker.id, []), routes_by_worker.get(other.id, [])
+            )
+            if file_overlap < threshold and needs_overlap < needs_overlap_threshold:
                 continue
-            overlap = len(worker_files & other_files) / len(union)
-            if overlap < threshold:
-                continue
-            # File overlap alone cannot tell "same specialty duplicated
-            # across two workers" apart from "coincidentally touches a lot
-            # of shared files but is conceptually distinct" -- this is the
-            # judgment on top of the structural overlap gate.
+            # Neither structural signal alone can tell "behaviorally
+            # substitutable" apart from "coincidentally overlaps but is
+            # conceptually distinct" (file overlap) or "frequently
+            # recruited together because each contributes a complementary
+            # half of a joint question" (needs overlap -- that shape is
+            # birth pressure, not merge pressure) -- this is the judgment
+            # on top of either structural candidacy signal.
             if reasoner is not None and not reasoner.should_merge(
                 worker_a_id=worker.id,
                 worker_a_summary="; ".join(worker.responsibilities[:2]) or worker.name,

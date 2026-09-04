@@ -1456,17 +1456,26 @@ class OpenAIProvider:
         # test-file-heavy worker that both reference the same source files
         # for different reasons).
         prompt = (
-            "Two workers in a code-navigation colony have highly overlapping "
-            "file ownership and are candidates for merging into one. Judge "
-            "whether they actually represent the same underlying specialty "
-            "(merging would consolidate duplicated ownership into one clearer "
-            "worker), or whether they are conceptually distinct despite the "
-            "file overlap (merging would dilute one or both into a less "
-            "focused worker).\n"
+            "Two workers in a code-navigation colony are candidates for "
+            "merging into one (flagged by file overlap, route/responsibility "
+            "overlap, or both -- judge the substance either way). The test: "
+            "if both workers are present, does one usually add little "
+            "capability or evidence beyond the other -- i.e. are they "
+            "BEHAVIORALLY SUBSTITUTABLE, largely interchangeable for the same "
+            "kind of question? That is real merge pressure (merging would "
+            "consolidate duplicated ownership into one clearer worker). Do "
+            "NOT confuse this with workers that are frequently recruited "
+            "TOGETHER because each contributes a distinct, complementary "
+            "half of a joint question -- frequent complementary collaboration "
+            "is a sign these workers should stay separate (possibly with a "
+            "bridge worker for their interface), not that they should merge. "
+            "Merging genuinely complementary workers would dilute both into "
+            "a less focused one.\n"
             f"Worker A: {worker_a_id} -- {worker_a_summary}\n"
             f"Worker B: {worker_b_id} -- {worker_b_summary}\n"
-            "Return JSON with key merge: true if these should be merged into "
-            "one worker, false if they should stay separate."
+            "Return JSON with key merge: true if these are substitutable and "
+            "should be merged into one worker, false if they are "
+            "complementary (or otherwise distinct) and should stay separate."
         )
         result = self.responses_json(prompt, max_output_tokens=128)
         data = _loads_json_object(result.text)

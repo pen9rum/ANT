@@ -411,7 +411,18 @@ class EvolutionReasoner(Protocol):
         worker_a_summary: str,
         worker_b_id: str,
         worker_b_summary: str,
-    ) -> bool: ...
+    ) -> bool:
+        """Candidacy may come from file overlap or from route/responsibility
+        (need_terms) semantic overlap -- judge the substance either way, not
+        which signal flagged the pair. The test is BEHAVIORAL
+        SUBSTITUTABILITY: if both workers are present, does one usually add
+        little capability or evidence beyond the other? True means merge.
+        Frequent COMPLEMENTARY collaboration (each contributes a distinct
+        half of a joint question) is the opposite signal -- birth pressure,
+        not merge pressure -- and must return False even at high
+        co-occurrence.
+        """
+        ...
 
     def describe_interface_responsibility(
         self,

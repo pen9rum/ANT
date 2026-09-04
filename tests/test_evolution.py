@@ -575,6 +575,94 @@ def test_evolve_workers_merges_two_workers_with_no_or_poor_track_record(tmp_path
     assert {event.kind for event in result.events} == {"merge"}
 
 
+def test_zero_file_overlap_does_not_exclude_a_behaviorally_substitutable_pair(
+    tmp_path: Path,
+) -> None:
+    # Phase 5 of the multi-generation organizational evolution redesign:
+    # file overlap is one merge-candidacy signal now, not the sole
+    # prerequisite. worker-a and worker-b own completely disjoint files but
+    # their own recorded routes answer the same KIND of question (heavily
+    # overlapping need_terms) -- a real behavioral-substitutability
+    # candidate should still reach should_merge and, if approved, produce a
+    # composite.
+    index_path = tmp_path / ".ant"
+    workers = [
+        WorkerCard(id="worker-a", territory_id="a", name="a", root="a", files=["a.py"]),
+        WorkerCard(id="worker-b", territory_id="b", name="b", root="b", files=["b.py"]),
+    ]
+    territories = [
+        Territory(id=worker.territory_id, root=worker.root, files=worker.files)
+        for worker in workers
+    ]
+    IndexStore(index_path).save(territories, workers)
+    memory = ColonyMemoryStore(index_path)
+    for worker_id in ("worker-a", "worker-b"):
+        memory.save_route(
+            MemoryRoute(
+                need_terms=["auth", "login", "session"],
+                worker_ids=[worker_id],
+                weight=2.0,
+                is_high_quality=False,
+            )
+        )
+
+    result = evolve_workers(
+        index_path,
+        min_coalition_count=99,
+        merge_overlap=0.9,  # would exclude this pair on file overlap alone
+        reasoner=_AlwaysMergeReasoner(),
+    )
+
+    merge_events = [event for event in result.events if event.kind == "merge"]
+    assert len(merge_events) == 1
+    assert sorted(merge_events[0].source_worker_ids) == ["worker-a", "worker-b"]
+
+
+def test_complementary_workers_with_low_needs_overlap_are_not_merge_candidates(
+    tmp_path: Path,
+) -> None:
+    # The other side of the same fix: zero file overlap AND low need_terms
+    # overlap (each worker answers a genuinely different KIND of question)
+    # must not become a merge candidate at all -- even an always-approve
+    # reasoner never gets asked, because there is no real signal here.
+    index_path = tmp_path / ".ant"
+    workers = [
+        WorkerCard(id="worker-a", territory_id="a", name="a", root="a", files=["a.py"]),
+        WorkerCard(id="worker-b", territory_id="b", name="b", root="b", files=["b.py"]),
+    ]
+    territories = [
+        Territory(id=worker.territory_id, root=worker.root, files=worker.files)
+        for worker in workers
+    ]
+    IndexStore(index_path).save(territories, workers)
+    memory = ColonyMemoryStore(index_path)
+    memory.save_route(
+        MemoryRoute(
+            need_terms=["auth", "login", "session"],
+            worker_ids=["worker-a"],
+            weight=2.0,
+            is_high_quality=False,
+        )
+    )
+    memory.save_route(
+        MemoryRoute(
+            need_terms=["render", "chart", "axis"],
+            worker_ids=["worker-b"],
+            weight=2.0,
+            is_high_quality=False,
+        )
+    )
+
+    result = evolve_workers(
+        index_path,
+        min_coalition_count=99,
+        merge_overlap=0.9,
+        reasoner=_AlwaysMergeReasoner(),
+    )
+
+    assert not [event for event in result.events if event.kind == "merge"]
+
+
 def test_evolve_workers_does_not_specialize_without_enough_route_diversity(
     tmp_path: Path,
 ) -> None:

@@ -212,6 +212,21 @@ class EvolutionConfig:
     # must not be enough to claim a file for a new persistent worker.
     min_semantic_cluster_file_support: int = 2
 
+    # Merge candidacy signal independent of file overlap (Phase 5 of the
+    # multi-generation organizational evolution redesign: file overlap is
+    # one candidate-discovery signal now, not the sole prerequisite). Two
+    # workers whose OWN recorded routes share at least this fraction of
+    # their combined need_terms vocabulary (Jaccard overlap) are candidates
+    # for the behavioral-substitutability judgment (should_merge) even with
+    # zero file overlap -- e.g. two workers repeatedly answering the same
+    # KIND of question from genuinely disjoint files. Deliberately a plain
+    # set-overlap over need_terms, not embedding similarity: this only
+    # decides CANDIDACY (should_merge, an LLM judgment, still decides
+    # whether the pair is actually substitutable), so a cheap, dependency-
+    # free signal is enough -- it does not need embedding-level nuance the
+    # way _semantic_groups' own within-worker clustering does.
+    needs_overlap_threshold: float = 0.5
+
 
 @dataclass(frozen=True)
 class RouteQualityConfig:
