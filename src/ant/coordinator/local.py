@@ -492,6 +492,18 @@ class LocalCoordinator:
             pre_round_evidence_keys = {_evidence_key(item) for item in evidence}
 
             for need_id, worker_ids in plan.assignments.items():
+                # Deterministic, not prompt-enforced: the Orchestrator may
+                # only assign currently committed/active need_ids. A
+                # need_id it proposed THIS round in graph_updates is not
+                # merged into `graph` above (_merge_plan_into_graph never
+                # adds new-id entries -- see that function's own
+                # docstring), so `node` is None for it here regardless of
+                # whether plan_round's own response also listed it in
+                # assignments -- confirmed live via a controlled replay
+                # that the model does sometimes do exactly that. Silently
+                # skipped, not executed: a same-round proposal only
+                # becomes assignable once a LATER consolidate_graph call
+                # admits it and a subsequent round's frontier includes it.
                 node = graph.nodes.get(need_id)
                 selected = [worker_by_id[wid] for wid in worker_ids if wid in worker_by_id]
                 if node is None or not selected:

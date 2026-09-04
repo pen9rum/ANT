@@ -4309,3 +4309,77 @@ def test_consolidate_and_commit_merges_duplicate_proposals_before_the_reasoner_s
     # representatives), not the raw 3.
     assert seen_proposal_counts == [2]
     assert set(result_graph.nodes) == {"p1", "p3"}
+
+
+class _AssignsWorkersToItsOwnSameRoundProposalReasoner(_PassthroughLookupsReasoner):
+    """Regression fixture for a real (currently-harmless) pattern found via
+    a controlled replay: the Orchestrator can propose a new need_id in
+    graph_updates AND, in that exact same plan_round response, also list
+    that same new need_id in assignments -- even though RoundPlan's own
+    contract (see plan_round's docstring) says a same-round proposal is
+    not ready-frontier yet and cannot be assigned until a LATER
+    consolidate_graph call admits it. This reasoner reproduces that
+    response deterministically to prove the coordinator's own execution
+    loop already refuses to run it (graph.nodes.get(need_id) is None for
+    a same-round-only proposal, since _merge_plan_into_graph deliberately
+    never adds new-id entries -- see that function's own docstring), not
+    a prompt-only promise the model could get wrong again.
+    """
+
+    def observe(self, *, question, worker_id, territory_id, evidence):
+        return WorkerObservation(worker_id=worker_id, territory_id=territory_id)
+
+    def plan_round(
+        self,
+        *,
+        question,
+        graph,
+        resolution_results,
+        evidence,
+        workers,
+        memory_hints,
+        frontier,
+        incomplete_parents,
+        cross_repo_experience,
+        validation_feedback="",
+        repair_guidance="",
+        stuck_tried_workers=None,
+        candidate_probes=None,
+    ):
+        worker_id = workers[0].id
+        return RoundPlan(
+            graph_updates={
+                "phantom-child": NeedNode(
+                    need_id="phantom-child",
+                    need="a same-round proposal",
+                    detail=UnresolvedNeed(description="a same-round proposal"),
+                )
+            },
+            assignments={
+                need_id: [worker_id] for need_id in [*frontier.ready, "phantom-child"]
+            },
+        )
+
+
+def test_an_assignment_to_a_same_round_proposed_need_id_is_filtered_not_executed(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "mod.py").write_text("def unrelated():\n    pass\n", encoding="utf-8")
+    worker = WorkerCard(
+        id="worker-src", territory_id="src", name="src", root="src", files=["src/mod.py"]
+    )
+
+    state = LocalCoordinator(
+        tmp_path,
+        [worker],
+        reasoner=_AssignsWorkersToItsOwnSameRoundProposalReasoner(),
+    ).ask("What does this codebase do?", max_rounds=1)
+
+    executed_need_ids = {
+        trace.need_id for round_state in state.rounds for trace in round_state.node_executions
+    }
+    # The real, existing ready-frontier need_id (root) still ran normally --
+    # only the bogus same-round self-assignment was filtered.
+    assert "root" in executed_need_ids
+    assert "phantom-child" not in executed_need_ids
