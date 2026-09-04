@@ -43,6 +43,24 @@ class GenerationSnapshot(BaseModel):
     active_high_quality_route_count: int = 0
     total_route_count: int = 0
     accumulated_task_count: int = 0
+    # Population/lifecycle (Phase 8 instrumentation, multi-generation
+    # organizational evolution redesign): overlay_worker_ids is every
+    # worker with real structural lineage (WorkerCard.parent_worker_ids
+    # non-empty) as of THIS generation -- the complement of "base" -- so
+    # base-vs-overlay population size is directly readable without
+    # re-deriving it from the raw worker list. lifecycle_counts /
+    # structural_action_counts are the same population/events grouped by
+    # WorkerCard.lifecycle_state and EvolutionEvent.kind respectively.
+    overlay_worker_ids: list[str] = Field(default_factory=list)
+    lifecycle_counts: dict[str, int] = Field(default_factory=dict)
+    structural_action_counts: dict[str, int] = Field(default_factory=dict)
+    # Route memory (Phase 6/8): raw_route_proposals is what total_route_count
+    # would be WITHOUT consolidation (sum of every route's occurrence_count
+    # -- see ColonyMemoryStore.route_stats) -- the two together are the
+    # direct audit of whether consolidation is actually preventing
+    # unbounded cardinality growth (the qibo 49->80->117 pattern this whole
+    # phase exists to address) while confidence/support keeps accumulating.
+    raw_route_proposals: int = 0
 
 
 class GenCompareResult(BaseModel):
@@ -206,6 +224,18 @@ def run_gen_compare(
                 state_dump_prefix=f"slow-gen{generation}-",
             )
             _snapshot_index(resolved_index_path, index_snapshot_path)
+            current_workers = IndexStore(resolved_index_path).load_workers()
+            structural_action_counts: dict[str, int] = {}
+            for event in evolution_result.events:
+                structural_action_counts[event.kind] = (
+                    structural_action_counts.get(event.kind, 0) + 1
+                )
+            lifecycle_counts: dict[str, int] = {}
+            for worker in current_workers:
+                lifecycle_counts[worker.lifecycle_state] = (
+                    lifecycle_counts.get(worker.lifecycle_state, 0) + 1
+                )
+            route_stats = memory.route_stats(include_stale=True)
             snapshot = GenerationSnapshot(
                 generation=generation,
                 worker_count=evolution_result.worker_count,
@@ -217,6 +247,12 @@ def run_gen_compare(
                 ),
                 total_route_count=len(memory.all_routes(include_stale=True)),
                 accumulated_task_count=memory.distinct_task_count(),
+                overlay_worker_ids=sorted(
+                    worker.id for worker in current_workers if worker.parent_worker_ids
+                ),
+                lifecycle_counts=lifecycle_counts,
+                structural_action_counts=structural_action_counts,
+                raw_route_proposals=route_stats["raw_route_proposals"],
             )
             metadata_path.write_text(snapshot.model_dump_json(indent=2), encoding="utf-8")
             generation_snapshots[generation] = snapshot

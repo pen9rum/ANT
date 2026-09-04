@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 
-from ant.domain import EvidenceState
+from ant.domain import EvidenceState, WorkerCard
 from ant.evaluation.datasets import EvalExample
 from ant.evaluation.gen_compare import _run_fast_generation, run_gen_compare
 from ant.evaluation.metrics import EvalScore
@@ -125,6 +125,106 @@ def test_run_gen_compare_passes_evolve_workers_the_same_index_run_batch_actually
     )
 
     assert captured["index_path"] == resolved_index_path
+
+
+def test_generation_snapshot_reports_population_lifecycle_and_route_consolidation_stats(
+    tmp_path: Path, monkeypatch
+) -> None:
+    # Phase 8 instrumentation for the multi-generation organizational
+    # evolution redesign: a generation's own snapshot must let a later
+    # audit answer "base vs overlay population, lifecycle distribution,
+    # what structural actions actually happened, and is route consolidation
+    # actually preventing unbounded cardinality growth" without re-deriving
+    # any of it from raw trace files.
+    run_dir = tmp_path / "run"
+    index_path = tmp_path / ".ant"
+    (index_path / "myrepo").mkdir(parents=True)
+    repo_root = tmp_path / "repos"
+    (repo_root / "myrepo").mkdir(parents=True)
+
+    current_workers = [
+        WorkerCard(id="worker-a", territory_id="a", name="a", root="a", files=["a.py"]),
+        WorkerCard(id="worker-b", territory_id="b", name="b", root="b", files=["b.py"]),
+        WorkerCard(
+            id="worker-bridge-a-b",
+            territory_id="bridge-a-b",
+            name="bridge",
+            root="",
+            files=["a.py", "b.py"],
+            parent_worker_ids=["worker-a", "worker-b"],
+            structural_action="birth",
+            generation_created=1,
+            lifecycle_state="probationary",
+        ),
+        WorkerCard(
+            id="worker-persistent-child",
+            territory_id="child",
+            name="child",
+            root="a/child",
+            files=["a/child.py"],
+            parent_worker_ids=["worker-a"],
+            structural_action="specialize",
+            generation_created=1,
+            lifecycle_state="persistent",
+        ),
+    ]
+    real_events = [
+        EvolutionEvent(kind="birth", worker_id="worker-bridge-a-b", reason="r"),
+        EvolutionEvent(kind="specialize", worker_id="worker-persistent-child", reason="r"),
+        EvolutionEvent(kind="promote", worker_id="worker-persistent-child", reason="r"),
+        EvolutionEvent(kind="strengthen_route", worker_id="worker-a", reason="r"),
+        EvolutionEvent(kind="strengthen_route", worker_id="worker-b", reason="r"),
+    ]
+
+    class _StubIndexStore:
+        def __init__(self, path):
+            pass
+
+        def load_workers(self):
+            return current_workers
+
+    def fake_run_batch(**kwargs):
+        return []
+
+    def fake_evolve_workers(index_path, repo_root=None, reasoner=None, generation=0):
+        return EvolutionResult(events=real_events, worker_count=len(current_workers))
+
+    def fake_load_or_rebuild_scores(**kwargs):
+        return {}
+
+    monkeypatch.setattr("ant.evaluation.gen_compare.IndexStore", _StubIndexStore)
+    monkeypatch.setattr("ant.evaluation.gen_compare.run_batch", fake_run_batch)
+    monkeypatch.setattr("ant.evaluation.gen_compare.evolve_workers", fake_evolve_workers)
+    monkeypatch.setattr("ant.evaluation.gen_compare.OpenAIProvider", lambda: object())
+    monkeypatch.setattr(
+        "ant.evaluation.gen_compare._load_or_rebuild_scores", fake_load_or_rebuild_scores
+    )
+
+    examples = [EvalExample(id="q1", question="q", answer="a", repo="someorg/myrepo")]
+    result = run_gen_compare(
+        examples=examples,
+        repo_root=repo_root,
+        index_path=index_path,
+        run_dir=run_dir,
+        run_gen0=False,
+        slow_generations=1,
+        fast_generations=0,
+    )
+
+    snapshot = result.generation_snapshots[1]
+    assert snapshot.overlay_worker_ids == ["worker-bridge-a-b", "worker-persistent-child"]
+    assert snapshot.lifecycle_counts == {"base": 2, "probationary": 1, "persistent": 1}
+    assert snapshot.structural_action_counts == {
+        "birth": 1,
+        "specialize": 1,
+        "promote": 1,
+        "strengthen_route": 2,
+    }
+    # No routes were ever saved against this generation's (real, empty)
+    # ColonyMemoryStore in this test -- raw_route_proposals and
+    # total_route_count both correctly read 0 rather than crashing.
+    assert snapshot.raw_route_proposals == 0
+    assert snapshot.total_route_count == 0
 
 
 def test_a_fast_only_followup_does_not_lose_the_earlier_slow_gen1_generation_snapshot(
