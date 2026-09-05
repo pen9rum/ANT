@@ -5,6 +5,7 @@ import re
 from ant.domain import (
     Evidence,
     EvidenceUpgradeVerdict,
+    FacetRescuePlan,
     FrontierResult,
     GraphConsolidationDecision,
     GraphConsolidationPlan,
@@ -81,6 +82,20 @@ class MockLLMProvider:
         # region, so existing tests built around the old fixed score-based
         # cut keep working unchanged.
         return [str(index) for index in range(len(evidence))][:limit], []
+
+    def assess_facet_completeness(
+        self,
+        *,
+        question: str,
+        selected_evidence: list[Evidence],
+        rejected_evidence: list[Evidence],
+    ) -> FacetRescuePlan:
+        # No-op pass-through (same rationale as select_evidence above): this
+        # mock exists for orchestration tests without an API key, not to
+        # exercise real facet judgment -- identifying zero facets means
+        # _complete_missing_evidence_facets always no-ops, leaving every
+        # existing test's evidence set exactly as select_evidence left it.
+        return FacetRescuePlan()
 
     def plan_worker_actions(
         self,

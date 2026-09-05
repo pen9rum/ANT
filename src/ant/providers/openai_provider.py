@@ -13,10 +13,13 @@ from openai import OpenAI
 from ant.config import load_dotenv
 from ant.domain import (
     AbsenceProof,
+    AnswerFacet,
     AnswerObligation,
     CodeSymbol,
     Evidence,
     EvidenceUpgradeVerdict,
+    FacetCoverage,
+    FacetRescuePlan,
     FrontierResult,
     GraphConsolidationDecision,
     GraphConsolidationPlan,
@@ -226,6 +229,7 @@ class OpenAIProvider:
             },
             method="POST",
         )
+
         def _do_request() -> dict:
             with request.urlopen(api_request, timeout=REQUEST_TIMEOUT_SECONDS) as response:
                 return json.loads(response.read().decode("utf-8"))
@@ -495,10 +499,160 @@ class OpenAIProvider:
         ][:limit]
         expand_raw = _extract_list_field(result.text, "expand") or []
         selected_set = set(selected)
-        expand = [
-            item for item in expand_raw if isinstance(item, str) and item in selected_set
-        ]
+        expand = [item for item in expand_raw if isinstance(item, str) and item in selected_set]
         return selected, expand
+
+    def assess_facet_completeness(
+        self,
+        *,
+        question: str,
+        selected_evidence: list[Evidence],
+        rejected_evidence: list[Evidence],
+    ) -> FacetRescuePlan:
+        # Pass 2, run strictly after select_evidence (Pass 1) has already
+        # produced selected_evidence -- never a replacement for it, never a
+        # general recall booster. One call: identify the coarse,
+        # answer-critical facets `question` requires, judge whether
+        # selected_evidence already substantively supports each, and for
+        # whichever don't, name the smallest sufficient rejected_evidence
+        # indices that would rescue it. A malformed/empty response degrades
+        # to "no facets" (a pure no-op downstream in
+        # _complete_missing_evidence_facets), never to inventing a rescue --
+        # this stage must never risk widening the selected set on a parse
+        # failure the way select_evidence's own fallback intentionally
+        # widens to top-N.
+        if not rejected_evidence:
+            return FacetRescuePlan()
+        selected_lines = [
+            f"[{index}] {item.path}:{item.line_start}-{item.line_end} "
+            f"(worker={item.worker_id or 'unknown'})\n{item.quote[:500]}"
+            for index, item in enumerate(selected_evidence)
+        ]
+        rejected_lines = [
+            f"[{index}] {item.path}:{item.line_start}-{item.line_end} "
+            f"(worker={item.worker_id or 'unknown'})\n{item.quote[:500]}"
+            for index, item in enumerate(rejected_evidence)
+        ]
+        prompt = (
+            "A first evidence-selection pass already ran for the question "
+            "below and kept the 'SELECTED' evidence shown -- your job is NOT "
+            "to re-select or second-guess that pass. Identify only the "
+            "coarse, substantive semantic facets (a handful at most) this "
+            "question requires an answer to cover -- e.g. a second "
+            "requested mechanism, enumeration completeness ('all "
+            "subclasses/cases/stages'), a causal chain, a cross-module "
+            "interaction, an explicitly-asked exception/conditional. Do not "
+            "invent a facet merely because REJECTED evidence happens to "
+            "contain something interesting for it -- facets come from the "
+            "question, not from what was rejected. Do not explode every "
+            "small detail into its own facet.\n"
+            "For each facet, judge whether SELECTED already substantively "
+            "supports it (supported / partially_supported / unsupported), "
+            "citing which SELECTED indices support it.\n"
+            "For each facet that is unsupported or only partially "
+            "supported, search ONLY the REJECTED evidence for the smallest "
+            "sufficient set of indices that would rescue it -- prefer one "
+            "strong item; use more than one only if the facet genuinely "
+            "requires a chain of distinct pieces. A rejected item is only "
+            "a valid rescue if it adds substantive information not already "
+            "in SELECTED, is question-relevant, and is not merely another "
+            "duplicate span of something already selected. Never let "
+            "worker identity influence any of this.\n"
+            "Separately, list any SELECTED indices that are redundant or "
+            "the lowest marginal contribution to answering the question "
+            "(most-replaceable first) -- empty if every selected item "
+            "contributes distinct required support. These are only ever "
+            "used if a rescue is needed but the selected set is already at "
+            "its cap.\n"
+            f"Question: {question}\n"
+            f"SELECTED:\n{chr(10).join(selected_lines) or '(none)'}\n"
+            f"REJECTED:\n{chr(10).join(rejected_lines)}\n"
+            'Return JSON: {"facets": [{"facet_id": str, "description": '
+            'str}], "coverage": [{"facet_id": str, "support_status": '
+            '"supported"|"partially_supported"|"unsupported", '
+            '"supporting_selected_ids": [str]}], "rescue_candidates": '
+            "{facet_id: [str]} (REJECTED indices only, only for "
+            "unsupported/partially_supported facets), "
+            '"replaceable_selected_ids": [str]}. facet_id values must be '
+            'short stable slugs you invent (e.g. "facet-1"), consistent '
+            'across facets/coverage/rescue_candidates. Return {"facets": '
+            "[]} if the question has no additional facet beyond what "
+            "SELECTED already covers."
+        )
+        result = self.responses_json(prompt, max_output_tokens=1024)
+        try:
+            data = _loads_json_object(result.text)
+        except json.JSONDecodeError:
+            return FacetRescuePlan()
+
+        raw_facets = data.get("facets")
+        if not isinstance(raw_facets, list) or not raw_facets:
+            return FacetRescuePlan()
+        facets: list[AnswerFacet] = []
+        facet_ids: set[str] = set()
+        for raw in raw_facets:
+            if not isinstance(raw, dict):
+                continue
+            facet_id, description = raw.get("facet_id"), raw.get("description")
+            if isinstance(facet_id, str) and isinstance(description, str) and facet_id:
+                facets.append(AnswerFacet(facet_id=facet_id, description=description))
+                facet_ids.add(facet_id)
+        if not facets:
+            return FacetRescuePlan()
+
+        coverage: list[FacetCoverage] = []
+        raw_coverage = data.get("coverage")
+        valid_selected_ids = {str(i) for i in range(len(selected_evidence))}
+        if isinstance(raw_coverage, list):
+            for raw in raw_coverage:
+                if not isinstance(raw, dict):
+                    continue
+                facet_id = raw.get("facet_id")
+                status = raw.get("support_status")
+                if facet_id in facet_ids and status in (
+                    "supported",
+                    "partially_supported",
+                    "unsupported",
+                ):
+                    supporting = raw.get("supporting_selected_ids")
+                    coverage.append(
+                        FacetCoverage(
+                            facet_id=facet_id,
+                            support_status=status,
+                            supporting_selected_ids=[
+                                item
+                                for item in (supporting if isinstance(supporting, list) else [])
+                                if isinstance(item, str) and item in valid_selected_ids
+                            ],
+                        )
+                    )
+
+        rescue_candidates: dict[str, list[str]] = {}
+        raw_rescue = data.get("rescue_candidates")
+        valid_rejected_ids = {str(i) for i in range(len(rejected_evidence))}
+        if isinstance(raw_rescue, dict):
+            for facet_id, raw_indices in raw_rescue.items():
+                if facet_id not in facet_ids or not isinstance(raw_indices, list):
+                    continue
+                rescue_candidates[facet_id] = [
+                    item
+                    for item in raw_indices
+                    if isinstance(item, str) and item in valid_rejected_ids
+                ]
+
+        raw_replaceable = data.get("replaceable_selected_ids")
+        replaceable_selected_ids = [
+            item
+            for item in (raw_replaceable if isinstance(raw_replaceable, list) else [])
+            if isinstance(item, str) and item in valid_selected_ids
+        ]
+
+        return FacetRescuePlan(
+            facets=facets,
+            coverage=coverage,
+            rescue_candidates=rescue_candidates,
+            replaceable_selected_ids=replaceable_selected_ids,
+        )
 
     def plan_worker_actions(
         self,
@@ -571,9 +725,9 @@ class OpenAIProvider:
                 for tool in ("navigate", "references", "callers", "callees", "assignments")
                 if tool in available_tools
             ]
-            return [
-                (tool, symbol) for symbol in candidate_symbols for tool in default_tools
-            ][:max_actions]
+            return [(tool, symbol) for symbol in candidate_symbols for tool in default_tools][
+                :max_actions
+            ]
         tool_set = set(available_tools)
         symbol_set = set(candidate_symbols)
         plan: list[tuple[str, str]] = []
@@ -766,10 +920,10 @@ class OpenAIProvider:
         prompt = (
             "This need was previously judged with epistemic_state="
             f"{epistemic_state!r} -- "
-            "\"open\" means it was genuinely unknown whether an answer even "
-            "exists in this repo; \"absence_supported\" means a prior "
+            '"open" means it was genuinely unknown whether an answer even '
+            'exists in this repo; "absence_supported" means a prior '
             "exhaustive search's evidence supports that it does NOT exist; "
-            "\"insufficient_evidence\" means a prior search was inconclusive. "
+            '"insufficient_evidence" means a prior search was inconclusive. '
             "New evidence was just gathered for this need (whether or not the "
             "need itself is considered fully answered yet is irrelevant here -- "
             "judge only the evidence below on its own). Judge strictly: does "
@@ -885,9 +1039,7 @@ class OpenAIProvider:
                 count = len(anchors)
                 if count > best_anchor_count.get(worker_id, -1):
                     best_anchor_count[worker_id] = count
-        ordered_workers = sorted(
-            workers, key=lambda worker: -best_anchor_count.get(worker.id, -1)
-        )
+        ordered_workers = sorted(workers, key=lambda worker: -best_anchor_count.get(worker.id, -1))
         # Two-stage routing (LocalCoordinator._candidate_workers_for_round)
         # already narrows `workers` to ~5-10 candidates for a fresh/
         # escalated need before this prompt is ever built -- so slicing
@@ -1047,7 +1199,7 @@ class OpenAIProvider:
             "instruction 1), assignments (an object mapping need_id to a "
             "list of worker ids, ready-frontier or stuck-subgraph-member "
             "need_ids only), and special_tactics (an object mapping "
-            "need_id to exactly \"temporary_bridge\" or \"global_fallback\", "
+            'need_id to exactly "temporary_bridge" or "global_fallback", '
             "only for the two special cases above)."
         )
         result = self.responses_json(prompt, max_output_tokens=2048)
@@ -1167,8 +1319,7 @@ class OpenAIProvider:
                 f"  tried workers: {', '.join(node.tried_worker_ids) or '(none)'}\n"
                 f"  tried special tactics: {', '.join(node.tried_special_tactics) or '(none)'}\n"
                 f"  no-progress executions: {node.no_progress_execution_count}\n"
-                f"  evidence already gathered: "
-                + ("; ".join(node.evidence_claims[:8]) or "(none)")
+                f"  evidence already gathered: " + ("; ".join(node.evidence_claims[:8]) or "(none)")
             )
         decomposition_lines = []
         for round_index, delta in enumerate(package.graph_decomposition_log):
@@ -1303,10 +1454,10 @@ class OpenAIProvider:
             "concrete, distinct things a COMPLETE answer must cover -- not "
             "a full decomposition of every possible sub-detail, just the "
             "few top-level obligations the question itself names or "
-            "clearly implies (usually 1-4). For example \"What are the "
-            "subclasses of X, and their overridden methods?\" has two: "
+            'clearly implies (usually 1-4). For example "What are the '
+            'subclasses of X, and their overridden methods?" has two: '
             "(1) which classes subclass X, (2) what each one overrides or "
-            "extends. A single-part question (\"Where is X defined?\") "
+            'extends. A single-part question ("Where is X defined?") '
             "has just one.\n"
             f"Question: {question}\n"
             "Return JSON with key obligations: a list of short strings, "
@@ -1896,9 +2047,11 @@ def _patch_section(
             + (f" (evidence: {', '.join(update.evidence_ids)})" if update.evidence_ids else "")
             for update in grounded_updates
         ]
-        lines.append("Newly grounded updates (the ONLY claims you may upgrade):\n" + "\n".join(
-            update_lines
-        ) + "\n")
+        lines.append(
+            "Newly grounded updates (the ONLY claims you may upgrade):\n"
+            + "\n".join(update_lines)
+            + "\n"
+        )
     else:
         lines.append(
             "Newly grounded updates: (none -- no claim in the prior answer "
@@ -2130,10 +2283,7 @@ def _parse_round_plan(
     raw_tactics = data.get("special_tactics")
     if isinstance(raw_tactics, dict):
         for need_id, tactic in raw_tactics.items():
-            if (
-                isinstance(need_id, str)
-                and tactic in ("temporary_bridge", "global_fallback")
-            ):
+            if isinstance(need_id, str) and tactic in ("temporary_bridge", "global_fallback"):
                 special_tactics[need_id] = tactic
 
     return RoundPlan(

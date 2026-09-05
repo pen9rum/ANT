@@ -5,7 +5,7 @@ import warnings
 from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import cast
+from typing import Protocol, cast
 
 import numpy as np
 
@@ -23,6 +23,8 @@ from ant.domain import (
     AnswerObligation,
     Evidence,
     EvidenceState,
+    FacetRescuePlan,
+    FacetRescueTelemetry,
     FrontierResult,
     GraphConsolidationDecision,
     GraphConsolidationPlan,
@@ -461,8 +463,12 @@ class LocalCoordinator:
         rounds: list[PlanningRound] = []
 
         for round_index in range(max_rounds):
-            if not frontier.ready and not frontier.blocked and not frontier.stuck_subgraphs \
-                    and not incomplete_parents:
+            if (
+                not frontier.ready
+                and not frontier.blocked
+                and not frontier.stuck_subgraphs
+                and not incomplete_parents
+            ):
                 break
 
             # Snapshot for this round's GraphDelta -- only depends_on/children
@@ -693,9 +699,7 @@ class LocalCoordinator:
                     node = graph.nodes.get(need_id)
                     if node is None:
                         continue
-                    all_files = sorted(
-                        {file for worker in self.workers for file in worker.files}
-                    )
+                    all_files = sorted({file for worker in self.workers for file in worker.files})
                     hits = search.search(
                         self._query_from_needs(question, [node.detail]), all_files, limit=8
                     )
@@ -765,9 +769,14 @@ class LocalCoordinator:
             for need_id, tactic in plan.special_tactics.items():
                 episode = _episode_for_need(recovery, need_id)
                 node = graph.nodes.get(need_id)
-                if node is None or episode is None or tactic not in (
-                    "temporary_bridge",
-                    "global_fallback",
+                if (
+                    node is None
+                    or episode is None
+                    or tactic
+                    not in (
+                        "temporary_bridge",
+                        "global_fallback",
+                    )
                 ):
                     continue
                 if tactic in episode.used_special_tactics:
@@ -954,8 +963,7 @@ class LocalCoordinator:
                     node.children
                     and node.resolution != "resolved"
                     and all(
-                        graph.nodes[child_id].resolution == "resolved"
-                        for child_id in node.children
+                        graph.nodes[child_id].resolution == "resolved" for child_id in node.children
                     )
                 ):
                     closure = self.reasoner.check_need_resolution(
@@ -1147,6 +1155,7 @@ class LocalCoordinator:
         if inheritance_proof is not None:
             absence_proofs.append(inheritance_proof)
 
+        facet_rescue_telemetry: FacetRescueTelemetry | None = None
         answer = ""
         if enforce_alignment and prior_answer and not grounded_updates:
             # Grounded Fast Repair must be monotonic: if not one leaf
@@ -1267,9 +1276,7 @@ class LocalCoordinator:
                 # correctly-preserved claim can't still lose narrative
                 # attention to newly-added evidence during synthesis
                 # itself.
-                preserved_need_ids = {
-                    need_id for item in preserved for need_id in item.need_ids
-                }
+                preserved_need_ids = {need_id for item in preserved for need_id in item.need_ids}
                 preserved_claim_descriptions = [
                     graph.nodes[need_id].detail.description
                     for need_id in sorted(preserved_need_ids)
@@ -1277,7 +1284,18 @@ class LocalCoordinator:
                 ] or None
             else:
                 ranked_evidence = _rank_global_evidence(evidence, question)
-                evidence = _select_evidence(self.reasoner, question, ranked_evidence, search)
+                selected = _select_evidence(self.reasoner, question, ranked_evidence, search)
+                selected_keys = {_evidence_key(item) for item in selected}
+                rejected = [
+                    item for item in ranked_evidence if _evidence_key(item) not in selected_keys
+                ]
+                evidence, facet_rescue_telemetry = _complete_missing_evidence_facets(
+                    self.reasoner,
+                    question,
+                    selected,
+                    rejected,
+                    DEFAULT_SCORING_CONFIG.routing.llm_evidence_keep_limit,
+                )
             if self.synthesizer and evidence:
                 coalition_workers = _last_coalition_workers(rounds)
                 if coalition_workers:
@@ -1336,6 +1354,7 @@ class LocalCoordinator:
             usage=usage if isinstance(usage, TokenUsage) else TokenUsage(),
             final_need_graph=dict(graph.nodes),
             final_recovery_state=_recovery_snapshot(recovery),
+            facet_rescue=facet_rescue_telemetry,
         )
 
     def retry_from_trajectory(
@@ -1383,9 +1402,7 @@ class LocalCoordinator:
                 prior_epistemic_states,
             )
         )
-        aligned_state = prior_state.model_copy(
-            update={"final_need_graph": aligned_graph.nodes}
-        )
+        aligned_state = prior_state.model_copy(update={"final_need_graph": aligned_graph.nodes})
         # Recomputed from the ALIGNED graph, not reused from `package`
         # above, so propose_repair sees reframed need text and never sees
         # a dropped need as a live stuck node at all.
@@ -2050,7 +2067,7 @@ def _record_worker_need_attempt(
 def _worker_need_attempt_state_label(
     recovery: RecoveryState, worker_id: str, need_id: str, need_fingerprint: str
 ) -> str:
-    """"productive" | "untried" | "locally_exhausted" for one (worker_id,
+    """ "productive" | "untried" | "locally_exhausted" for one (worker_id,
     need_id) pair, as of the need's CURRENT fingerprint -- an attempt
     recorded under a since-superseded (reframed) fingerprint reads as
     "untried" here, matching _enforce_local_exhaustion's own reframe reset
@@ -2377,6 +2394,188 @@ def _select_evidence(
         kept_indices = list(range(min(keep_limit, len(pool))))
     reopened_map = _reopen_evidence_by_index(expand_ids, pool, search) if expand_ids else {}
     return [reopened_map.get(index, pool[index]) for index in kept_indices[:keep_limit]]
+
+
+class _FacetCompletenessReasoner(Protocol):
+    """The one method _complete_missing_evidence_facets actually needs --
+    any WorkerReasoner satisfies this structurally, but a narrow protocol
+    here lets tests stub just this one call instead of the full
+    WorkerReasoner surface.
+    """
+
+    def assess_facet_completeness(
+        self,
+        *,
+        question: str,
+        selected_evidence: list[Evidence],
+        rejected_evidence: list[Evidence],
+    ) -> FacetRescuePlan: ...
+
+
+def _complete_missing_evidence_facets(
+    reasoner: _FacetCompletenessReasoner,
+    question: str,
+    selected: list[Evidence],
+    rejected: list[Evidence],
+    cap: int,
+) -> tuple[list[Evidence], FacetRescueTelemetry]:
+    """Pass 2, strictly after _select_evidence (Pass 1) has already run:
+    rescues only evidence that covers an answer-critical semantic facet Pass
+    1's selected set is currently missing -- never a replacement for Pass 1,
+    never a general recall booster. Diagnosed live on Phase 12 traces
+    (yt-dlp `260cf927`'s dropped `load_plugins()`, seaborn `28d9b344`'s
+    dropped `Rolling(Stat)` enumeration member, qibo `b93c3114`'s dropped
+    `MeasurementSymbol`/`get_symbols`): a recurring ~12-25% "catastrophic
+    all-drop" pattern and a ~1/3 rate of materially-distinct information
+    loss in a stratified manual sample, while retention itself stayed low
+    even far below the hard cap (population audit: mean selected count
+    grows only 0.05 items per +1 raw evidence item) -- i.e. the dominant
+    failure is the reasoner's own per-question judgment call being
+    inconsistent, not the cap being too small or systematic redundancy.
+
+    Applies `reasoner.assess_facet_completeness`'s plan mechanically rather
+    than re-deciding it: which facets exist, whether each is covered, and
+    the minimal rescue set for the ones that aren't are all the reasoner's
+    call. This function only enforces the invariants that must hold no
+    matter what the reasoner returns -- a rescue candidate already
+    represented in `selected` (by content, not identity) is never
+    re-added; the hard cap is never raised, only filled or, at the cap,
+    traded against a replaceable_selected_ids entry the reasoner itself
+    flagged as redundant; and a facet that cannot be rescued within budget
+    is left unsupported rather than forced. No worker/path identity is
+    ever consulted here.
+    """
+    if not rejected:
+        return list(selected), FacetRescueTelemetry(
+            initial_selected_count=len(selected),
+            final_selected_count=len(selected),
+            no_op_reason="no rejected evidence to consider for rescue",
+        )
+
+    plan = reasoner.assess_facet_completeness(
+        question=question, selected_evidence=selected, rejected_evidence=rejected
+    )
+    if not plan.facets:
+        return list(selected), FacetRescueTelemetry(
+            initial_selected_count=len(selected),
+            final_selected_count=len(selected),
+            rejected_candidates_considered=len(rejected),
+            no_op_reason="no required facets identified",
+        )
+
+    valid_facet_ids = {facet.facet_id for facet in plan.facets}
+    coverage_before = [c for c in plan.coverage if c.facet_id in valid_facet_ids]
+    missing = [
+        c for c in coverage_before if c.support_status in ("unsupported", "partially_supported")
+    ]
+    if not missing:
+        return list(selected), FacetRescueTelemetry(
+            initial_selected_count=len(selected),
+            final_selected_count=len(selected),
+            required_facets=plan.facets,
+            coverage_before=coverage_before,
+            coverage_after=coverage_before,
+            rejected_candidates_considered=len(rejected),
+            no_op_reason="all facets already supported",
+        )
+
+    current = list(selected)
+    selected_keys = {_evidence_key(item) for item in selected}
+    rescued_this_pass_keys: set[tuple[str, int, int, str]] = set()
+    rescued_evidence_ids: list[str] = []
+    rescued_facet_by_evidence_id: dict[str, str] = {}
+    removed_evidence_ids: list[str] = []
+    replaceable_pool = list(plan.replaceable_selected_ids)
+    any_cap_blocked = False
+
+    for facet_coverage in missing:
+        for raw_index in plan.rescue_candidates.get(facet_coverage.facet_id, []):
+            try:
+                index = int(raw_index)
+            except ValueError:
+                continue
+            if not (0 <= index < len(rejected)):
+                continue
+            item = rejected[index]
+            key = _evidence_key(item)
+            if key in selected_keys or key in rescued_this_pass_keys:
+                continue
+
+            if len(current) < cap:
+                current.append(item)
+            else:
+                replaced = False
+                current_keys = {_evidence_key(x) for x in current}
+                while replaceable_pool:
+                    raw_rep_index = replaceable_pool.pop(0)
+                    try:
+                        rep_index = int(raw_rep_index)
+                    except ValueError:
+                        continue
+                    if not (0 <= rep_index < len(selected)):
+                        continue
+                    rep_key = _evidence_key(selected[rep_index])
+                    if rep_key not in current_keys:
+                        continue
+                    current = [x for x in current if _evidence_key(x) != rep_key]
+                    removed_evidence_ids.append(raw_rep_index)
+                    current.append(item)
+                    replaced = True
+                    break
+                if not replaced:
+                    any_cap_blocked = True
+                    continue
+
+            rescued_this_pass_keys.add(key)
+            rescued_evidence_ids.append(str(index))
+            rescued_facet_by_evidence_id[str(index)] = facet_coverage.facet_id
+
+    rescued_facet_ids = set(rescued_facet_by_evidence_id.values())
+    coverage_after = [
+        (
+            c.model_copy(
+                update={
+                    "support_status": "supported",
+                    "supporting_selected_ids": [
+                        *c.supporting_selected_ids,
+                        *(
+                            f"rescued:{evidence_id}"
+                            for evidence_id, facet_id in rescued_facet_by_evidence_id.items()
+                            if facet_id == c.facet_id
+                        ),
+                    ],
+                }
+            )
+            if c.facet_id in rescued_facet_ids
+            else c
+        )
+        for c in coverage_before
+    ]
+
+    if rescued_evidence_ids:
+        no_op_reason = ""
+    elif any_cap_blocked:
+        no_op_reason = (
+            "missing facet(s) identified but blocked at hard cap with no safe replacement"
+        )
+    else:
+        no_op_reason = "missing facet(s) identified but no valid rescue candidates in rejected pool"
+
+    telemetry = FacetRescueTelemetry(
+        initial_selected_count=len(selected),
+        final_selected_count=len(current),
+        required_facets=plan.facets,
+        coverage_before=coverage_before,
+        coverage_after=coverage_after,
+        rejected_candidates_considered=len(rejected),
+        rescued_evidence_ids=rescued_evidence_ids,
+        rescued_facet_by_evidence_id=rescued_facet_by_evidence_id,
+        expanded=len(current) > len(selected),
+        removed_evidence_ids=removed_evidence_ids,
+        no_op_reason=no_op_reason,
+        hit_cap=len(current) >= cap,
+    )
+    return current, telemetry
 
 
 def _matches_term(query_term: str, terms: set[str]) -> bool:
@@ -2721,11 +2920,7 @@ def _absence_proofs(
         }
     )
     searched_territories = sorted(
-        {
-            workers_by_id[item].territory_id
-            for item in searched_workers
-            if item in workers_by_id
-        }
+        {workers_by_id[item].territory_id for item in searched_workers if item in workers_by_id}
     )
     exhaustive = bool(workers) and set(searched_workers) == set(workers_by_id)
     conclusion = "not_found" if searched_workers else "inconclusive"
@@ -3023,26 +3218,20 @@ def _cluster_pending_proposals(proposals: list[ProposedNode]) -> list[ProposalCl
 
     if len(normalized_groups) <= 1:
         return [
-            ProposalCluster(
-                representative=group[0], member_ids=[p.proposal_id for p in group]
-            )
+            ProposalCluster(representative=group[0], member_ids=[p.proposal_id for p in group])
             for group in normalized_groups
         ]
 
     embedder = get_shared_embedder()
     if embedder is None:
         return [
-            ProposalCluster(
-                representative=group[0], member_ids=[p.proposal_id for p in group]
-            )
+            ProposalCluster(representative=group[0], member_ids=[p.proposal_id for p in group])
             for group in normalized_groups
         ]
     vectors = embedder.embed([group[0].need for group in normalized_groups])
     if not vectors:
         return [
-            ProposalCluster(
-                representative=group[0], member_ids=[p.proposal_id for p in group]
-            )
+            ProposalCluster(representative=group[0], member_ids=[p.proposal_id for p in group])
             for group in normalized_groups
         ]
 
@@ -3413,9 +3602,7 @@ def _reopened_need_ids(
     evidence must be preserved -- see the final-synthesis block in ask()
     for how this feeds the per-claim evidence retention gate.
     """
-    executed = {
-        trace.need_id for round_state in rounds for trace in round_state.node_executions
-    }
+    executed = {trace.need_id for round_state in rounds for trace in round_state.node_executions}
     return executed | set(coverage_gap_node_ids) | targeted_need_ids
 
 

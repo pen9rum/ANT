@@ -96,6 +96,74 @@ class Evidence(BaseModel):
     need_ids: list[str] = Field(default_factory=list)
 
 
+class AnswerFacet(BaseModel):
+    """One coarse, substantive semantic component the question requires an
+    answer to cover -- e.g. a second requested mechanism, an enumeration's
+    completeness, a downstream link in a causal/cross-module chain. Kept
+    deliberately coarser and fewer than AnswerObligation (which decomposes
+    the whole question up front, fast-repair-only): a facet exists only to
+    drive the facet-completeness rescue layer's own narrow question --
+    "is any answer-critical facet currently unsupported by the selected
+    evidence" -- not to re-decompose the question generally. Never derived
+    from the rejected evidence pool itself (that would let "everything
+    rejected deserves a facet" become self-justifying)."""
+
+    facet_id: str
+    description: str
+
+
+class FacetCoverage(BaseModel):
+    """Per-facet verdict against the CURRENT selected evidence set, from
+    WorkerReasoner.assess_facet_completeness. `supporting_selected_ids` are
+    string indices into the selected-evidence list this verdict was judged
+    against. Only "unsupported" or "partially_supported" facets are
+    eligible for rescue -- see _complete_missing_evidence_facets."""
+
+    facet_id: str
+    support_status: str
+    supporting_selected_ids: list[str] = Field(default_factory=list)
+
+
+class FacetRescuePlan(BaseModel):
+    """WorkerReasoner.assess_facet_completeness's full verdict: the coarse
+    facets this question requires, whether the current selected evidence
+    set already supports each one, and -- for whichever facets don't --
+    the minimal sufficient rejected-evidence indices to rescue for each
+    (already curated by the reasoner as the smallest sufficient set; the
+    orchestrating code applies this faithfully rather than second-guessing
+    which/how-many items a facet needs). `rescue_candidates` maps
+    facet_id -> ordered list of string indices into the REJECTED-evidence
+    list passed to assess_facet_completeness. `replaceable_selected_ids`
+    are already-selected indices the reasoner judged redundant/lowest
+    marginal contribution, ordered most-replaceable-first -- consulted
+    only when rescuing at the hard cap requires freeing a slot; empty
+    means nothing in the current selected set is safe to replace."""
+
+    facets: list[AnswerFacet] = Field(default_factory=list)
+    coverage: list[FacetCoverage] = Field(default_factory=list)
+    rescue_candidates: dict[str, list[str]] = Field(default_factory=dict)
+    replaceable_selected_ids: list[str] = Field(default_factory=list)
+
+
+class FacetRescueTelemetry(BaseModel):
+    """Read-only audit trail for one question's facet-completeness rescue
+    pass -- persisted alongside the trace, never read by any decision path
+    (mirrors ant.evaluation.attribution's read-only-telemetry pattern)."""
+
+    initial_selected_count: int
+    final_selected_count: int
+    required_facets: list[AnswerFacet] = Field(default_factory=list)
+    coverage_before: list[FacetCoverage] = Field(default_factory=list)
+    coverage_after: list[FacetCoverage] = Field(default_factory=list)
+    rejected_candidates_considered: int = 0
+    rescued_evidence_ids: list[str] = Field(default_factory=list)
+    rescued_facet_by_evidence_id: dict[str, str] = Field(default_factory=dict)
+    expanded: bool = False
+    removed_evidence_ids: list[str] = Field(default_factory=list)
+    no_op_reason: str = ""
+    hit_cap: bool = False
+
+
 class WorkerAction(BaseModel):
     tool: str
     query: str
@@ -505,6 +573,12 @@ class EvidenceState(BaseModel):
     # persistent colony.
     final_need_graph: dict[str, NeedNode] = Field(default_factory=dict)
     final_recovery_state: RecoverySnapshot = Field(default_factory=RecoverySnapshot)
+    # Read-only audit trail for the facet-completeness rescue layer (Pass 2
+    # after _select_evidence) -- None whenever that pass never ran (no
+    # synthesizer configured, or the enforce_alignment fast-repair path,
+    # which this layer deliberately does not touch). Never read by any
+    # decision path.
+    facet_rescue: FacetRescueTelemetry | None = None
 
     def has_evidence(self) -> bool:
         return bool(self.evidence)

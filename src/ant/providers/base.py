@@ -7,6 +7,7 @@ from ant.domain import (
     AnswerObligation,
     Evidence,
     EvidenceUpgradeVerdict,
+    FacetRescuePlan,
     FrontierResult,
     GraphConsolidationPlan,
     GroundedUpdate,
@@ -148,6 +149,33 @@ class WorkerReasoner(Protocol):
         reopened first -- see LocalCoordinator._select_evidence and Shared
         Evidence State's "evidence compression is reversible" principle.
         Both are index strings into the `evidence` argument.
+        """
+        ...
+
+    def assess_facet_completeness(
+        self,
+        *,
+        question: str,
+        selected_evidence: list[Evidence],
+        rejected_evidence: list[Evidence],
+    ) -> FacetRescuePlan:
+        """The facet-completeness rescue layer's one call, run as Pass 2
+        strictly after select_evidence (Pass 1) has already produced
+        `selected_evidence` -- never a replacement for it, never loosening
+        it. Identifies the coarse, answer-critical semantic facets
+        `question` requires (a second requested mechanism, enumeration
+        completeness, a cross-module/causal chain link -- see AnswerFacet),
+        judges whether `selected_evidence` already substantively supports
+        each one, and -- only for facets that don't -- names the smallest
+        sufficient rejected_evidence indices that would rescue it.
+        Facets must be derived from the question itself, never invented
+        because rejected_evidence happens to contain something interesting
+        for it (that would make every rejection self-justifying). Must stay
+        fully source-agnostic: no worker/path identity may influence which
+        facets exist, their coverage verdict, or which rescue candidates get
+        named -- see LocalCoordinator._complete_missing_evidence_facets,
+        which applies this plan mechanically (cap enforcement, dedup
+        against already-selected evidence) rather than re-deciding it.
         """
         ...
 
