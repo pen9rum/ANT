@@ -316,6 +316,44 @@ def test_k_at_cap_with_no_safe_replacement_is_a_no_op() -> None:
     assert "no safe replacement" in telemetry.no_op_reason
 
 
+def test_replacement_at_cap_removes_only_the_one_intended_instance_of_a_duplicate() -> None:
+    # Regression test for a real bug found live on the Phase-12 population
+    # audit (yt-dlp `72ff3fbf2a99`): the original selected set had 3
+    # content-identical items (same path/lines/quote surfaced by two
+    # different rounds/workers), all legitimately present. Removing "the
+    # item matching this key" instead of "the item at this original
+    # position" silently deleted all 3 instead of the single one the
+    # reasoner named -- 16 items in, only 14 out, for one rescue and one
+    # nominal removal.
+    dup_a = _ev("dup.py", quote="identical content")
+    dup_b = _ev("dup.py", quote="identical content")
+    dup_c = _ev("dup.py", quote="identical content")
+    selected = [dup_a, dup_b, dup_c, *(_ev(f"s{i}.py") for i in range(13))]
+    assert len(selected) == 16
+    rejected = [_ev("missing.py", quote="the missing fact")]
+    reasoner = _StubFacetReasoner(
+        FacetRescuePlan(
+            facets=[AnswerFacet(facet_id="x", description="missing fact")],
+            coverage=[FacetCoverage(facet_id="x", support_status="unsupported")],
+            rescue_candidates={"x": ["0"]},
+            replaceable_selected_ids=["1"],
+        )
+    )
+
+    result, telemetry = _complete_missing_evidence_facets(reasoner, "q", selected, rejected, cap=16)
+
+    assert telemetry.final_selected_count == 16
+    assert telemetry.removed_evidence_ids == ["1"]
+    assert telemetry.rescued_evidence_ids == ["0"]
+    # dup_a/dup_b/dup_c are value-equal (same path/quote), so identity (is),
+    # not equality, is the only way to confirm the ONE intended position
+    # was removed and not its content-identical siblings.
+    assert any(x is dup_a for x in result)
+    assert not any(x is dup_b for x in result)
+    assert any(x is dup_c for x in result)
+    assert rejected[0] in result
+
+
 def test_l_no_facets_identified_is_a_no_op() -> None:
     # The "don't invent a facet the question never asked for" invariant is
     # the reasoner's own judgment call (see assess_facet_completeness's

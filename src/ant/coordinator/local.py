@@ -2479,7 +2479,14 @@ def _complete_missing_evidence_facets(
             no_op_reason="all facets already supported",
         )
 
-    current = list(selected)
+    # Tracked by ORIGINAL POSITION in `selected`, not by content-key: two
+    # distinct selected items can legitimately share identical content
+    # (confirmed live on a real yt-dlp Phase-12 trace -- the same chunk
+    # surfaced from two different rounds/workers and both copies survived
+    # Pass 1). Removing "the item matching this key" would silently delete
+    # every such duplicate at once instead of the single intended instance.
+    removed_original_indices: set[int] = set()
+    appended: list[Evidence] = []
     selected_keys = {_evidence_key(item) for item in selected}
     rescued_this_pass_keys: set[tuple[str, int, int, str]] = set()
     rescued_evidence_ids: list[str] = []
@@ -2487,6 +2494,9 @@ def _complete_missing_evidence_facets(
     removed_evidence_ids: list[str] = []
     replaceable_pool = list(plan.replaceable_selected_ids)
     any_cap_blocked = False
+
+    def current_size() -> int:
+        return len(selected) - len(removed_original_indices) + len(appended)
 
     for facet_coverage in missing:
         for raw_index in plan.rescue_candidates.get(facet_coverage.facet_id, []):
@@ -2501,25 +2511,24 @@ def _complete_missing_evidence_facets(
             if key in selected_keys or key in rescued_this_pass_keys:
                 continue
 
-            if len(current) < cap:
-                current.append(item)
+            if current_size() < cap:
+                appended.append(item)
             else:
                 replaced = False
-                current_keys = {_evidence_key(x) for x in current}
                 while replaceable_pool:
                     raw_rep_index = replaceable_pool.pop(0)
                     try:
                         rep_index = int(raw_rep_index)
                     except ValueError:
                         continue
-                    if not (0 <= rep_index < len(selected)):
+                    if (
+                        not (0 <= rep_index < len(selected))
+                        or rep_index in removed_original_indices
+                    ):
                         continue
-                    rep_key = _evidence_key(selected[rep_index])
-                    if rep_key not in current_keys:
-                        continue
-                    current = [x for x in current if _evidence_key(x) != rep_key]
+                    removed_original_indices.add(rep_index)
                     removed_evidence_ids.append(raw_rep_index)
-                    current.append(item)
+                    appended.append(item)
                     replaced = True
                     break
                 if not replaced:
@@ -2529,6 +2538,10 @@ def _complete_missing_evidence_facets(
             rescued_this_pass_keys.add(key)
             rescued_evidence_ids.append(str(index))
             rescued_facet_by_evidence_id[str(index)] = facet_coverage.facet_id
+
+    current = [
+        item for i, item in enumerate(selected) if i not in removed_original_indices
+    ] + appended
 
     rescued_facet_ids = set(rescued_facet_by_evidence_id.values())
     coverage_after = [
