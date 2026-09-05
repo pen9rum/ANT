@@ -1,7 +1,9 @@
 from pathlib import Path
 
+import pytest
+
 from ant.domain import CodeSymbol, Territory, WorkerCard
-from ant.evolution import evolve_workers
+from ant.evolution import _assert_unique_worker_population, evolve_workers
 from ant.memory import CoalitionRecord, ColonyMemoryStore, IndexStore, MemoryRoute
 from ant.memory.colony import CollaborationEpisode
 
@@ -1373,6 +1375,148 @@ def test_specialize_folds_a_child_that_would_collide_with_an_existing_worker_id(
     residual = stored_workers.get("worker-pkg")
     assert residual is not None
     assert "pkg/existing/stray.py" in residual.files
+
+
+def _specialize_setup_with_residual_and_subdirectory_groups(
+    tmp_path: Path,
+) -> tuple[Path, WorkerCard]:
+    index_path = tmp_path / ".ant"
+    worker = WorkerCard(
+        id="worker-pkg",
+        territory_id="pkg",
+        name="pkg worker",
+        root="pkg",
+        files=["pkg/alpha.py", "pkg/beta.py", "pkg/sub/gamma.py"],
+    )
+    territories = [Territory(id="pkg", root="pkg", files=worker.files)]
+    IndexStore(index_path).save(territories, [worker])
+    memory = ColonyMemoryStore(index_path)
+    for _ in range(2):
+        memory.save_route(
+            MemoryRoute(
+                need_terms=["alpha"], worker_ids=["worker-pkg"], weight=2.0, is_high_quality=False
+            )
+        )
+    for _ in range(2):
+        memory.save_route(
+            MemoryRoute(
+                need_terms=["gamma"], worker_ids=["worker-pkg"], weight=2.0, is_high_quality=False
+            )
+        )
+    return index_path, worker
+
+
+def test_specialize_residual_group_colliding_with_its_own_parent_id_is_disambiguated(
+    tmp_path: Path,
+) -> None:
+    # Regression test for a real crash found live on yt-dlp during Phase 12
+    # (cross-repository generality validation): worker-yt-dlp-extractor has
+    # ~1000 files sitting flat directly under yt_dlp/extractor/ plus a
+    # handful under a genuine subdirectory. _subdirectory_groups keys the
+    # "residual" (no-further-subdirectory) group as `worker.root` itself,
+    # which slugs to the exact same id the worker already has --
+    # _fold_colliding_groups never caught this because it deliberately
+    # excludes worker.id from its own collision check (that check exists
+    # for the *different*, unrelated-other-worker case covered by
+    # test_specialize_folds_a_child_that_would_collide_with_an_existing_worker_id
+    # above). Before the fix, this produced a second WorkerCard sharing the
+    # parent's own id, crashing IndexStore.save's UNIQUE constraint on
+    # territories.id the moment specialize ever split a worker whose
+    # residual bucket coincides with its own root.
+    index_path, _ = _specialize_setup_with_residual_and_subdirectory_groups(tmp_path)
+
+    evolve_workers(
+        index_path,
+        min_coalition_count=99,
+        retire_empty=False,
+        merge_overlap=0.99,
+        min_specialization_routes=4,
+        min_specialization_group_routes=2,
+    )
+
+    raw_workers = IndexStore(index_path).load_workers()
+    raw_ids = [w.id for w in raw_workers]
+    assert len(raw_ids) == len(set(raw_ids)), "duplicate worker ids after specialize"
+
+    # Non-destructive overlay: the original parent is untouched, still
+    # present under its original id with its full original file set.
+    parent = next(w for w in raw_workers if w.id == "worker-pkg" and w.structural_action == "")
+    assert set(parent.files) == {"pkg/alpha.py", "pkg/beta.py", "pkg/sub/gamma.py"}
+
+    # The residual child (files directly under pkg/, no deeper
+    # subdirectory) got a DIFFERENT, deterministic, lineage-derived id --
+    # not a second "worker-pkg".
+    residual_children = [
+        w for w in raw_workers if w.id != "worker-pkg" and "pkg/alpha.py" in w.files
+    ]
+    assert len(residual_children) == 1
+    residual = residual_children[0]
+    assert residual.id == "worker-pkg--specialize--pkg"
+    assert residual.territory_id == "pkg--specialize--pkg"
+    assert set(residual.files) == {"pkg/alpha.py", "pkg/beta.py"}
+    assert residual.parent_worker_ids == ["worker-pkg"]
+
+    # The subdirectory child never collided with anything and keeps its
+    # normal, un-disambiguated id -- proving the fix is scoped to the
+    # colliding group only.
+    subdirectory_children = [
+        w for w in raw_workers if w.id != "worker-pkg" and "pkg/sub/gamma.py" in w.files
+    ]
+    assert len(subdirectory_children) == 1
+    assert subdirectory_children[0].id == "worker-pkg-sub"
+
+
+def test_specialize_residual_collision_disambiguation_is_deterministic_across_reruns(
+    tmp_path: Path,
+) -> None:
+    # Same invariant the design explicitly called for: rerunning the same
+    # specialization decision from the same starting state must yield the
+    # same disambiguated id every time -- no random UUIDs, no dependence on
+    # dict/set iteration order.
+    ids_by_run = []
+    for _ in range(2):
+        run_tmp_path = tmp_path / f"run-{len(ids_by_run)}"
+        run_tmp_path.mkdir()
+        index_path, _ = _specialize_setup_with_residual_and_subdirectory_groups(run_tmp_path)
+        evolve_workers(
+            index_path,
+            min_coalition_count=99,
+            retire_empty=False,
+            merge_overlap=0.99,
+            min_specialization_routes=4,
+            min_specialization_group_routes=2,
+        )
+        raw_workers = IndexStore(index_path).load_workers()
+        ids_by_run.append(sorted(w.id for w in raw_workers))
+
+    assert ids_by_run[0] == ids_by_run[1]
+    assert "worker-pkg--specialize--pkg" in ids_by_run[0]
+
+
+def test_assert_unique_worker_population_passes_on_a_unique_population() -> None:
+    workers = [
+        WorkerCard(id="worker-a", territory_id="a", name="a", root="a", files=["a.py"]),
+        WorkerCard(id="worker-b", territory_id="b", name="b", root="b", files=["b.py"]),
+    ]
+    _assert_unique_worker_population(workers)  # must not raise
+
+
+def test_assert_unique_worker_population_raises_on_duplicate_worker_id() -> None:
+    workers = [
+        WorkerCard(id="worker-a", territory_id="a1", name="a", root="a", files=["a.py"]),
+        WorkerCard(id="worker-a", territory_id="a2", name="a again", root="a2", files=["a2.py"]),
+    ]
+    with pytest.raises(AssertionError, match="duplicate worker ids"):
+        _assert_unique_worker_population(workers)
+
+
+def test_assert_unique_worker_population_raises_on_duplicate_territory_id() -> None:
+    workers = [
+        WorkerCard(id="worker-a", territory_id="shared", name="a", root="a", files=["a.py"]),
+        WorkerCard(id="worker-b", territory_id="shared", name="b", root="b", files=["b.py"]),
+    ]
+    with pytest.raises(AssertionError, match="duplicate territory ids"):
+        _assert_unique_worker_population(workers)
 
 
 class _RouteClusterFakeEmbedder:

@@ -270,6 +270,8 @@ def evolve_workers(
     events.extend(promotion_events)
     _tel("AFTER promote: promotion_events=", [e.model_dump() for e in promotion_events])
 
+    _assert_unique_worker_population(workers)
+
     territories = [
         Territory(
             id=worker.territory_id,
@@ -776,6 +778,7 @@ def _specialize_overloaded_workers(
     """
     events: list[EvolutionEvent] = []
     result: list[WorkerCard] = []
+    existing_ids = {worker.id for worker in workers}
     for worker in workers:
         worker_routes = routes_by_worker.get(worker.id, [])
         # sum(occurrence_count), not len(worker_routes): route consolidation
@@ -859,6 +862,11 @@ def _specialize_overloaded_workers(
             )
             for group, files in sorted(groups.items())
         ]
+        children = [
+            _disambiguate_specialize_child_id(child, worker, existing_ids) for child in children
+        ]
+        for child in children:
+            existing_ids.add(child.id)
         # Non-destructive overlay (Phase 3): the parent stays in the pool
         # as a fallback, children are ADDED alongside it -- routing must
         # still be able to recruit the original worker even after these
@@ -1110,6 +1118,65 @@ def _fold_colliding_groups(
     for group in colliding:
         folded.setdefault(worker.root, []).extend(folded.pop(group))
     return folded
+
+
+def _disambiguate_specialize_child_id(
+    child: WorkerCard, worker: WorkerCard, existing_ids: set[str]
+) -> WorkerCard:
+    """Non-destructive overlay (Phase 3) never removes `worker`, so a
+    specialize group whose slug happens to match an id already in play must
+    not silently become a second WorkerCard under that same id. The case
+    that actually crashed IndexStore.save's UNIQUE constraint on
+    territories.id live on yt-dlp (Phase 12): `_subdirectory_groups` keys
+    its "residual" group -- files not living under any further
+    subdirectory -- as `worker.root` itself, which slugs to the exact same
+    id `worker` was originally given. `_fold_colliding_groups` only ever
+    checked collisions against *other* workers (deliberately excluding
+    `worker.id`, for the unrelated-existing-worker case it was written
+    for), so this self-collision passed through untouched.
+
+    Child identity here is re-derived from parent lineage
+    (`{parent.id}--specialize--{group_slug}`) whenever the naive id would
+    collide with anything already in the population -- deterministic (same
+    parent + same group slug -> same disambiguated id every run, no random
+    UUIDs), and guaranteed distinct from the parent by construction. Groups
+    that don't collide keep their existing id/territory_id untouched.
+    """
+    if child.id not in existing_ids:
+        return child
+    disambiguated_id = f"{worker.id}--specialize--{child.territory_id}"
+    return child.model_copy(
+        update={
+            "id": disambiguated_id,
+            "territory_id": disambiguated_id.removeprefix("worker-"),
+        }
+    )
+
+
+def _assert_unique_worker_population(workers: list[WorkerCard]) -> None:
+    """Last-line-of-defense check before persistence: every structural
+    mutation (birth/specialize/merge/promote) is expected to keep ids
+    unique on its own -- _disambiguate_specialize_child_id is the specific
+    fix for the one case that didn't (a specialize residual group
+    colliding with its own parent's id, live on yt-dlp during Phase 12) --
+    but a duplicate slipping through here would otherwise surface only as
+    IndexStore.save's opaque SQLite UNIQUE-constraint crash, for whichever
+    mutation caused it.
+    """
+    duplicate_worker_ids = sorted(
+        worker_id for worker_id, count in Counter(w.id for w in workers).items() if count > 1
+    )
+    duplicate_territory_ids = sorted(
+        territory_id
+        for territory_id, count in Counter(w.territory_id for w in workers).items()
+        if count > 1
+    )
+    if duplicate_worker_ids or duplicate_territory_ids:
+        raise AssertionError(
+            "evolve_workers produced a non-unique population before persistence: "
+            f"duplicate worker ids={duplicate_worker_ids} "
+            f"duplicate territory ids={duplicate_territory_ids}"
+        )
 
 
 def _semantic_groups(
