@@ -1,0 +1,24 @@
+{
+  "name": "RepoProbe",
+  "role": "benchmark (dataset + official checklist scorer + Docker-isolated reference harness)",
+  "official_repo": "https://github.com/Tencent-Hunyuan/RepoProbe",
+  "commit_sha": "5ac4212",
+  "commit_note": "Latest commit at audit time (\"Pin upstream repositories to their snapshot commits and link the arXiv preprint\"). Repo first published 2026-08-05/06 -- very new, no release tags, minimal community track record.",
+  "paper": "arXiv:2608.04783, accepted ASE 2026",
+  "license_code": "Apache-2.0",
+  "license_data": "CC BY 4.0 (original GitHub Discussion text copyright remains with original authors)",
+  "environment_strategy": "no vendoring of the Docker harness or dataset_loader.py; vendored ONLY prompt_templates_en.py (the scoring prompt template file) with this manifest as provenance. Dataset CSVs and repos_info.json are fetched live from the pinned commit's raw content at load time, never locally re-typed.",
+  "judge_model_note": "RepoProbe's own released code defaults its judge to gpt-5.2; its paper's own headline number used claude-sonnet-4-5 instead. This evaluation suite deliberately uses neither -- every LLM-judged benchmark in this suite is judged by the SAME centralized GPT-5 snapshot (ant.evaluation_suite.judge.DEFAULT_JUDGE_MODEL, gpt-5-2025-08-07) so that judge-model choice is held constant across every system compared here. This is a disclosed, deliberate fairness choice, not a fidelity gap or a blocker -- see judge.py's own module docstring.",
+  "benchmark_adapter": "src/ant/benchmarks/repoprobe.py",
+  "local_modifications": [
+    "CSV parsing uses Python's stdlib csv module instead of pandas (RepoProbe's own dataset_loader.py dependency) -- same column mapping (taxonomy/difficulty/question/answer/checklist), verified against the official loader's own column_mapping dict.",
+    "Scoring prompt template vendored verbatim from prompt_templates_en.py (DIRECT_SCORING_WITH_REPO_TEMPLATE), not paraphrased -- the checklist rubric itself (knowledge_score/9 + clarity_score/1) is unchanged from the official template.",
+    "Judge call uses this suite's own centralized GPT-5 judge (src/ant/evaluation_suite/judge.py, OpenAI Responses API) instead of RepoProbe's own judge (whether its code-default gpt-5.2 or its paper's claude-sonnet-4-5) -- an intentional standardization, not a workaround for a missing credential.",
+    "repo_info_section's directory_structure is NOT populated via repomix (a Node.js tool, deliberately not vendored to avoid a new non-Python toolchain dependency) -- passed empty instead. This is a disclosed, minor fidelity gap affecting only supplementary prompt context, not the scored checklist itself.",
+    "n_scalar_calls=3 (three independent judge calls, mean total score) -- this suite's own uniform internal stabilization policy applied to every LLM-scalar benchmark, not an attempt to match RepoProbe's own main-table protocol (a single call; RepoProbe's own 5-run averaging is a separate RQ2-only stability-analysis experiment)."
+  ],
+  "official_reference_agent_status": "NOT executed live in this session -- the paper's own headline system is Claude Code (a separate CLI tool, not vendored); a swappable example_agent.py also exists in the official repo. See external_wrappers/repoprobe_reference_scaffold.py for the designed (not yet run) wrapper.",
+  "vendored_files": [
+    "third_party/manifests/repoprobe/prompt_templates_en.py (verbatim, from the pinned commit)"
+  ]
+}

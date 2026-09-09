@@ -1,0 +1,22 @@
+{
+  "name": "DeepRepoQA",
+  "role": "external baseline method (repository-domain, MCTS-based deep agent exploration)",
+  "official_repo": "https://github.com/peng-weihan/DeepRepoQA",
+  "commit_sha": "TO BE PINNED AT CHECKOUT TIME -- verify latest SHA on github.com/peng-weihan/DeepRepoQA before cloning, not assumed here",
+  "paper": "arXiv:2608.24221, 'DeepRepoQA: Code Repository Question Answering with Deep Agent Exploration' (Weihan Peng et al.), preprint as of audit time; OpenReview forum id k3R9Dq1N6P exists (review venue/outcome unconfirmed)",
+  "license": "Apache-2.0",
+  "evaluated_by_authors_on": "SWE-QA (arXiv:2509.14635, ACL 2026 Findings, 15 repos) -- CRITICAL: this is a DIFFERENT benchmark from our own SWE-QA-Pro (arXiv:2603.16124, TIGER-AI-Lab, 26 repos). Never evaluated by the authors on SWE-QA-Pro or RepoProbe. Any DeepRepoQA number cited in our paper MUST be labeled as a SWE-QA result, never silently presented as SWE-QA-Pro.",
+  "agent_architecture": {
+    "roles": ["Perception Agent (trajectory synthesis/redundancy detection)", "Planning Agent (candidate action proposal)", "Execution Agent (executes actions via repo index)", "Evaluation Agent (scalar utility scoring + qualitative guidance)"],
+    "search_mechanism": "Genuine MCTS: UCT selection Q(s,a) + c*sqrt(ln N(s)/N(s,a)), max 3 children/node expansion, max 15 iterations, temperature 0.7 exploration / 0 generation",
+    "tools": ["FindClass", "FindFunction", "FindCodeSnippet (Tree-sitter, fuzzy match)", "SemanticSearch (voyage-code-3 embeddings)", "ViewCode", "Finish"]
+  },
+  "proprietary_dependency": "voyage-code-3 embedding model (Voyage AI, paid API) for SemanticSearch -- a real infra dependency distinct from ANT's own embedding approach. Per Phase I's explicit instruction, this is NOT to be silently swapped out to make either system look better/worse -- any comparison run with a substitute embedding model must be labeled SEMI-CONTROLLED, not CONTROLLED.",
+  "model_assumptions": "Model-agnostic (prompted inference only, no training) -- evaluated by authors across GLM-4.6, Kimi K2, Qwen3-Coder-480B-A35B-Instruct, GPT-5.1.",
+  "gpt_4_1_substitution": "Architecturally clean (no training/vendor-specific dependency blocking it) -- untested by the authors, so absolute score comparability to their own reported numbers cannot be assumed even if the swap itself is mechanically easy.",
+  "compute_overhead_vs_single_pass": "Real and non-trivial: up to 15 MCTS iterations x up to 3-way expansion x a 4-role Perception/Planning/Execution/Evaluation loop per node is substantially more LLM calls than a single ReAct pass. The paper's own Appendix B token comparison shows total cost roughly comparable to OpenHands/SWE-agent (not wildly more), but still clearly more than Matched ReAct or a single ANT round -- must be reported explicitly in the fairness table, not hidden.",
+  "porting_effort_to_sweqa_pro_or_repoprobe": "MODERATE -- mechanically plausible (Tree-sitter supports the relevant languages for both benchmarks; the pipeline already builds its own repo index from an arbitrary checkout) but genuinely untested by the authors on either target benchmark, and RepoProbe's own tool surface (file-navigation/symbol-search/cross-reference, matching what Claude Code exposes) differs from DeepRepoQA's own six custom actions -- porting to RepoProbe specifically would need re-validating the action set against RepoProbe's Docker-isolated environment, not just a data-format adapter.",
+  "environment_strategy": "Pinned external checkout under third_party/, NOT vendored into ANT's own source tree -- see external_wrappers/deeprepoqa.py for the designed (not yet cloned/run) subprocess wrapper capable of plugging in either benchmark's repository environment.",
+  "execution_status": "NOT executed in this session -- no live clone/run performed, no full benchmark run of any kind. Architecture assessment is based on the prior research pass's direct reading of the paper text and repo structure.",
+  "local_modifications": "None yet."
+}

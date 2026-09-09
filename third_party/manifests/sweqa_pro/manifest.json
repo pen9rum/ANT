@@ -1,0 +1,24 @@
+{
+  "name": "SWE-QA-Pro",
+  "role": "benchmark (dataset + official scorer + official baseline agent)",
+  "official_repo": "https://github.com/TIGER-AI-Lab/SWE-QA-Pro",
+  "commit_sha": "93ac6a4",
+  "commit_note": "Latest commit on main at audit time (\"update LICENSE\"). No release tags exist on this repo.",
+  "paper": "arXiv:2603.16124",
+  "dataset": "https://huggingface.co/datasets/TIGER-Lab/SWE-QA-Pro-Bench",
+  "license_code": "MIT",
+  "license_data": "CC BY 4.0 (arXiv page) / MIT (HF dataset card) -- discrepancy noted, not resolved by this project",
+  "environment_strategy": "no vendoring of the agent/judge package; vendored ONLY the small, self-contained judge_prompt.txt file (exact rubric text) with this manifest as provenance. Judge API call shape (model, reasoning effort, verbosity, response parsing) is a faithful port in src/ant/benchmarks/sweqa_pro.py, verified against the real judge.py source read at the pinned commit.",
+  "model_used_by_official_judge": "gpt-5-2025-08-07",
+  "model_used_by_official_baseline_agent": "configurable via eval/configs/models.yaml -- gpt-4.1 (gpt-4.1-2025-04-14) is one of the officially supported models",
+  "benchmark_adapter": "src/ant/benchmarks/sweqa_pro.py",
+  "local_modifications": [
+    "None to the judge prompt text (vendored verbatim, byte-identical to the fetched official file).",
+    "Judge API call is a faithful re-implementation of judge.py's _score_one (same model, same reasoning effort, same verbosity, same JSON parsing/validation) -- not literally importing their package, since that would require standing up their full LangGraph/LangChain dependency tree for a scoring-only use case.",
+    "3x-averaging is applied per the paper's own documented protocol (confirmed via direct fetch of the official repo, not assumed)."
+  ],
+  "official_baseline_agent_status": "NOT executed live in this session -- see external_wrappers/sweqa_pro_native_agent.py for the designed (not yet run) subprocess wrapper. Full source of eval/sweqapro/agent.py was fetched and read for design purposes.",
+  "vendored_files": [
+    "third_party/manifests/sweqa_pro/judge_prompt.txt (verbatim, from the pinned commit)"
+  ]
+}

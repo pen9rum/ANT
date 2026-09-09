@@ -1,0 +1,24 @@
+{
+  "name": "HiFiRepoQA",
+  "role": "external baseline method (repository-domain, DAG-structured multi-agent pipeline)",
+  "official_repo": "https://github.com/HiFiRepoQA/HiFiRepoQA",
+  "commit_sha": "a2d833d9c292f2a4aaae349d8d8e9bd9bed8339c",
+  "commit_note": "Repo has exactly 1 commit ('first commit'), authored by 'anonymous'. This is an anonymized double-blind-review code release, not yet a public paper -- no arXiv ID, no OpenReview listing, no Semantic Scholar/DBLP entry found despite thorough search. Only findable via GitHub's own repository search (not general web search engines).",
+  "paper_status": "UNPUBLISHED / under anonymous peer review -- title per repo README: 'HiFiRepoQA: DAG-Structured Multi-Agent Framework for Repository-Level Q&A'. Corrected from an earlier audit pass that concluded (incorrectly) this method did not exist -- that was a real false negative caused by too-narrow search strategy, not a fabrication risk.",
+  "license": "CC-BY-4.0",
+  "self_released_benchmark": "HiFiRepoQA Bench -- 526 real GitHub-issue-derived questions across 170 repos, 10 languages; bundled in datasets/. NOT SWE-QA-Pro, NOT RepoProbe -- entirely separate self-authored benchmark with its own weighted rubric-based scoring.",
+  "agent_architecture": {
+    "PlanningAgent": "create_plan()/execute_plan() -- builds a DAG of QA steps via LLM, computes topological layers for parallelizable batches",
+    "RetrievalAgent": "clone_repo()/build_knowledge_base()/retrieve_for_step() -- directory/file/keyword/embedding retrieval",
+    "AnalysisAgent": "analyze_intent()/analyze_step() -- evidence-based per-step reasoning",
+    "SynthesisAgent": "synthesize() -- final answer generation with citations",
+    "refinement_loop": "max_follow_up_rounds=2, min_confidence=0.3 -- a bounded verify-then-refine loop, not unbounded search"
+  },
+  "tools": ["Tree-sitter (multi-language AST) with Python ast fallback", "git clone", "embedding cosine-similarity search", "keyword search fallback", "no execution/test tool"],
+  "model_assumptions": "Model-agnostic via env vars (REPO_QA_API_KEY/REPO_QA_API_URL/REPO_QA_MODEL_NAME, OpenAI-compatible HTTP contract). Config placeholder defaults to gpt-4o. Embedding model fixed: sentence-transformers/all-MiniLM-L6-v2 (local, not swappable via env vars). The bundled evaluate.py separately hardcodes GPT-4o-mini as its own LLM-as-Judge model.",
+  "gpt_4_1_substitution": "EASY -- REPO_QA_MODEL_NAME is already a plain config value, no code change needed for the pipeline itself. The evaluator's own hardcoded GPT-4o-mini judge would need a small code edit if consistency with the pipeline's own model is desired.",
+  "porting_effort_to_sweqa_pro_or_repoprobe": "EASY-MODERATE per the corrected audit: clone_repo() already accepts an arbitrary GitHub URL (not a hardcoded target); main.py/main_multi_agent.py read question records from a hardcoded input_path in HiFiRepoQA's own JSON schema (repo/title/body/url/language) with no CLI args. Porting requires: (1) an adapter script converting SWE-QA-Pro/RepoProbe question records into this JSON schema, (2) editing/wrapping the hardcoded input_path/output_dir string literals. No core DAG/agent logic changes needed. Tree-sitter already covers the relevant languages.",
+  "environment_strategy": "Pinned external checkout under third_party/, NOT vendored into ANT's own source tree -- see external_wrappers/hifirepoqa.py for the designed (not yet cloned/run) subprocess wrapper.",
+  "execution_status": "NOT executed in this session -- no live clone/run performed. Architecture and porting-effort assessment are based on direct fetches of the actual source files (src/repo_qa_agent.py, src/config.py, src/evaluate.py, README.md, a sample dataset entry), not assumption.",
+  "local_modifications": "None yet -- no code has been checked out or modified. This manifest documents design/feasibility findings only."
+}
