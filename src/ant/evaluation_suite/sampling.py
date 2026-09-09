@@ -6,10 +6,24 @@ from collections import defaultdict
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
 from ant.benchmarks.base import TaskExample
+
+# A manifest's `status` field is the load-bearing guard against a "dev
+# demonstration" sample silently becoming "the" main-evaluation sample by
+# accident. "development" is the ONLY status build_sample_manifest ever
+# produces -- promotion to "formal" is a deliberate, out-of-band, human
+# decision (edit the saved JSON's `status` field, or construct a
+# SampleManifest with status="formal" explicitly by hand) that this module
+# never performs on its own, and specifically never as a function of
+# sample size, per_stratum, or any other numeric knob. This module does
+# not choose a main-evaluation sample size -- that is a separate decision,
+# to be made explicitly elsewhere, not inferred from whatever a dev
+# demonstration happened to use.
+ManifestStatus = Literal["development", "formal"]
 
 
 class SampleManifest(BaseModel):
@@ -23,9 +37,17 @@ class SampleManifest(BaseModel):
     recorded purely so the selection process itself is auditable, not
     re-derived from them (apply_sample_manifest always filters by the
     saved task_ids list, never by re-running the sampler).
+
+    `status` defaults to "development" and MUST be "formal" before a
+    manifest may back a main-evaluation run -- see `require_formal_manifest`
+    below, which every formal-run driver script must call before using a
+    manifest's task_ids for real agent/judge execution. A manifest built
+    by `build_sample_manifest` is always "development"; nothing in this
+    module ever produces "formal" on its own.
     """
 
     benchmark: str
+    status: ManifestStatus = "development"
     stratum_key: str
     per_stratum: int
     seed: int
@@ -33,6 +55,7 @@ class SampleManifest(BaseModel):
     strata: dict[str, int]
     task_ids: list[str]
     created_at: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())
+    note: str = ""
 
 
 def stratified_sample(
@@ -76,7 +99,15 @@ def build_sample_manifest(
     stratum_key: Callable[[TaskExample], str] = lambda e: str(e.metadata.get("repo", "")),
     stratum_key_name: str = "repo",
     seed: int,
+    note: str = "",
 ) -> SampleManifest:
+    """Always produces a status="development" manifest -- this function
+    has no way to build a "formal" one. `per_stratum`/`seed` here are
+    whatever the caller passes; this function does not choose or default
+    a main-evaluation sample size, and a caller demonstrating the
+    mechanism (rather than pre-specifying a real main sample) should pass
+    a `note` saying so explicitly (see the two `sample_manifest_dev.json`
+    files under third_party/manifests/ for the existing example)."""
     groups: dict[str, list[TaskExample]] = defaultdict(list)
     for example in examples:
         groups[stratum_key(example)].append(example)
@@ -85,13 +116,36 @@ def build_sample_manifest(
     )
     return SampleManifest(
         benchmark=benchmark,
+        status="development",
         stratum_key=stratum_key_name,
         per_stratum=per_stratum,
         seed=seed,
         total_examples_considered=len(examples),
         strata={key: len(groups[key]) for key in sorted(groups)},
         task_ids=[example.task_id for example in sampled],
+        note=note,
     )
+
+
+def require_formal_manifest(manifest: SampleManifest) -> SampleManifest:
+    """The one required gate every formal-run driver script must call
+    before using a manifest's task_ids to run real agents/judges. Raises
+    on any manifest whose status is not exactly "formal" -- a
+    status="development" manifest (everything build_sample_manifest
+    produces, including both existing sample_manifest_dev.json files) is
+    refused, so a dev demonstration manifest can never be silently used to
+    back a real evaluation run just because a driver script happened to
+    point at its file path."""
+    if manifest.status != "formal":
+        raise ValueError(
+            f"Refusing to use a status={manifest.status!r} sample manifest "
+            f"(benchmark={manifest.benchmark!r}, {len(manifest.task_ids)} task_ids) to drive a "
+            "formal evaluation run. Only a manifest whose status is explicitly 'formal' -- a "
+            "deliberate, out-of-band decision, never automatic -- may be used this way. If this "
+            "manifest was meant to be the real main sample, promote it explicitly (edit its "
+            "saved JSON's `status` field) rather than routing around this check."
+        )
+    return manifest
 
 
 def save_sample_manifest(manifest: SampleManifest, out_path: Path) -> None:

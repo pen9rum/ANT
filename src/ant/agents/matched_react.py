@@ -63,6 +63,48 @@ AVAILABLE_TOOLS = (
     "subclasses",
 )
 
+# Per-call result limits (the `limit=` argument each LocalSearchTool method
+# receives). An earlier version of this file called every tool with a
+# uniform limit=6 and rationalized it after the fact as "generous
+# compensation" for being a single agent -- that justification was never
+# actually specified anywhere before being written down, so it does not
+# count as a "previously specified experimental reason" to keep an
+# unequal primitive. The fairness-closure audit's own principle applies
+# instead: expose comparable PRIMITIVE repository-information capabilities,
+# and let ANT's advantage come only from its coordination mechanisms (Need
+# Graph, multi-worker, recovery), not from a bigger single-call limit no
+# one asked for. ANT_PARITY_TOOL_LIMITS is therefore the DEFAULT and is
+# copied exactly from AutonomousWorker's own real, operative per-call
+# limits -- specifically the reasoner-driven `_execute_tool` path
+# (navigate/references/callers/callees/assignments/imports=2, subclasses=4)
+# plus the two unconditional calls `AutonomousWorker.run()` always makes
+# itself (search/dense_search=4) -- because that reasoner-driven path is
+# the ONLY one the real AntAgent baseline ever exercises in this harness
+# (AntAgent always constructs LocalCoordinator with a reasoner; the
+# fixed/mechanical fallback pipeline in AutonomousWorker only runs in
+# isolated unit tests that pass reasoner=None). ANT worker code itself is
+# never modified to produce this table -- these numbers are read directly
+# from ant.workers.autonomous.AutonomousWorker, not invented.
+ANT_PARITY_TOOL_LIMITS: dict[str, int] = {
+    "search": 4,
+    "dense_search": 4,
+    "navigate": 2,
+    "references": 2,
+    "callers": 2,
+    "callees": 2,
+    "assignments": 2,
+    "imports": 2,
+    "subclasses": 4,
+}
+
+# A deliberately more generous ALTERNATE configuration, kept only for a
+# later, explicitly separate sensitivity experiment ("does Matched ReAct do
+# better/worse with a bigger primitive budget than an ANT worker gets") --
+# NOT the default, NOT run as part of this pass. Selecting it requires
+# explicitly passing `tool_result_limits=GENEROUS_SENSITIVITY_TOOL_LIMITS`
+# at construction time; nothing in this module does that itself.
+GENEROUS_SENSITIVITY_TOOL_LIMITS: dict[str, int] = dict.fromkeys(AVAILABLE_TOOLS, 6)
+
 _SYSTEM_PROMPT = """You are a single autonomous agent answering a question about a \
 software repository. You have direct access to the following tools over the \
 repository (the same underlying navigation capability available to a \
@@ -146,24 +188,55 @@ class MatchedReActAgent:
     specialized WorkerCards, no Need Graph, no runtime graph revision, no
     multi-worker coordination, no explicit progress/recovery state, no
     local exhaustion, no cross-task memory -- exactly the negative-space
-    Phase F specifies. The agent sees the WHOLE repository (every file
-    ANT's own worker population collectively covers, not a
-    territory-scoped slice) and has access to the SAME underlying tool
-    implementations ANT's own AutonomousWorker uses (`ant.tools.local.
-    LocalSearchTool`, the identical class, not a reimplementation) --
-    matching "same underlying lexical/dense/symbol-navigation capability"
-    as literally as this codebase allows.
+    Phase F specifies. The agent sees every file ANT's own worker
+    population collectively covers, not a territory-scoped slice -- NOT,
+    despite how that might read, literally every file that exists in the
+    git checkout. Both are scoped by ANT's own RepoEnvironment
+    (IGNORED_DIRS + a TEXT_EXTENSIONS allowlist), which excludes binaries
+    (correctly) but also some real text-bearing formats this allowlist
+    happens to omit -- .rst and .sql being the two that matter most
+    concretely: measured directly against 4 already-cloned benchmark
+    repos, this excludes 400/1803 files from sphinx (mostly .rst -- sphinx
+    is itself a documentation tool, so this is a meaningful chunk of its
+    own repo) and 1473/3377 from sqlfluff (.sql fixtures -- sqlfluff is a
+    SQL linter, so these are directly relevant to its own behavior). This
+    is a real evaluation-infrastructure limitation shared identically by
+    ANT and every baseline reusing RepoEnvironment (not a Matched-ReAct-
+    specific gap, and not something this class can fix on its own --
+    RepoEnvironment is frozen ANT core) -- never describe this as
+    "unrestricted whole-repository access" in any report or paper text.
+    The agent also has access to the SAME underlying tool implementations
+    ANT's own AutonomousWorker uses (`ant.tools.local.LocalSearchTool`,
+    the identical class, not a reimplementation) -- matching "same
+    underlying lexical/dense/symbol-navigation capability" as literally as
+    this codebase allows.
 
     `tool_call_budget`, not `max_rounds`, is this agent's real compute
     ceiling -- see the module docstring above for why, and why its default
     is a measured mean from real ANT usage, not an arbitrary number.
+
+    `tool_result_limits` (per-call `limit=` values) default to
+    ANT_PARITY_TOOL_LIMITS -- copied exactly from AutonomousWorker's own
+    real per-call limits, not chosen independently -- so a single tool
+    call here returns exactly as much as the same call would inside an
+    ANT worker. See ANT_PARITY_TOOL_LIMITS's own module-level comment for
+    why this is the default and GENEROUS_SENSITIVITY_TOOL_LIMITS is not.
     """
 
     name = "matched_react"
 
-    def __init__(self, model: str = "gpt-4.1", tool_call_budget: int | None = None) -> None:
+    def __init__(
+        self,
+        model: str = "gpt-4.1",
+        tool_call_budget: int | None = None,
+        tool_result_limits: dict[str, int] | None = None,
+    ) -> None:
         self.model = model
         self.tool_call_budget = tool_call_budget or DEFAULT_TOOL_CALL_BUDGET
+        # Default: exact ANT-worker per-call limits (see ANT_PARITY_TOOL_LIMITS
+        # above). Pass GENEROUS_SENSITIVITY_TOOL_LIMITS explicitly to run the
+        # deferred sensitivity configuration instead -- never the default.
+        self.tool_result_limits = tool_result_limits or ANT_PARITY_TOOL_LIMITS
 
     def run(self, example: TaskExample, environment_root: Path) -> AgentResult:
         provider = OpenAIProvider(model=self.model)
@@ -231,17 +304,21 @@ class MatchedReActAgent:
             # tool it nominally "has access to". Every other tool has no
             # such indexed variant, so this is not a general pattern to
             # extend beyond what ANT's own worker actually does.
+            # Every AVAILABLE_TOOLS entry is covered by both
+            # ANT_PARITY_TOOL_LIMITS and GENEROUS_SENSITIVITY_TOOL_LIMITS;
+            # the fallback only matters for a caller-supplied partial dict.
+            tool_limit = self.tool_result_limits.get(tool_name, 4)
             if tool_name == "navigate":
                 results = tools.resolve_symbol(
-                    query, all_files, limit=6, need=example.question
-                ) or tools.navigate(query, all_files, limit=6)
+                    query, all_files, limit=tool_limit, need=example.question
+                ) or tools.navigate(query, all_files, limit=tool_limit)
             elif tool_name == "callers":
-                results = tools.indexed_callers(query, all_files, limit=6) or tools.callers(
-                    query, all_files, limit=6
-                )
+                results = tools.indexed_callers(
+                    query, all_files, limit=tool_limit
+                ) or tools.callers(query, all_files, limit=tool_limit)
             else:
                 method = getattr(tools, tool_name)
-                results = method(query, all_files, limit=6)
+                results = method(query, all_files, limit=tool_limit)
             history.append(
                 {
                     "step": step,

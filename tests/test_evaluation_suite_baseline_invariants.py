@@ -191,6 +191,87 @@ def test_matched_react_budget_is_fixed_at_construction_and_ignores_example_metad
     assert llm_calls["count"] == 5
 
 
+def test_matched_react_defaults_to_ant_worker_parity_tool_limits(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """An earlier version of this agent called every tool with a uniform
+    limit=6, rationalized after the fact as "generous compensation" for
+    being a single agent -- a justification that was never actually
+    specified anywhere before being written down. The fairness-closure
+    audit's own principle is: expose comparable PRIMITIVE capabilities:
+    ANT's advantage should come only from its coordination mechanisms, not
+    a bigger single-call limit. This locks in that the DEFAULT
+    construction now calls each tool with exactly ANT_PARITY_TOOL_LIMITS'
+    own per-tool value (copied directly from AutonomousWorker's real,
+    operative per-call limits), not the old uniform 6."""
+    from ant.agents import matched_react as react_module
+
+    captured_limits: dict[str, int] = {}
+
+    def fake_responses_json(self, prompt, max_output_tokens=512):
+        if "search" not in captured_limits:
+            return _FakeResponse(json.dumps({"thought": "x", "tool": "search", "query": "foo"}))
+        if "subclasses" not in captured_limits:
+            return _FakeResponse(
+                json.dumps({"thought": "x", "tool": "subclasses", "query": "Foo"})
+            )
+        if "navigate" not in captured_limits:
+            return _FakeResponse(json.dumps({"thought": "x", "tool": "navigate", "query": "Foo"}))
+        return _FakeResponse(json.dumps({"thought": "done", "finish": "answer"}))
+
+    def fake_search(self, q, f, limit=8):
+        captured_limits["search"] = limit
+        return []
+
+    def fake_subclasses(self, symbol, f, limit=8):
+        captured_limits["subclasses"] = limit
+        return []
+
+    def fake_resolve_symbol(self, symbol, f, limit=6, need=""):
+        captured_limits["navigate"] = limit
+        return []
+
+    def fake_navigate(self, symbol, f, limit=6):
+        return []
+
+    monkeypatch.setattr(react_module.OpenAIProvider, "responses_json", fake_responses_json)
+    monkeypatch.setattr(react_module.LocalSearchTool, "search", fake_search)
+    monkeypatch.setattr(react_module.LocalSearchTool, "subclasses", fake_subclasses)
+    monkeypatch.setattr(react_module.LocalSearchTool, "resolve_symbol", fake_resolve_symbol)
+    monkeypatch.setattr(react_module.LocalSearchTool, "navigate", fake_navigate)
+    monkeypatch.setattr(
+        react_module.OpenAIProvider, "synthesize", lambda self, question, evidence: "answer"
+    )
+    monkeypatch.setattr(react_module.OpenAIProvider, "drain_usage", lambda self: TokenUsage())
+
+    agent = MatchedReActAgent()
+    assert agent.tool_result_limits == react_module.ANT_PARITY_TOOL_LIMITS
+    example = TaskExample(benchmark="sweqa_pro", task_id="q1", question="Where is X?", reference="")
+    agent.run(example, tmp_path)
+
+    assert captured_limits["search"] == 4
+    assert captured_limits["subclasses"] == 4
+    assert captured_limits["navigate"] == 2
+
+
+def test_matched_react_sensitivity_tool_limits_are_uniform_and_not_the_default(
+    tmp_path: Path,
+) -> None:
+    """GENEROUS_SENSITIVITY_TOOL_LIMITS exists only as an explicit, opt-in
+    alternate configuration for a later sensitivity experiment -- never
+    selected unless a caller passes it in by name."""
+    from ant.agents import matched_react as react_module
+
+    assert set(react_module.GENEROUS_SENSITIVITY_TOOL_LIMITS.values()) == {6}
+    assert react_module.GENEROUS_SENSITIVITY_TOOL_LIMITS != react_module.ANT_PARITY_TOOL_LIMITS
+    default_agent = MatchedReActAgent()
+    assert default_agent.tool_result_limits != react_module.GENEROUS_SENSITIVITY_TOOL_LIMITS
+    sensitivity_agent = MatchedReActAgent(
+        tool_result_limits=react_module.GENEROUS_SENSITIVITY_TOOL_LIMITS
+    )
+    assert sensitivity_agent.tool_result_limits == react_module.GENEROUS_SENSITIVITY_TOOL_LIMITS
+
+
 def test_ant_agent_never_passes_cross_task_memory(tmp_path: Path, monkeypatch) -> None:
     from ant.agents import ant_adapter as ant_adapter_module
     from ant.domain import EvidenceState

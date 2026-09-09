@@ -1,5 +1,6 @@
 {
   "benchmark": "sweqa_pro",
+  "status": "development",
   "stratum_key": "repo",
   "per_stratum": 3,
   "seed": 20260909,
@@ -112,5 +113,6 @@
     "64be8a3702a1b025",
     "2c098d175a4e1d21"
   ],
-  "created_at": "2026-09-09T06:45:44.982729+00:00"
+  "created_at": "2026-09-09T07:35:03.489372+00:00",
+  "note": "DEVELOPMENT-ONLY demonstration of the stratified sample-manifest mechanism. per_stratum=3 (78/260) is NOT a chosen or endorsed formal main-evaluation sample size -- no such size has been decided. status must be promoted to formal (explicit, out-of-band edit) before this or any manifest may back a real evaluation run; require_formal_manifest() refuses this file as-is."
 }

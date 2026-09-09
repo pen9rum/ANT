@@ -6,9 +6,11 @@ import pytest
 
 from ant.benchmarks.base import TaskExample
 from ant.evaluation_suite.sampling import (
+    SampleManifest,
     apply_sample_manifest,
     build_sample_manifest,
     load_sample_manifest,
+    require_formal_manifest,
     save_sample_manifest,
     stratified_sample,
 )
@@ -95,6 +97,73 @@ def test_apply_sample_manifest_raises_on_missing_task_id_instead_of_silently_res
     reduced = [e for e in examples if e.task_id != manifest.task_ids[0]]
     with pytest.raises(KeyError):
         apply_sample_manifest(reduced, manifest)
+
+
+def test_build_sample_manifest_always_produces_development_status() -> None:
+    examples = _examples({"repoA": 6, "repoB": 6})
+    manifest = build_sample_manifest(examples, benchmark="demo", per_stratum=2, seed=5)
+    assert manifest.status == "development"
+
+
+def test_require_formal_manifest_refuses_a_development_manifest() -> None:
+    examples = _examples({"repoA": 6, "repoB": 6})
+    manifest = build_sample_manifest(examples, benchmark="demo", per_stratum=2, seed=5)
+    with pytest.raises(ValueError, match="development"):
+        require_formal_manifest(manifest)
+
+
+def test_require_formal_manifest_accepts_an_explicitly_promoted_manifest() -> None:
+    examples = _examples({"repoA": 6, "repoB": 6})
+    manifest = build_sample_manifest(examples, benchmark="demo", per_stratum=2, seed=5)
+    promoted = manifest.model_copy(update={"status": "formal"})
+    assert require_formal_manifest(promoted) is promoted
+
+
+def test_manifest_status_round_trips_through_disk(tmp_path: Path) -> None:
+    examples = _examples({"repoA": 6, "repoB": 6})
+    manifest = build_sample_manifest(
+        examples, benchmark="demo", per_stratum=2, seed=5, note="dev demo only"
+    )
+    out_path = tmp_path / "manifest.json"
+    save_sample_manifest(manifest, out_path)
+    loaded = load_sample_manifest(out_path)
+    assert loaded.status == "development"
+    assert loaded.note == "dev demo only"
+    with pytest.raises(ValueError):
+        require_formal_manifest(loaded)
+
+
+def test_existing_dev_manifests_on_disk_are_development_status_and_refused_as_formal() -> None:
+    """Locks in that the two real, live-fetched demonstration manifests
+    committed under third_party/manifests/ cannot accidentally back a
+    formal run -- the actual guard this whole mechanism exists for."""
+    from pathlib import Path as _Path
+
+    repo_root = _Path(__file__).resolve().parents[1]
+    for rel_path in (
+        "third_party/manifests/repoprobe/sample_manifest_dev.json",
+        "third_party/manifests/sweqa_pro/sample_manifest_dev.json",
+    ):
+        manifest_path = repo_root / rel_path
+        assert manifest_path.exists(), manifest_path
+        manifest = load_sample_manifest(manifest_path)
+        assert manifest.status == "development"
+        assert manifest.note != ""
+        with pytest.raises(ValueError):
+            require_formal_manifest(manifest)
+
+
+def test_sample_manifest_defaults_to_development_status_even_when_constructed_directly() -> None:
+    manifest = SampleManifest(
+        benchmark="demo",
+        stratum_key="repo",
+        per_stratum=1,
+        seed=1,
+        total_examples_considered=1,
+        strata={"a": 1},
+        task_ids=["a-000"],
+    )
+    assert manifest.status == "development"
 
 
 def test_sampling_never_reads_any_score_or_metric_field() -> None:
