@@ -5,6 +5,7 @@ from pathlib import Path
 
 from ant.agents.base import AgentResult
 from ant.benchmarks.base import TaskExample
+from ant.environment import RepoEnvironment
 from ant.evaluation.baseline_tiers import _TIER2_MAX_ROUNDS, _TIER2_QUERY_PROMPT
 from ant.evaluation_suite.usage import UsageStats
 from ant.providers import OpenAIProvider
@@ -38,11 +39,12 @@ class RetrievalAgent:
     def run(self, example: TaskExample, environment_root: Path) -> AgentResult:
         provider = OpenAIProvider(model=self.model)
         search_tool = LocalSearchTool(environment_root)
-        all_files = [
-            str(p.relative_to(environment_root))
-            for p in environment_root.rglob("*")
-            if p.is_file()
-        ]
+        # Same scope ANT's own territory discovery uses (RepoEnvironment's
+        # IGNORED_DIRS + TEXT_EXTENSIONS allowlist), not a bespoke rglob --
+        # see matched_react.py's own comment at the same call for why a
+        # ".git"-only exclusion was an incomplete, unfair scope definition.
+        environment = RepoEnvironment(environment_root)
+        all_files = [str(path.relative_to(environment.root)) for path in environment.iter_files()]
         started = time.time()
         evidence = []
         trajectory: list[dict] = []

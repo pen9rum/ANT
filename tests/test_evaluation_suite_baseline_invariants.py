@@ -149,9 +149,18 @@ def test_matched_react_respects_its_tool_call_budget_and_uses_no_need_graph_conc
         )
 
 
-def test_matched_react_per_question_budget_override_via_metadata(
+def test_matched_react_budget_is_fixed_at_construction_and_ignores_example_metadata(
     tmp_path: Path, monkeypatch
 ) -> None:
+    """Primary protocol: one budget, pre-specified at construction time,
+    applied uniformly to every example -- never a per-example override read
+    from the example being run. An earlier version of this agent read
+    `example.metadata["matched_react_tool_call_budget"]` as a retrospective
+    per-question override (each question's budget set to that question's
+    own already-measured real ANT tool-call count); that is a fairness
+    defect (it conditions the baseline's compute on the very ANT run it is
+    compared against) and has been removed. This test locks in that a
+    metadata field of that name is now inert."""
     from ant.agents import matched_react as react_module
 
     llm_calls = {"count": 0}
@@ -167,20 +176,19 @@ def test_matched_react_per_question_budget_override_via_metadata(
     )
     monkeypatch.setattr(react_module.OpenAIProvider, "drain_usage", lambda self: TokenUsage())
 
-    # Constructor default is DEFAULT_TOOL_CALL_BUDGET (50), but this
-    # question's own metadata (e.g. from a real ANT trace) overrides it --
-    # this is the mechanism the SWE-QA-Pro smoke test uses for per-question
-    # real-opportunity-matched budgets.
-    agent = MatchedReActAgent()
+    agent = MatchedReActAgent(tool_call_budget=5)
     example = TaskExample(
         benchmark="sweqa_pro",
         task_id="q1",
         question="Where is X?",
         reference="",
+        # An old-shaped metadata override, if it were still honored, would
+        # push the budget to 7 -- it must be ignored, leaving the
+        # constructor's own budget (5) in force.
         metadata={"matched_react_tool_call_budget": 7},
     )
     agent.run(example, tmp_path)
-    assert llm_calls["count"] == 7
+    assert llm_calls["count"] == 5
 
 
 def test_ant_agent_never_passes_cross_task_memory(tmp_path: Path, monkeypatch) -> None:

@@ -6,6 +6,7 @@ from pathlib import Path
 from ant.agents.base import AgentResult
 from ant.benchmarks.base import TaskExample
 from ant.domain import Evidence
+from ant.environment import RepoEnvironment
 from ant.evaluation_suite.usage import UsageStats
 from ant.providers import OpenAIProvider
 from ant.providers.openai_provider import _loads_json_object
@@ -21,14 +22,33 @@ from ant.tools.local import LocalSearchTool
 # mean 51.6 tool calls/question (range 19-124), mean >=41.4 LLM calls
 # (lower-bound; undercounts true per-worker planning calls), mean ~303K
 # tokens, mean $0.70. DEFAULT_TOOL_CALL_BUDGET below is that measured mean,
-# rounded -- used only as a fallback. The preferred, more precise policy is
-# per-question: when the exact same question has already been run through
-# ANT and its real tool-call count is known, pass that count via
-# `example.metadata["matched_react_tool_call_budget"]` (checked first in
-# `run()` below) so this agent's budget matches THAT question's own real
-# ANT opportunity, not a generic average -- see the smoke-test driver
-# script, which sets this from the already-measured no-evolution-runtime
-# validation traces for the exact 4 SWE-QA-Pro questions selected there.
+# rounded.
+#
+# PRIMARY protocol (this is the only one `run()` implements): frozen ANT
+# config vs. ONE pre-specified global Matched-ReAct cap, fixed before
+# looking at any individual question's ANT behavior and applied UNIFORMLY
+# to every question in a benchmark run -- `tool_call_budget` is set once,
+# at construction time, for the whole run (via DEFAULT_TOOL_CALL_BUDGET or
+# an explicit override), never varied per example.
+#
+# An EARLIER version of this file also read a per-example
+# `example.metadata["matched_react_tool_call_budget"]` override inside
+# run() -- a retrospective policy that gave each question a budget equal to
+# THAT question's own already-measured real ANT tool-call count. That is a
+# genuinely different, invalid-as-a-primary-protocol experiment (it
+# conditions the baseline's compute on the very ANT run it's being compared
+# against, per-question, defeating "one pre-specified cap applied
+# uniformly") and has been removed from this class. It was actually
+# exercised by the smoke-test driver script that produced this session's
+# existing 4-question SWE-QA-Pro smoke scores (tool_call_budget=31/19 for
+# sqlfluff/Pillow, taken from those questions' own real ANT traces) -- so
+# those specific matched_react rows were run under the retrospective
+# policy, not this primary one; re-running under the uniform cap is
+# required before those numbers can be compared as the primary protocol.
+# Retrospective per-question compute matching may return later as an
+# explicit, separately-labeled secondary analysis (e.g. a wrapper that
+# constructs a distinct MatchedReActAgent per question) -- it must never
+# again be a silent per-example lookup inside the shared agent's run().
 DEFAULT_TOOL_CALL_BUDGET = 50
 
 AVAILABLE_TOOLS = (
@@ -59,7 +79,10 @@ using it alone, with no team, no shared graph, no persistent memory):
 - imports(symbol_or_module): resolve imports
 - subclasses(symbol): find subclasses of a class
 
-At each step, respond with ONLY a JSON object of one of these two shapes:
+At each step, respond with ONLY a JSON object of one of these two shapes.
+The keys must be EXACTLY "tool" and "query" -- do NOT use the tool's own \
+name as a JSON key (e.g. NEVER write {{"search": "some query"}}; always \
+write {{"tool": "search", "query": "some query"}}):
 {{"thought": "<your reasoning>", "tool": "<tool name>", "query": "<argument>"}}
 {{"thought": "<your reasoning>", "finish": "<your complete final answer, with evidence citations>"}}
 
@@ -74,6 +97,32 @@ Tool call history so far:
 
 You have used {used}/{budget} of your tool-call budget. Decide your next \
 action (or finish)."""
+
+
+def _normalize_decision(decision: dict) -> dict:
+    """Defensive tolerance for a common, reproducible GPT-4.1 schema
+    deviation: instead of the prescribed {"tool": "search", "query": ...}
+    shape, the model frequently writes the tool's own name as the JSON key
+    -- {"thought": ..., "search": "some query"} -- despite the system
+    prompt explicitly forbidding this (see _SYSTEM_PROMPT). Confirmed via
+    direct reproduction (this exact prompt scaffold, repeated live calls):
+    GPT-4.1 produces this shorthand on a large fraction of steps,
+    independent of question/repository. Without this normalization, every
+    one of those steps silently burns one unit of tool-call budget for
+    zero information gain, which is a harness parsing-robustness defect
+    -- not a genuine reasoning/competence failure of the agent -- and was
+    making Matched ReAct a systematically crippled baseline. This does not
+    inspect or depend on the question's answer in any way.
+    """
+    if "tool" in decision or "finish" in decision:
+        return decision
+    for tool_name in AVAILABLE_TOOLS:
+        if tool_name in decision and isinstance(decision[tool_name], str):
+            normalized = dict(decision)
+            normalized["tool"] = tool_name
+            normalized["query"] = normalized.pop(tool_name)
+            return normalized
+    return decision
 
 
 def _format_history(history: list[dict]) -> str:
@@ -119,12 +168,23 @@ class MatchedReActAgent:
     def run(self, example: TaskExample, environment_root: Path) -> AgentResult:
         provider = OpenAIProvider(model=self.model)
         tools = LocalSearchTool(environment_root)
-        all_files = [
-            str(p.relative_to(environment_root))
-            for p in environment_root.rglob("*")
-            if p.is_file() and ".git" not in p.parts
-        ]
-        budget = example.metadata.get("matched_react_tool_call_budget") or self.tool_call_budget
+        # Reuses ANT's own RepoEnvironment.iter_files() (core, unmodified)
+        # rather than a bespoke rglob -- this is the SAME definition of
+        # "the repository" ANT's own territory discovery uses (IGNORED_DIRS
+        # + a TEXT_EXTENSIONS allowlist, not just ".git"). A prior version
+        # of this listing excluded only ".git", which left Matched ReAct
+        # with a DIFFERENT (both noisier -- binary files like .png, whose
+        # raw bytes could be handed to search() as evidence -- and, for
+        # some extensions ANT's allowlist omits, e.g. .rst, broader) file
+        # scope than what ANT's own worker population ever collectively
+        # sees. Reusing the identical source of truth guarantees "whole
+        # repository" means the same thing for both systems.
+        environment = RepoEnvironment(environment_root)
+        all_files = [str(path.relative_to(environment.root)) for path in environment.iter_files()]
+        # Primary protocol: one budget, fixed at construction time, applied
+        # identically to every example this agent instance runs -- never a
+        # per-example override (see the module-level fairness note above).
+        budget = self.tool_call_budget
         started = time.time()
         history: list[dict] = []
         llm_calls = 0
@@ -143,7 +203,7 @@ class MatchedReActAgent:
                 system_prompt + "\n\n" + observation, max_output_tokens=512
             )
             llm_calls += 1
-            decision = _loads_json_object(response.text)
+            decision = _normalize_decision(_loads_json_object(response.text))
 
             finish_text = decision.get("finish")
             if isinstance(finish_text, str) and finish_text.strip():
@@ -163,11 +223,25 @@ class MatchedReActAgent:
                 )
                 continue
 
-            method = getattr(tools, tool_name)
-            results = method(query, all_files, limit=6) if tool_name != "navigate" else (
-                tools.resolve_symbol(query, all_files, limit=6, need=example.question)
-                or tools.navigate(query, all_files, limit=6)
-            )
+            # "navigate" and "callers" each have a more precise, index-backed
+            # lookup that ANT's own AutonomousWorker always tries first,
+            # falling back to the plain tool only when the index has
+            # nothing (see AutonomousWorker._execute_tool) -- mirrored here
+            # so Matched ReAct isn't handed a strictly weaker version of a
+            # tool it nominally "has access to". Every other tool has no
+            # such indexed variant, so this is not a general pattern to
+            # extend beyond what ANT's own worker actually does.
+            if tool_name == "navigate":
+                results = tools.resolve_symbol(
+                    query, all_files, limit=6, need=example.question
+                ) or tools.navigate(query, all_files, limit=6)
+            elif tool_name == "callers":
+                results = tools.indexed_callers(query, all_files, limit=6) or tools.callers(
+                    query, all_files, limit=6
+                )
+            else:
+                method = getattr(tools, tool_name)
+                results = method(query, all_files, limit=6)
             history.append(
                 {
                     "step": step,
