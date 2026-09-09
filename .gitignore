@@ -9,6 +9,8 @@ __pycache__/
 .ant/
 output/
 repos/
+repos-repoprobe/
+third_party/checkouts/
 dist/
 build/
 *.egg-info/

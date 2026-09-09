@@ -11,10 +11,17 @@ from ant.evaluation_suite.usage import UsageStats
 
 # Pinned per third_party/manifests/deeprepoqa/manifest.json.
 DEEPREPOQA_REPO_URL = "https://github.com/peng-weihan/DeepRepoQA"
+DEEPREPOQA_COMMIT = "91f271f63dc2d8c6141570321804be224f21b87a"
 
 
 class DeepRepoQANotCheckedOut(RuntimeError):
     pass
+
+
+class DeepRepoQANotRunnable(RuntimeError):
+    """Distinct from DeepRepoQANotCheckedOut: the checkout exists but
+    cannot execute regardless of environment setup -- see the class
+    docstring's MAJOR FINDING below."""
 
 
 class DeepRepoQAAgent:
@@ -23,6 +30,26 @@ class DeepRepoQAAgent:
     loop (see third_party/manifests/deeprepoqa/manifest.json for the full
     architecture writeup). NOT vendored per Phase J -- shells out to a
     pinned external checkout.
+
+    MAJOR FINDING, verified live this session (see the manifest's own
+    MAJOR_FINDING_this_session/blocker_1 fields for full detail): the
+    overwhelming majority of DeepRepoQA's actual method logic in the
+    PUBLISHED repository is PyArmor-obfuscated (compiled/encrypted
+    bytecode) -- DeepRepoQA/actions/, DeepRepoQA/selector/ (the MCTS/UCT
+    logic itself), DeepRepoQA/value_function/, and DeepRepoQA/agent/ are
+    almost entirely unreadable source. Worse: the obfuscated modules'
+    OWN required native runtime (`pyarmor_runtime_000000`'s compiled
+    extension) is simply ABSENT from the published repository -- `from
+    DeepRepoQA.agent.code_qa_agent import CodeQAAgent` raises
+    `ModuleNotFoundError: No module named 'pyarmor_runtime_000000'`
+    immediately, confirmed by direct import attempt. This is a structural
+    gap in what the authors published, unrelated to environment setup,
+    Python version, or credentials -- unfixable without the authors
+    publishing the missing runtime. `run()` raises `DeepRepoQANotRunnable`
+    for this reason, checked BEFORE the Voyage-key fairness check below
+    (which is real and independently blocking, but not the only one, and
+    not the one to lead with -- fixing VOYAGE_API_KEY alone would not
+    make this baseline runnable).
 
     Fairness note baked into this wrapper's own design, per Phase I's
     explicit instruction: DeepRepoQA's own SemanticSearch tool uses the
@@ -34,7 +61,9 @@ class DeepRepoQAAgent:
     deliberately substitutes ANT's own dense retriever instead, that must
     be labeled SEMI-CONTROLLED in the fairness report, never CONTROLLED.
 
-    NOT yet exercised against a real checkout in this session.
+    NOT executed this session -- confirmed not runnable via direct
+    verification (the ModuleNotFoundError above), not merely assumed from
+    missing credentials.
     """
 
     name = "deeprepoqa"
@@ -65,6 +94,18 @@ class DeepRepoQAAgent:
 
     def run(self, example: TaskExample, environment_root: Path) -> AgentResult:
         checkout_root = self._require_checkout()
+        pyarmor_runtime_dir = checkout_root / "DeepRepoQA" / "agent" / "pyarmor_runtime_000000"
+        has_native_runtime = any(p.suffix in (".pyd", ".so") for p in pyarmor_runtime_dir.glob("*"))
+        if not has_native_runtime:
+            raise DeepRepoQANotRunnable(
+                "DeepRepoQA's own obfuscated modules (DeepRepoQA/actions/, DeepRepoQA/selector/, "
+                "DeepRepoQA/value_function/, DeepRepoQA/agent/ -- essentially all of the method's "
+                "actual logic) require a compiled pyarmor_runtime_000000 native extension "
+                f"(.pyd/.so) that is not present at {pyarmor_runtime_dir}. This is a gap in "
+                "what the authors published, not an environment issue -- see this class's own "
+                "docstring and third_party/manifests/deeprepoqa/manifest.json's blocker_1 for "
+                "the full verification. Not fixable by this wrapper."
+            )
         if not os.environ.get("VOYAGE_API_KEY"):
             raise RuntimeError(
                 "DeepRepoQA's own SemanticSearch tool requires a Voyage API key "
