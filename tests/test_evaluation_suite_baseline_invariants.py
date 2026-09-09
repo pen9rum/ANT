@@ -313,3 +313,65 @@ def test_ant_agent_never_passes_cross_task_memory(tmp_path: Path, monkeypatch) -
     # passed as empty -- never populated.
     assert not captured_kwargs.get("memory_routes")
     assert not captured_kwargs.get("cross_repo_experience")
+
+
+def test_matched_react_default_construction_has_no_extra_tools() -> None:
+    """The extra_tools/extra_tool_descriptions extension point (added for
+    the RepoGraph integration) must default to empty -- plain Matched
+    ReAct's own behavior is unaffected unless a caller explicitly opts in."""
+    agent = MatchedReActAgent()
+    assert agent.extra_tools == {}
+    assert agent.extra_tool_descriptions == {}
+
+
+def test_matched_react_dispatches_an_extra_tool_and_never_touches_local_search_tool(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """An extra_tools callable (e.g. RepoGraph's search_repograph) is
+    dispatched exactly like any other tool -- same budget accounting,
+    same history recording -- and is never routed through
+    LocalSearchTool, proving the extension point is a genuinely separate
+    tool, not a relabeled existing one."""
+    from ant.agents import matched_react as react_module
+
+    (tmp_path / "a.py").write_text("def foo():\n    pass\n", encoding="utf-8")
+
+    captured_calls: list[tuple[str, str]] = []
+
+    def fake_extra_tool(query: str, example) -> list:
+        captured_calls.append((query, example.task_id))
+        return []
+
+    step = {"n": 0}
+
+    def fake_responses_json(self, prompt, max_output_tokens=512):
+        step["n"] += 1
+        if step["n"] == 1:
+            decision = {"thought": "try the graph", "tool": "search_repograph", "query": "foo"}
+        else:
+            decision = {"thought": "done", "finish": "answer"}
+        return _FakeResponse(json.dumps(decision))
+
+    def fail_if_called(*args, **kwargs):
+        raise AssertionError("LocalSearchTool must not be called for an extra_tools dispatch")
+
+    monkeypatch.setattr(
+        react_module.CountingOpenAIProvider, "responses_json", fake_responses_json
+    )
+    monkeypatch.setattr(react_module.LocalSearchTool, "search", fail_if_called)
+    monkeypatch.setattr(
+        react_module.CountingOpenAIProvider,
+        "drain_usage",
+        lambda self: TokenUsage(),
+    )
+
+    agent = MatchedReActAgent(
+        extra_tools={"search_repograph": fake_extra_tool},
+        extra_tool_descriptions={"search_repograph": "query a structural graph"},
+    )
+    example = TaskExample(benchmark="sweqa_pro", task_id="q1", question="Where is X?", reference="")
+    result = agent.run(example, tmp_path)
+
+    assert captured_calls == [("foo", "q1")]
+    assert result.final_answer == "answer"
+    assert result.trajectory[0]["tool"] == "search_repograph"

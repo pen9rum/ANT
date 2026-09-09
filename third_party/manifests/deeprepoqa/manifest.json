@@ -1,5 +1,7 @@
 {
   "name": "DeepRepoQA",
+  "status": "blocked_external_release",
+  "status_reason": "Public implementation depends on an unavailable PyArmor native runtime (the obfuscated modules' own required .pyd/.so is absent from the published repository -- confirmed via direct ModuleNotFoundError, not assumed) plus an unavailable VOYAGE_API_KEY. Cannot currently be reproduced faithfully -- there is no source available to patch (unlike HiFiRepoQA), and reimplementing the obfuscated MCTS/selector/value-function logic from the paper's own text would not be a faithful port of the released method, so this has not been attempted and will not be. All integration work (wrapper, manifest, fidelity findings) is preserved as-is. Do not attempt to 'fix' or reimplement this from the paper.",
   "role": "external baseline method (repository-domain, MCTS-based deep agent exploration)",
   "official_repo": "https://github.com/peng-weihan/DeepRepoQA",
   "commit_sha": "91f271f63dc2d8c6141570321804be224f21b87a",

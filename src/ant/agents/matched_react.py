@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import time
+from collections.abc import Callable
 from pathlib import Path
 
 from ant.agents.base import AgentResult
@@ -141,7 +142,7 @@ You have used {used}/{budget} of your tool-call budget. Decide your next \
 action (or finish)."""
 
 
-def _normalize_decision(decision: dict) -> dict:
+def _normalize_decision(decision: dict, tool_names: tuple[str, ...] = AVAILABLE_TOOLS) -> dict:
     """Defensive tolerance for a common, reproducible GPT-4.1 schema
     deviation: instead of the prescribed {"tool": "search", "query": ...}
     shape, the model frequently writes the tool's own name as the JSON key
@@ -155,10 +156,14 @@ def _normalize_decision(decision: dict) -> dict:
     -- not a genuine reasoning/competence failure of the agent -- and was
     making Matched ReAct a systematically crippled baseline. This does not
     inspect or depend on the question's answer in any way.
+
+    `tool_names` defaults to the fixed AVAILABLE_TOOLS set but accepts any
+    tool-name tuple so an agent instance with `extra_tools` recognizes the
+    same shorthand for its own additional tool names too.
     """
     if "tool" in decision or "finish" in decision:
         return decision
-    for tool_name in AVAILABLE_TOOLS:
+    for tool_name in tool_names:
         if tool_name in decision and isinstance(decision[tool_name], str):
             normalized = dict(decision)
             normalized["tool"] = tool_name
@@ -230,6 +235,8 @@ class MatchedReActAgent:
         model: str = "gpt-4.1",
         tool_call_budget: int | None = None,
         tool_result_limits: dict[str, int] | None = None,
+        extra_tools: dict[str, Callable[[str, TaskExample], list[Evidence]]] | None = None,
+        extra_tool_descriptions: dict[str, str] | None = None,
     ) -> None:
         self.model = model
         self.tool_call_budget = tool_call_budget or DEFAULT_TOOL_CALL_BUDGET
@@ -237,6 +244,19 @@ class MatchedReActAgent:
         # above). Pass GENEROUS_SENSITIVITY_TOOL_LIMITS explicitly to run the
         # deferred sensitivity configuration instead -- never the default.
         self.tool_result_limits = tool_result_limits or ANT_PARITY_TOOL_LIMITS
+        # Opt-in extension point, default empty (no behavior change from
+        # the plain Matched ReAct baseline unless a caller explicitly
+        # supplies extra_tools). Exists so a distinct, explicitly-named
+        # evaluated system -- e.g. "Matched ReAct + RepoGraph" -- can add
+        # exactly one external augmentation tool without forking this
+        # class's entire loop, budget, prompt, or existing tool set. Each
+        # callable receives (query, example) and returns list[Evidence];
+        # it is dispatched exactly like any other tool (same budget
+        # accounting, same history formatting), just not backed by
+        # LocalSearchTool. See ant.external_wrappers.repograph for the
+        # concrete RepoGraph tool this was built for.
+        self.extra_tools = extra_tools or {}
+        self.extra_tool_descriptions = extra_tool_descriptions or {}
 
     def run(self, example: TaskExample, environment_root: Path) -> AgentResult:
         provider = CountingOpenAIProvider(model=self.model)
@@ -261,7 +281,17 @@ class MatchedReActAgent:
         final_answer = ""
         termination_reason = "budget_exhausted"
 
+        available_tools = AVAILABLE_TOOLS + tuple(self.extra_tools)
         system_prompt = _SYSTEM_PROMPT.format(budget=budget)
+        if self.extra_tool_descriptions:
+            extra_lines = "\n".join(
+                f"- {name}({{query}}): {desc}"
+                for name, desc in self.extra_tool_descriptions.items()
+            )
+            system_prompt = system_prompt.replace(
+                "At each step, respond",
+                f"{extra_lines}\n\nAt each step, respond",
+            )
         for step in range(budget):
             observation = _OBSERVATION_TEMPLATE.format(
                 question=example.question,
@@ -272,7 +302,9 @@ class MatchedReActAgent:
             response = provider.responses_json(
                 system_prompt + "\n\n" + observation, max_output_tokens=512
             )
-            decision = _normalize_decision(_loads_json_object(response.text))
+            decision = _normalize_decision(
+                _loads_json_object(response.text), tool_names=available_tools
+            )
 
             finish_text = decision.get("finish")
             if isinstance(finish_text, str) and finish_text.strip():
@@ -282,7 +314,7 @@ class MatchedReActAgent:
 
             tool_name = decision.get("tool")
             query = decision.get("query", "")
-            if tool_name not in AVAILABLE_TOOLS or not isinstance(query, str) or not query.strip():
+            if tool_name not in available_tools or not isinstance(query, str) or not query.strip():
                 # Malformed step -- counts against budget (a real ReAct
                 # agent's own confusion is real, comparable overhead, not
                 # something to silently retry for free) but doesn't crash
@@ -304,7 +336,12 @@ class MatchedReActAgent:
             # ANT_PARITY_TOOL_LIMITS and GENEROUS_SENSITIVITY_TOOL_LIMITS;
             # the fallback only matters for a caller-supplied partial dict.
             tool_limit = self.tool_result_limits.get(tool_name, 4)
-            if tool_name == "navigate":
+            if tool_name in self.extra_tools:
+                # Opt-in augmentation tool (e.g. RepoGraph) -- not backed
+                # by LocalSearchTool at all, so tool_limit doesn't apply;
+                # the callable itself decides how much to return.
+                results = self.extra_tools[tool_name](query, example)
+            elif tool_name == "navigate":
                 results = tools.resolve_symbol(
                     query, all_files, limit=tool_limit, need=example.question
                 ) or tools.navigate(query, all_files, limit=tool_limit)

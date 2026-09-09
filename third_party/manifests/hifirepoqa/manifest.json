@@ -1,5 +1,7 @@
 {
   "name": "HiFiRepoQA",
+  "status": "deferred",
+  "status_reason": "Method implementation exists and partial execution was verified live (real pinned-commit clone, real GPT-4.1 calls succeeding). However, its own knowledge-base-building step is operationally expensive (whole-repo function/class summarization, no rate-limit backoff, on the order of hours for a single mid-sized repo's first-time index -- see known_cost_characteristic below) and it is not part of the current two-track primary accepted-baseline set (Track A primary methods: Direct/Retrieval/Matched ReAct/ANT/SWE-QA-Pro official ToolCallingAgent/RepoGraph). All integration work (wrapper, manifest, patches, driver script) is preserved as-is and may be revisited later -- nothing here was deleted or reduced.",
   "role": "external baseline method (repository-domain, DAG-structured multi-agent pipeline)",
   "official_repo": "https://github.com/HiFiRepoQA/HiFiRepoQA",
   "commit_sha": "a2d833d9c292f2a4aaae349d8d8e9bd9bed8339c",
