@@ -34,12 +34,12 @@ def test_direct_agent_never_accesses_the_repository(tmp_path: Path, monkeypatch)
     from ant.agents import direct as direct_module
 
     monkeypatch.setattr(
-        direct_module.OpenAIProvider,
+        direct_module.CountingOpenAIProvider,
         "responses_text",
         lambda self, prompt, max_output_tokens=512: _FakeResponse("a closed-book answer"),
     )
     monkeypatch.setattr(
-        direct_module.OpenAIProvider, "drain_usage", lambda self: TokenUsage()
+        direct_module.CountingOpenAIProvider, "drain_usage", lambda self: TokenUsage()
     )
     # A repo root that would crash immediately if anything tried to read it.
     poisoned_root = tmp_path / "does-not-exist-and-must-never-be-touched"
@@ -71,19 +71,19 @@ def test_retrieval_agent_stops_within_its_round_budget_even_if_llm_never_says_en
     # The decision LLM NEVER says "enough" and NEVER stops on its own --
     # only the hard round budget (_TIER2_MAX_ROUNDS) may end the loop.
     monkeypatch.setattr(
-        retrieval_module.OpenAIProvider,
+        retrieval_module.CountingOpenAIProvider,
         "responses_json",
         lambda self, prompt, max_output_tokens=256: _FakeResponse(
             json.dumps({"enough": False, "next_query": "keep searching"})
         ),
     )
     monkeypatch.setattr(
-        retrieval_module.OpenAIProvider,
+        retrieval_module.CountingOpenAIProvider,
         "synthesize",
         lambda self, question, evidence: "best-effort answer",
     )
     monkeypatch.setattr(
-        retrieval_module.OpenAIProvider, "drain_usage", lambda self: TokenUsage()
+        retrieval_module.CountingOpenAIProvider, "drain_usage", lambda self: TokenUsage()
     )
 
     agent = RetrievalAgent()
@@ -110,12 +110,16 @@ def test_matched_react_respects_its_tool_call_budget_and_uses_no_need_graph_conc
         decision = {"thought": "keep going", "tool": "search", "query": "foo"}
         return _FakeResponse(json.dumps(decision))
 
-    monkeypatch.setattr(react_module.OpenAIProvider, "responses_json", fake_responses_json)
+    monkeypatch.setattr(react_module.CountingOpenAIProvider, "responses_json", fake_responses_json)
     monkeypatch.setattr(react_module.LocalSearchTool, "search", lambda self, q, f, limit=6: [])
     monkeypatch.setattr(
-        react_module.OpenAIProvider, "synthesize", lambda self, question, evidence: "forced answer"
+        react_module.CountingOpenAIProvider,
+        "synthesize",
+        lambda self, question, evidence: "forced answer",
     )
-    monkeypatch.setattr(react_module.OpenAIProvider, "drain_usage", lambda self: TokenUsage())
+    monkeypatch.setattr(
+        react_module.CountingOpenAIProvider, "drain_usage", lambda self: TokenUsage()
+    )
 
     budget = 5
     agent = MatchedReActAgent(tool_call_budget=budget)
@@ -169,12 +173,16 @@ def test_matched_react_budget_is_fixed_at_construction_and_ignores_example_metad
         llm_calls["count"] += 1
         return _FakeResponse(json.dumps({"thought": "x", "tool": "search", "query": "foo"}))
 
-    monkeypatch.setattr(react_module.OpenAIProvider, "responses_json", fake_responses_json)
+    monkeypatch.setattr(react_module.CountingOpenAIProvider, "responses_json", fake_responses_json)
     monkeypatch.setattr(react_module.LocalSearchTool, "search", lambda self, q, f, limit=6: [])
     monkeypatch.setattr(
-        react_module.OpenAIProvider, "synthesize", lambda self, question, evidence: "answer"
+        react_module.CountingOpenAIProvider,
+        "synthesize",
+        lambda self, question, evidence: "answer",
     )
-    monkeypatch.setattr(react_module.OpenAIProvider, "drain_usage", lambda self: TokenUsage())
+    monkeypatch.setattr(
+        react_module.CountingOpenAIProvider, "drain_usage", lambda self: TokenUsage()
+    )
 
     agent = MatchedReActAgent(tool_call_budget=5)
     example = TaskExample(
@@ -234,15 +242,19 @@ def test_matched_react_defaults_to_ant_worker_parity_tool_limits(
     def fake_navigate(self, symbol, f, limit=6):
         return []
 
-    monkeypatch.setattr(react_module.OpenAIProvider, "responses_json", fake_responses_json)
+    monkeypatch.setattr(react_module.CountingOpenAIProvider, "responses_json", fake_responses_json)
     monkeypatch.setattr(react_module.LocalSearchTool, "search", fake_search)
     monkeypatch.setattr(react_module.LocalSearchTool, "subclasses", fake_subclasses)
     monkeypatch.setattr(react_module.LocalSearchTool, "resolve_symbol", fake_resolve_symbol)
     monkeypatch.setattr(react_module.LocalSearchTool, "navigate", fake_navigate)
     monkeypatch.setattr(
-        react_module.OpenAIProvider, "synthesize", lambda self, question, evidence: "answer"
+        react_module.CountingOpenAIProvider,
+        "synthesize",
+        lambda self, question, evidence: "answer",
     )
-    monkeypatch.setattr(react_module.OpenAIProvider, "drain_usage", lambda self: TokenUsage())
+    monkeypatch.setattr(
+        react_module.CountingOpenAIProvider, "drain_usage", lambda self: TokenUsage()
+    )
 
     agent = MatchedReActAgent()
     assert agent.tool_result_limits == react_module.ANT_PARITY_TOOL_LIMITS

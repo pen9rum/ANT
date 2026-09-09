@@ -119,7 +119,14 @@ class DeepRepoQAAgent:
             method=self.name,
             final_answer=payload.get("answer", ""),
             trajectory=payload.get("mcts_tree_log", []),
-            usage=UsageStats(),  # populated from real output once run live
+            # populated from real output once run live -- when it is,
+            # llm_calls must count PHYSICAL model/API invocations (this
+            # suite's own semantic, see
+            # ant.evaluation_suite.counting_provider's docstring), not a
+            # naive "one per MCTS expansion" or similar step-count proxy
+            # that could undercount whatever retry/repair behavior
+            # DeepRepoQA's own agent loop has internally.
+            usage=UsageStats(),
             termination_reason="completed",
             metadata={
                 "raw_output": payload,

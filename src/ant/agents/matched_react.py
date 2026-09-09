@@ -6,9 +6,9 @@ from pathlib import Path
 from ant.agents.base import AgentResult
 from ant.benchmarks.base import TaskExample
 from ant.domain import Evidence
-from ant.environment import RepoEnvironment
+from ant.evaluation_suite.counting_provider import CountingOpenAIProvider
+from ant.evaluation_suite.repo_scope import EvalRepoEnvironment
 from ant.evaluation_suite.usage import UsageStats
-from ant.providers import OpenAIProvider
 from ant.providers.openai_provider import _loads_json_object
 from ant.tools.local import LocalSearchTool
 
@@ -191,25 +191,25 @@ class MatchedReActAgent:
     Phase F specifies. The agent sees every file ANT's own worker
     population collectively covers, not a territory-scoped slice -- NOT,
     despite how that might read, literally every file that exists in the
-    git checkout. Both are scoped by ANT's own RepoEnvironment
-    (IGNORED_DIRS + a TEXT_EXTENSIONS allowlist), which excludes binaries
-    (correctly) but also some real text-bearing formats this allowlist
-    happens to omit -- .rst and .sql being the two that matter most
-    concretely: measured directly against 4 already-cloned benchmark
-    repos, this excludes 400/1803 files from sphinx (mostly .rst -- sphinx
-    is itself a documentation tool, so this is a meaningful chunk of its
-    own repo) and 1473/3377 from sqlfluff (.sql fixtures -- sqlfluff is a
-    SQL linter, so these are directly relevant to its own behavior). This
-    is a real evaluation-infrastructure limitation shared identically by
-    ANT and every baseline reusing RepoEnvironment (not a Matched-ReAct-
-    specific gap, and not something this class can fix on its own --
-    RepoEnvironment is frozen ANT core) -- never describe this as
-    "unrestricted whole-repository access" in any report or paper text.
-    The agent also has access to the SAME underlying tool implementations
-    ANT's own AutonomousWorker uses (`ant.tools.local.LocalSearchTool`,
-    the identical class, not a reimplementation) -- matching "same
-    underlying lexical/dense/symbol-navigation capability" as literally as
-    this codebase allows.
+    git checkout. Both are scoped by `EvalRepoEnvironment`
+    (`ant.evaluation_suite.repo_scope`): the same VCS/build/cache/
+    dependency directory exclusion ANT core's own `RepoEnvironment` uses
+    (`IGNORED_DIRS`, reused not re-derived), but a general, content-based
+    text-detection policy in place of core's closed `TEXT_EXTENSIONS`
+    allowlist -- see that module's own docstring for the full audit this
+    superseded (the allowlist excluded not just .rst/.sql but an entire
+    language's source for any repo whose primary language wasn't one of
+    ~20 hardcoded extensions -- e.g. every .cs/.rb/.php/.swift/.lua/.f90
+    file in this suite's benchmark corpora). Still excluded, deliberately:
+    binaries (via NUL-byte content sniffing, not extension), files over
+    1 MiB, known machine-generated lockfiles, and notebooks (.ipynb) --
+    see EvalRepoEnvironment's own docstring for why each. This remains a
+    disclosed evaluation-infrastructure choice, not "unrestricted
+    whole-repository access." The agent also has access to the SAME
+    underlying tool implementations ANT's own AutonomousWorker uses
+    (`ant.tools.local.LocalSearchTool`, the identical class, not a
+    reimplementation) -- matching "same underlying lexical/dense/
+    symbol-navigation capability" as literally as this codebase allows.
 
     `tool_call_budget`, not `max_rounds`, is this agent's real compute
     ceiling -- see the module docstring above for why, and why its default
@@ -239,20 +239,18 @@ class MatchedReActAgent:
         self.tool_result_limits = tool_result_limits or ANT_PARITY_TOOL_LIMITS
 
     def run(self, example: TaskExample, environment_root: Path) -> AgentResult:
-        provider = OpenAIProvider(model=self.model)
+        provider = CountingOpenAIProvider(model=self.model)
         tools = LocalSearchTool(environment_root)
-        # Reuses ANT's own RepoEnvironment.iter_files() (core, unmodified)
-        # rather than a bespoke rglob -- this is the SAME definition of
-        # "the repository" ANT's own territory discovery uses (IGNORED_DIRS
-        # + a TEXT_EXTENSIONS allowlist, not just ".git"). A prior version
-        # of this listing excluded only ".git", which left Matched ReAct
-        # with a DIFFERENT (both noisier -- binary files like .png, whose
-        # raw bytes could be handed to search() as evidence -- and, for
-        # some extensions ANT's allowlist omits, e.g. .rst, broader) file
-        # scope than what ANT's own worker population ever collectively
-        # sees. Reusing the identical source of truth guarantees "whole
-        # repository" means the same thing for both systems.
-        environment = RepoEnvironment(environment_root)
+        # EvalRepoEnvironment (evaluation_suite/repo_scope.py), not core's
+        # own RepoEnvironment directly -- the SAME class ant_adapter.py's
+        # AntAgent now uses for ANT's own territory discovery, so both
+        # receive the identical (content-policy-based, not
+        # TEXT_EXTENSIONS-allowlist-based) file universe. See
+        # EvalRepoEnvironment's own module docstring for why this
+        # supersedes ANT core's closed extension allowlist and why it's
+        # implementable entirely evaluation-side (a subclass, not a
+        # modification of ant.environment.repo).
+        environment = EvalRepoEnvironment(environment_root)
         all_files = [str(path.relative_to(environment.root)) for path in environment.iter_files()]
         # Primary protocol: one budget, fixed at construction time, applied
         # identically to every example this agent instance runs -- never a
@@ -260,7 +258,6 @@ class MatchedReActAgent:
         budget = self.tool_call_budget
         started = time.time()
         history: list[dict] = []
-        llm_calls = 0
         final_answer = ""
         termination_reason = "budget_exhausted"
 
@@ -275,7 +272,6 @@ class MatchedReActAgent:
             response = provider.responses_json(
                 system_prompt + "\n\n" + observation, max_output_tokens=512
             )
-            llm_calls += 1
             decision = _normalize_decision(_loads_json_object(response.text))
 
             finish_text = decision.get("finish")
@@ -338,8 +334,16 @@ class MatchedReActAgent:
                 question=example.question,
                 evidence=[Evidence.model_validate(e) for e in all_evidence],
             )
-            llm_calls += 1
 
+        # CountingOpenAIProvider counts every PHYSICAL responses_text()
+        # call -- including responses_json()'s own internal JSON-repair
+        # pass whenever a step's raw decision wasn't valid JSON on the
+        # first try. A manual "+1 per loop iteration" counter (the
+        # previous version of this method) undercounted by one for every
+        # repair that actually fired, even though the repair call's
+        # tokens/cost were always correctly included in drain_usage()'s
+        # own totals -- only this diagnostic counter was wrong.
+        llm_calls = provider.drain_call_count()
         token_usage = provider.drain_usage()
         elapsed = time.time() - started
         all_evidence = [item for entry in history for item in entry["results"]]

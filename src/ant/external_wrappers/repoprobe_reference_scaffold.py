@@ -118,7 +118,15 @@ class RepoProbeReferenceScaffoldAgent:
             task_id=example.task_id,
             method=self.name,
             final_answer=result.stdout.strip(),
-            usage=UsageStats(),  # populated from container logs once run live
+            # populated from container logs once run live -- when it is,
+            # llm_calls must count PHYSICAL model/API invocations (this
+            # suite's own semantic, see
+            # ant.evaluation_suite.counting_provider's docstring), not
+            # REPOPROBE_MAX_TURNS (a turn cap, not a physical-call count --
+            # the example_agent.py container may retry/repair internally
+            # the same way this suite's own responses_json() used to
+            # undercount before being fixed).
+            usage=UsageStats(),
             termination_reason="completed",
             metadata={
                 "note": (

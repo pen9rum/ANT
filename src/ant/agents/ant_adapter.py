@@ -5,11 +5,11 @@ from pathlib import Path
 from ant.agents.base import AgentResult
 from ant.benchmarks.base import TaskExample
 from ant.coordinator import LocalCoordinator
-from ant.environment import RepoEnvironment
+from ant.evaluation_suite.counting_provider import CountingOpenAIProvider
+from ant.evaluation_suite.repo_scope import EvalRepoEnvironment
 from ant.evaluation_suite.usage import UsageStats
 from ant.indexing import build_worker_cards, discover_territories
 from ant.memory import IndexStore
-from ant.providers import OpenAIProvider
 
 
 class AntAgent:
@@ -46,7 +46,17 @@ class AntAgent:
     def _ensure_indexed(self, environment_root: Path, index_path: Path) -> None:
         if (index_path / "workers.json").exists():
             return
-        environment = RepoEnvironment(environment_root)
+        # EvalRepoEnvironment, not core's own RepoEnvironment directly --
+        # supplies discover_territories the fairness-closure repo-scope
+        # policy (content-based text detection, not TEXT_EXTENSIONS) so
+        # ANT's own territory discovery sees the SAME expanded file
+        # universe Matched ReAct/Retrieval do, before any territory
+        # specialization happens. discover_territories/build_worker_cards
+        # themselves are untouched, frozen core -- only the environment
+        # object fed into them differs, and only in this evaluation-suite
+        # call site (ant.cli/ant.evaluation.runner/ant.git_refresh all
+        # still construct core's own RepoEnvironment, unaffected).
+        environment = EvalRepoEnvironment(environment_root)
         territories = discover_territories(environment)
         workers = build_worker_cards(environment.root, territories)
         IndexStore(index_path).save(territories, workers)
@@ -55,7 +65,20 @@ class AntAgent:
         index_path = self._index_path_for(example, environment_root)
         self._ensure_indexed(environment_root, index_path)
         workers = IndexStore(index_path).load_workers()
-        provider = OpenAIProvider(model=self.model)
+        # CountingOpenAIProvider, not core's own OpenAIProvider directly --
+        # a plain subclass (frozen core untouched) that counts every
+        # PHYSICAL responses_text() call. Passed as BOTH reasoner= and
+        # synthesizer= exactly as before; LocalCoordinator/AutonomousWorker
+        # only ever call methods on it (Protocol-typed parameters, no
+        # isinstance(OpenAIProvider) check anywhere in local.py), so every
+        # call any of ANT's own frozen coordination code makes through
+        # this shared instance -- every worker's every reasoning call,
+        # every plan_round, every consolidate_graph -- is counted too,
+        # giving state.usage's own (core, TokenUsage-typed, call-count-less)
+        # totals a real, accurate llm_calls figure for the first time this
+        # adapter has reported one at all (previously unset, defaulting to
+        # UsageStats' own 0).
+        provider = CountingOpenAIProvider(model=self.model)
 
         coordinator = LocalCoordinator(
             environment_root,
@@ -68,6 +91,7 @@ class AntAgent:
             # own no-evolution-runtime validation exactly.
         )
         state = coordinator.ask(example.question, max_rounds=self.max_rounds)
+        llm_calls = provider.drain_call_count()
 
         return AgentResult(
             benchmark=example.benchmark,
@@ -77,6 +101,7 @@ class AntAgent:
             trajectory=[round_.model_dump() for round_ in state.rounds],
             evidence=[item.model_dump() for item in state.evidence],
             usage=UsageStats(
+                llm_calls=llm_calls,
                 input_tokens=state.usage.input_tokens,
                 output_tokens=state.usage.output_tokens,
                 total_tokens=state.usage.total_tokens,

@@ -127,6 +127,21 @@ class SweQaProNativeAgent:
                 output_tokens=token_usage.get("completion_tokens", 0),
                 total_tokens=token_usage.get("total_tokens", 0),
                 tool_calls=sum(len(t.get("tool_calls", [])) for t in raw.get("trajectory", [])),
+                # UNVERIFIED ASSUMPTION, flagged explicitly rather than
+                # silently trusted: this suite's own llm_calls semantic is
+                # "physical model/API invocations" (see
+                # ant.evaluation_suite.counting_provider's own docstring
+                # for why the in-house agents needed a real fix for this).
+                # steps_completed is the OFFICIAL SWE-QA-Pro agent's own
+                # self-reported count, read as-is since this wrapper is
+                # not yet exercised against a real checkout -- whether
+                # their own LangGraph implementation's internal retries
+                # (context-limit force-finish, degenerate-output retry --
+                # both mentioned in this class's own docstring) are
+                # reflected in steps_completed or undercounted the same
+                # way this suite's own responses_json() repair pass used
+                # to be is unknown until this wrapper is actually run
+                # against their real source.
                 llm_calls=raw.get("steps_completed", 0),
                 wall_clock_seconds=raw.get("total_time", 0.0),
             ),

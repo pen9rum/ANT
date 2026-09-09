@@ -133,7 +133,13 @@ class HiFiRepoQAAgent:
             method=self.name,
             final_answer=payload.get("answer", ""),
             trajectory=payload.get("dag_execution_log", []),
-            # HiFiRepoQA's own per-call usage schema: TBD once run live.
+            # HiFiRepoQA's own per-call usage schema: TBD once run live --
+            # when it is, llm_calls must count PHYSICAL model/API
+            # invocations (this suite's own semantic, see
+            # ant.evaluation_suite.counting_provider's docstring), not a
+            # naive per-DAG-node proxy that could undercount whatever
+            # retry/repair behavior HiFiRepoQA's own Planning/Retrieval/
+            # Analysis/Synthesis pipeline has internally.
             usage=UsageStats(),
             termination_reason="completed",
             metadata={"raw_output": payload, "generation_model": self.model},

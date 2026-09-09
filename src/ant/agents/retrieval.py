@@ -5,10 +5,10 @@ from pathlib import Path
 
 from ant.agents.base import AgentResult
 from ant.benchmarks.base import TaskExample
-from ant.environment import RepoEnvironment
 from ant.evaluation.baseline_tiers import _TIER2_MAX_ROUNDS, _TIER2_QUERY_PROMPT
+from ant.evaluation_suite.counting_provider import CountingOpenAIProvider
+from ant.evaluation_suite.repo_scope import EvalRepoEnvironment
 from ant.evaluation_suite.usage import UsageStats
-from ant.providers import OpenAIProvider
 from ant.providers.openai_provider import _loads_json_object
 from ant.tools.local import LocalSearchTool
 
@@ -37,19 +37,19 @@ class RetrievalAgent:
         self.model = model
 
     def run(self, example: TaskExample, environment_root: Path) -> AgentResult:
-        provider = OpenAIProvider(model=self.model)
+        provider = CountingOpenAIProvider(model=self.model)
         search_tool = LocalSearchTool(environment_root)
-        # Same scope ANT's own territory discovery uses (RepoEnvironment's
-        # IGNORED_DIRS + TEXT_EXTENSIONS allowlist), not a bespoke rglob --
-        # see matched_react.py's own comment at the same call for why a
-        # ".git"-only exclusion was an incomplete, unfair scope definition.
-        environment = RepoEnvironment(environment_root)
+        # Same scope ANT's own territory discovery uses -- EvalRepoEnvironment
+        # (ant.evaluation_suite.repo_scope), not a bespoke rglob and not core's
+        # own closed TEXT_EXTENSIONS allowlist. See matched_react.py's own
+        # comment at the same call, and EvalRepoEnvironment's own module
+        # docstring, for the full rationale.
+        environment = EvalRepoEnvironment(environment_root)
         all_files = [str(path.relative_to(environment.root)) for path in environment.iter_files()]
         started = time.time()
         evidence = []
         trajectory: list[dict] = []
         query = example.question
-        llm_calls = 0
         tool_calls = 0
         for round_index in range(_TIER2_MAX_ROUNDS):
             results = search_tool.search(query, all_files, limit=8)
@@ -67,7 +67,6 @@ class RetrievalAgent:
                 ),
                 max_output_tokens=256,
             )
-            llm_calls += 1
             decision = _loads_json_object(decision_result.text)
             trajectory.append({"round": round_index, "query": query, "decision": decision})
             if decision.get("enough") is True:
@@ -78,7 +77,14 @@ class RetrievalAgent:
             query = next_query
 
         answer = provider.synthesize(question=example.question, evidence=evidence)
-        llm_calls += 1
+        # CountingOpenAIProvider counts every PHYSICAL responses_text()
+        # call, including responses_json()'s own internal JSON-repair
+        # pass when a round's raw response wasn't valid JSON on the first
+        # try -- a manual "+1 per loop iteration" counter (the previous
+        # version of this method) undercounts by one for every repair
+        # that actually fired, silently, since the repair call's tokens/
+        # cost still landed in drain_usage()'s own totals.
+        llm_calls = provider.drain_call_count()
         token_usage = provider.drain_usage()
         elapsed = time.time() - started
 

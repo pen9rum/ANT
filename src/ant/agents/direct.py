@@ -6,8 +6,8 @@ from pathlib import Path
 from ant.agents.base import AgentResult
 from ant.benchmarks.base import TaskExample
 from ant.evaluation.baseline_tiers import TIER1_PROMPT
+from ant.evaluation_suite.counting_provider import CountingOpenAIProvider
 from ant.evaluation_suite.usage import UsageStats
-from ant.providers import OpenAIProvider
 
 
 class DirectAgent:
@@ -27,12 +27,13 @@ class DirectAgent:
 
     def run(self, example: TaskExample, environment_root: Path) -> AgentResult:
         del environment_root  # deliberately unused -- Direct has no environment access
-        provider = OpenAIProvider(model=self.model)
+        provider = CountingOpenAIProvider(model=self.model)
         started = time.time()
         result = provider.responses_text(
             TIER1_PROMPT.format(question=example.question), max_output_tokens=1024
         )
         token_usage = provider.drain_usage()
+        llm_calls = provider.drain_call_count()
         elapsed = time.time() - started
         return AgentResult(
             benchmark=example.benchmark,
@@ -41,7 +42,7 @@ class DirectAgent:
             final_answer=result.text.strip(),
             trajectory=[{"prompt": TIER1_PROMPT.format(question=example.question)}],
             usage=UsageStats(
-                llm_calls=1,
+                llm_calls=llm_calls,
                 input_tokens=token_usage.input_tokens,
                 output_tokens=token_usage.output_tokens,
                 total_tokens=token_usage.total_tokens,

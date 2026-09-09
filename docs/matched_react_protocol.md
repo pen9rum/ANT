@@ -34,20 +34,25 @@ controls apply (those are judge-only, see `evaluation_suite/judge.py`).
   scores was using it. That mechanism has been removed from `run()`
   entirely; it no longer exists as a silent code path.
 - **No separate LLM-call cap.** The loop bound (`for step in
-  range(budget)`) caps the number of DECISION calls to at most `budget`;
-  each iteration makes exactly one decision call, so total decision LLM
-  calls <= 50. One additional forced-synthesis call may occur if the
+  range(budget)`) caps the number of DECISION *iterations* to at most
+  `budget`; an iteration is not the same thing as a physical model call
+  (see below). One additional forced-synthesis call may occur if the
   budget is exhausted without an explicit `finish` (see Early stopping,
-  below) -- not counted against the 50-call budget, a genuine extra call.
-  A known, minor accounting nuance: `OpenAIProvider.responses_json`
-  internally issues up to one additional "repair" API call per decision
-  when the raw response isn't valid JSON -- that repair call's tokens/cost
-  ARE included in the run's total usage (`drain_usage()`), but it does
-  NOT increment `llm_calls` a second time (the field counts external call
-  sites in `run()`'s own loop, i.e. iterations, not raw HTTP calls). This
-  can cause `llm_calls` to under-report the true number of OpenAI API
-  calls by up to 1 per malformed decision -- cost/token totals are not
-  affected, only this one diagnostic counter.
+  below) -- not counted against the 50-iteration budget, a genuine extra
+  call.
+- **`llm_calls` counts physical model/API invocations, not decision
+  iterations.** `run()` uses `CountingOpenAIProvider`
+  (`evaluation_suite/counting_provider.py`), which overrides
+  `responses_text()` -- the sole choke point every physical call goes
+  through, including `responses_json()`'s own internal JSON-repair pass
+  when a step's raw response wasn't valid JSON on the first try. An
+  earlier version of this method counted `llm_calls` with a manual "+1
+  per loop iteration," which undercounted by one for every repair that
+  actually fired (tokens/cost were always correct via `drain_usage()`;
+  only this diagnostic counter was wrong). Fixed: `llm_calls =
+  provider.drain_call_count()`, read once at the end of `run()`. Since a
+  repair pass can occur, `llm_calls` can now legitimately exceed the
+  50-iteration budget -- that is correct, not a bug.
 - **Compute-matched (retrospective per-question) comparison is SECONDARY
   ONLY**, and not implemented in this pass. If it returns later, it must
   be an explicit, separately-labeled analysis (e.g. a wrapper constructing
@@ -87,14 +92,17 @@ argument, never the default, and not run as part of this pass.
 
 ## Repository scope
 
-Both Matched ReAct and Retrieval build their file listing from ANT's own
-`RepoEnvironment(environment_root).iter_files()` -- the identical scope
-definition ANT's own territory discovery uses (`IGNORED_DIRS` +
-`TEXT_EXTENSIONS` allowlist). This is implementation PARITY with ANT, not
-"unrestricted whole-repository access" -- see the fairness-closure repo-
-scope audit for exact excluded-extension counts (`.rst`/`.sql` in
-particular) and why this is a shared evaluation-infrastructure limitation,
-not fixed in this pass (`RepoEnvironment` is frozen ANT core).
+Both Matched ReAct and Retrieval (and, as of this pass, ANT's own
+`AntAgent`) build their file listing from `EvalRepoEnvironment(
+environment_root).iter_files()` (`evaluation_suite/repo_scope.py`) -- the
+identical scope definition all three now use, in place of ANT core's own
+closed `TEXT_EXTENSIONS` allowlist. See `docs/repo_file_universe_policy.md`
+for the full extension-distribution audit and the general, content-based
+text-detection policy this implements (not an ever-growing extension
+list). This IS implementation parity with ANT, achieved entirely
+evaluation-side -- `ant/environment/repo.py` (frozen ANT core) was never
+modified; ANT's default runtime outside this evaluation suite still uses
+its own `RepoEnvironment`/`TEXT_EXTENSIONS` unchanged.
 
 ## Context limit / observation truncation policy
 
@@ -109,11 +117,20 @@ not fixed in this pass (`RepoEnvironment` is frozen ANT core).
   ReAct's budget (up to 50 steps) makes an unbounded step-count window a
   real, if not yet observed, growth risk.
 - No explicit input-token cap is enforced by this harness itself; it
-  relies on GPT-4.1's own context window. This has not been stress-tested
-  at high step counts (development smoke runs so far: 5-26 steps used).
-  If a future full run hits a real context-limit failure at high step
-  counts, that is a genuine finding to report, not a hidden risk to
-  silently guard against pre-emptively without evidence it occurs.
+  relies on GPT-4.1's own context window (1,047,576 tokens). **Statically
+  quantified** (no new LLM calls; real per-step history entries from the
+  largest real trajectory on disk -- 26 real steps -- were reused/cycled
+  to extrapolate to the full 50-step budget): worst-case prompt size at
+  the final step of a full 50-step run is ~37,300 characters, roughly
+  9,000-12,000 tokens depending on the chars-per-token estimate used --
+  about 1% of GPT-4.1's context window. Normal execution **cannot
+  plausibly exceed the model's context** under the current protocol; this
+  is a documented, quantified conclusion, not an untested assumption. If
+  a future full run somehow hits a real context-limit failure anyway
+  (e.g. a pathological question producing unusually long tool-result
+  quotes), that would itself be a genuine, reportable finding -- not
+  something to pre-emptively guard against by inventing a new truncation
+  policy in this pass.
 
 ## Early stopping semantics
 
@@ -144,10 +161,19 @@ extra, not deducted from the 50-call budget.
 
 ## Change log
 
-- This document was written after: the decision-schema parsing fix, the
+- Initial version written after: the decision-schema parsing fix, the
   budget-protocol fix (removing the per-question metadata override), the
   tool-parity fix (`callers` now tries `indexed_callers` first), the
   repository-scope fix (both baselines on `RepoEnvironment.iter_files()`),
   and the per-tool result-limit normalization (`ANT_PARITY_TOOL_LIMITS`
-  as the default). Any further change to `matched_react.py`'s protocol
-  behavior should update this file in the same commit.
+  as the default).
+- Updated after: the physical-LLM-call-accounting fix
+  (`CountingOpenAIProvider`, `llm_calls` now counts physical model calls
+  including `responses_json()`'s repair pass, not decision iterations),
+  the content-based repository-file-universe policy replacing
+  `RepoEnvironment.iter_files()` with `EvalRepoEnvironment.iter_files()`
+  (see `docs/repo_file_universe_policy.md`), and the static context/budget
+  sanity check (worst-case ~1% of GPT-4.1's context window at budget=50 --
+  no overflow risk under normal execution). Any further change to
+  `matched_react.py`'s protocol behavior should update this file in the
+  same commit.
