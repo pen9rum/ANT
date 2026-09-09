@@ -21,13 +21,8 @@ from ant.evolution import evolve_workers
 from ant.generation import generate_worker_cards
 from ant.git_refresh import refresh_changed_workers
 from ant.indexing import discover_territories
-from ant.memory import (
-    GlobalMemoryStore,
-    IndexStore,
-    record_global_experience_safe,
-    retrieve_cross_repo_experience_safe,
-)
-from ant.memory.colony import ColonyMemoryStore, record_task_memory
+from ant.memory import IndexStore
+from ant.memory.colony import ColonyMemoryStore
 from ant.providers import OpenAIProvider
 from ant.retrieval.dense import WORKER_CARDS_KEY, DenseEmbedder, build_worker_card_index
 
@@ -76,32 +71,23 @@ def ask(
     save_trace: bool = SAVE_TRACE_OPTION,
     synthesize: str = SYNTHESIZE_OPTION,
 ) -> None:
-    """Ask a local evidence question using saved worker cards."""
+    """Ask a local evidence question using saved worker cards.
+
+    Ordinary ANT runtime: no cross-task memory. This never reads
+    ColonyMemoryStore route hints or GlobalMemoryStore cross-repo
+    experience, and never records anything to either store afterward -- a
+    completed question must not influence a later one. Use `ant evolve` /
+    `ant gen-compare` for the separate, explicitly-invoked colony-evolution
+    comparison mode that reads and writes that memory on purpose.
+    """
     store = IndexStore(index_path)
-    colony_memory = ColonyMemoryStore(index_path)
-    global_memory = GlobalMemoryStore()
     workers = store.load_workers()
     provider = OpenAIProvider() if synthesize == "openai" else None
-    memory_routes = colony_memory.matching_routes(question.split())
-    # Only when a real reasoner is in play: MockLLMProvider's plan_round
-    # ignores cross_repo_experience entirely and its summarize_task_experience
-    # always returns "", so retrieving/recording anything here would just be
-    # a real embedding-model load spent on a result nothing will ever use.
-    resolved_repo_name = repo.resolve().name
-    cross_repo_experience = (
-        retrieve_cross_repo_experience_safe(
-            global_memory, question, exclude_repo=resolved_repo_name
-        )
-        if provider
-        else []
-    )
     coordinator = LocalCoordinator(
         repo.resolve(),
         workers,
         synthesizer=provider,
-        memory_routes=memory_routes,
         index_path=index_path,
-        cross_repo_experience=cross_repo_experience,
     )
     state = coordinator.ask(
         question,
@@ -109,11 +95,6 @@ def ask(
     )
     if save_trace:
         store.save_trace(state)
-    record_task_memory(colony_memory, question, state)
-    if provider:
-        record_global_experience_safe(
-            global_memory, coordinator.reasoner, question, state, repo=resolved_repo_name
-        )
     typer.echo(json.dumps(state.model_dump(), indent=2))
 
 

@@ -192,6 +192,12 @@ def run_gen_compare(
             judge=judge,
             state_dump_dir=run_dir,
             state_dump_prefix="gen0-",
+            # SLOW colony evolution (this module's own reason for existing)
+            # reads back gen0's own recorded routes/episodes when it evolves
+            # slow-gen1 -- see run_batch's own docstring for why the
+            # ordinary ANT runtime defaults this off but this pipeline opts
+            # back in.
+            use_cross_task_memory=True,
         )
         _snapshot_index(resolved_index_path, gen0_index_snapshot)
     # Read after run_gen0 (if it ran), so a first-ever call against a fresh
@@ -235,6 +241,7 @@ def run_gen_compare(
                 judge=judge,
                 state_dump_dir=run_dir,
                 state_dump_prefix=f"slow-gen{generation}-",
+                use_cross_task_memory=True,
             )
             _snapshot_index(resolved_index_path, index_snapshot_path)
             current_workers = IndexStore(resolved_index_path).load_workers()

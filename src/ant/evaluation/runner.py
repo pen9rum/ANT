@@ -48,6 +48,7 @@ def run_batch(
     judge: str = "heuristic",
     state_dump_dir: Path | None = None,
     state_dump_prefix: str = "",
+    use_cross_task_memory: bool = False,
 ) -> list[BatchResult]:
     """`state_dump_dir`/`state_dump_prefix`: when given, also writes each
     example's full EvidenceState JSON to
@@ -56,6 +57,20 @@ def run_batch(
     fast-gen1 comparison runs have always used for manual trace auditing
     (e.g. feeding a saved gen0 trace into `retry_from_trajectory`). None by
     default, so the plain `eval` CLI command's behavior is unchanged.
+
+    `use_cross_task_memory` (default False): the ordinary ANT runtime --
+    `ant eval` and every other normal-path caller -- must not let a
+    completed question influence a later one, so by default this batch
+    neither reads ColonyMemoryStore route hints / GlobalMemoryStore
+    cross-repo experience for any example, nor records anything to either
+    store afterward. The one caller that opts back in is
+    ant.evaluation.gen_compare's own SLOW-generation colony-evolution
+    pipeline (`run_gen_compare`), which is a deliberately separate,
+    explicitly-invoked comparison mode (`ant gen-compare`) -- evolve_workers()
+    has nothing to evolve from without the route/episode memory this batch
+    would otherwise record, and its own routing has always relied on
+    reading back accumulated memory across the examples in one generation's
+    batch. This flag changes nothing else about how a single example runs.
     """
     provider = OpenAIProvider() if synthesize == "openai" else None
     global_memory = GlobalMemoryStore()
@@ -100,6 +115,7 @@ def run_batch(
                     idf=idf,
                     state_dump_dir=state_dump_dir,
                     state_dump_prefix=state_dump_prefix,
+                    use_cross_task_memory=use_cross_task_memory,
                 )
             except Exception as exc:  # noqa: BLE001 - one bad example must not sink the batch
                 # A single malformed model response (or any other failure)
@@ -136,6 +152,7 @@ def _run_example(
     idf: dict[str, float] | None = None,
     state_dump_dir: Path | None = None,
     state_dump_prefix: str = "",
+    use_cross_task_memory: bool = False,
 ) -> BatchResult:
     started_at = time.time()
     example_index = (
@@ -149,7 +166,14 @@ def _run_example(
     store = IndexStore(example_index)
     colony_memory = ColonyMemoryStore(example_index)
     workers = store.load_workers()
-    memory_routes = colony_memory.matching_routes(example.question.split())
+    # See run_batch's own docstring: the ordinary runtime (use_cross_task_memory
+    # False, the default) must not let an earlier question's colony route
+    # memory or cross-repo experience reach this one at all -- not read as a
+    # hint, not recorded afterward. Only gen_compare's SLOW-generation path
+    # opts in.
+    memory_routes = (
+        colony_memory.matching_routes(example.question.split()) if use_cross_task_memory else []
+    )
     # Only when a real reasoner is in play (see cli.py's `ask` command for
     # the same rationale): MockLLMProvider never uses cross_repo_experience
     # or produces a summary worth recording, so skip the real embedding-
@@ -158,7 +182,7 @@ def _run_example(
         retrieve_cross_repo_experience_safe(
             global_memory, example.question, exclude_repo=example.repo
         )
-        if provider
+        if use_cross_task_memory and provider
         else []
     )
     coordinator = LocalCoordinator(
@@ -185,17 +209,18 @@ def _run_example(
         judge=judge,
         idf=idf,
     )
-    record_task_memory(
-        colony_memory,
-        example.question,
-        state,
-        is_high_quality=_is_high_quality_route(score),
-        route_weight=_route_weight(score),
-    )
-    if provider:
-        record_global_experience_safe(
-            global_memory, coordinator.reasoner, example.question, state, repo=example.repo
+    if use_cross_task_memory:
+        record_task_memory(
+            colony_memory,
+            example.question,
+            state,
+            is_high_quality=_is_high_quality_route(score),
+            route_weight=_route_weight(score),
         )
+        if provider:
+            record_global_experience_safe(
+                global_memory, coordinator.reasoner, example.question, state, repo=example.repo
+            )
     return BatchResult(
         example_id=example.id,
         question=example.question,

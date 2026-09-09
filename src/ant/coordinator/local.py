@@ -300,12 +300,13 @@ class RecoveryState:
     # task's own ask() call -- never persisted to colony memory (colony
     # memory only ever learns from record_task_memory's own summary of the
     # finished task, which never reads this dict), never consulted across
-    # different tasks or different needs for the same worker. Only ever
-    # populated/enforced for EVOLVED/overlay workers (WorkerCard.
-    # parent_worker_ids non-empty) -- see _record_worker_need_attempt and
-    # _enforce_local_exhaustion's own docstrings for why base-worker
-    # execution behavior is deliberately untouched by this mechanism for
-    # now. "Locally exhausted" means this worker has exhausted its current
+    # different tasks or different needs for the same worker. Populated/
+    # enforced uniformly for every repository worker (originally
+    # EVOLVED/overlay-workers-only -- WorkerCard.parent_worker_ids
+    # non-empty -- generalized once the no-self-evolution runtime removed
+    # the concept of an "evolved" worker to gate on; see
+    # _record_worker_need_attempt and _enforce_local_exhaustion's own
+    # docstrings). "Locally exhausted" means this worker has exhausted its current
     # strategy for this specific Need in its current framing -- never that
     # the worker is globally irrelevant: it stays fully usable for every
     # other need_id, and for this same need_id again the moment the need
@@ -622,8 +623,7 @@ class LocalCoordinator:
                 # recorded against node.detail as it stood entering this
                 # round -- the same reference point _enforce_local_exhaustion
                 # already checked before this round's assignments ran.
-                # Evolved-workers-only; _record_worker_need_attempt itself
-                # no-ops for a base worker.
+                # Applies to every worker, base or overlay.
                 need_fingerprint_this_round = _need_fingerprint(node.detail)
                 new_evidence_by_worker: dict[str, list[Evidence]] = defaultdict(list)
                 for item in new_evidence:
@@ -769,17 +769,33 @@ class LocalCoordinator:
             for need_id, tactic in plan.special_tactics.items():
                 episode = _episode_for_need(recovery, need_id)
                 node = graph.nodes.get(need_id)
+                # temporary_bridge genuinely needs an episode (its own
+                # worker set comes from episode.members) -- global_fallback
+                # does not, and must still be able to fire without one:
+                # _enforce_local_exhaustion can force a global_fallback for
+                # a need that has not (yet) been recognized as part of a
+                # stuck subgraph -- e.g. a need with exactly one candidate
+                # worker, locally exhausted on its very second attempt,
+                # well before _STUCK_THRESHOLD rounds without progress ever
+                # accumulates. Under the old evolved-workers-only gate this
+                # was unreachable (base-worker executions were never
+                # exhaustion-tracked at all); with local exhaustion applying
+                # uniformly, requiring an episode here silently dropped the
+                # round entirely (no assignment ran, no special tactic ran,
+                # node_executions stayed empty) instead of honoring the
+                # escalation _enforce_local_exhaustion's own docstring
+                # promises.
                 if (
                     node is None
-                    or episode is None
                     or tactic
                     not in (
                         "temporary_bridge",
                         "global_fallback",
                     )
+                    or (episode is None and tactic == "temporary_bridge")
                 ):
                     continue
-                if tactic in episode.used_special_tactics:
+                if episode is not None and tactic in episode.used_special_tactics:
                     # Already tried for this exact episode -- re-running it
                     # (same bridge/territory, since neither the tried-worker
                     # set nor the search scope has changed) would just spend
@@ -824,6 +840,7 @@ class LocalCoordinator:
                     resolution_results[need_id] = NeedResolution(status=node.resolution)
                     continue
                 if tactic == "temporary_bridge":
+                    assert episode is not None  # guaranteed by the guard above
                     tried_worker_ids: set[str] = set()
                     for member_id in episode.members:
                         tried_worker_ids |= recovery.tried_workers_by_node.get(member_id, set())
@@ -865,7 +882,8 @@ class LocalCoordinator:
                         )
                     ]
                     worker_ids_used = []
-                episode.used_special_tactics.add(tactic)
+                if episode is not None:
+                    episode.used_special_tactics.add(tactic)
 
                 new_evidence = [
                     item
@@ -2019,12 +2037,14 @@ def _record_worker_need_attempt(
     need_fingerprint: str,
     new_evidence: list[Evidence],
 ) -> None:
-    """Local exhaustion / attempt-memory update, called once per (evolved)
-    worker actually run for a need this round -- see RecoveryState.
-    worker_need_attempts' own docstring for scope. Evolved-workers-only by
-    design (Phase: execution stability, guardrail 4 -- base-worker
-    execution behavior is deliberately unchanged for now, this is where
-    the direct causal evidence -- qibo 9472b73920d049d9 -- actually is).
+    """Local exhaustion / attempt-memory update, called once per worker
+    actually run for a need this round -- see RecoveryState.
+    worker_need_attempts' own docstring for scope. Applies uniformly to
+    every repository worker (originally introduced evolved-workers-only,
+    guardrail 4 -- the direct causal evidence was qibo 9472b73920d049d9 --
+    generalized once the no-self-evolution runtime removed the concept of
+    an "evolved" worker to gate on at all: nothing about fingerprint-based
+    novelty tracking was ever specific to structural lineage).
 
     `new_evidence` is this worker's OWN slice of this round's new finds
     for this need_id (already filtered to items this worker itself
@@ -2045,8 +2065,6 @@ def _record_worker_need_attempt(
     materially new evidence" is the whole point of scoping this to actual
     novelty rather than a fixed attempt count.
     """
-    if not worker.parent_worker_ids:
-        return
     key = (worker.id, need_id)
     attempt = recovery.worker_need_attempts.get(key)
     if attempt is None or attempt.need_fingerprint != need_fingerprint:
@@ -2088,13 +2106,14 @@ def _worker_need_attempt_states_for_prompt(
 ) -> dict[str, dict[str, str]]:
     """Builds plan_round's own `worker_need_attempt_states` argument:
     need_id -> {worker_id: "productive" | "untried" | "locally_exhausted"}
-    -- planner-visible state (Phase: execution stability). Deliberately
-    reports on every EVOLVED candidate for a need, not only ones with an
-    existing attempt entry, so "untried" is visible too, not just
-    exhaustion -- an Orchestrator equipped with this can choose to try an
-    evolved worker it hasn't used yet on this need before falling back to
-    base workers. Base (non-evolved) candidates are omitted entirely: this
-    mechanism does not track or report on them (guardrail 4).
+    -- planner-visible state (Phase: execution stability). Reports on
+    every candidate for a need, not only ones with an existing attempt
+    entry, so "untried" is visible too, not just exhaustion -- an
+    Orchestrator equipped with this can choose to try a worker it hasn't
+    used yet on this need before repeating an already-exhausted one.
+    (Originally scoped to evolved candidates only, guardrail 4; applies to
+    every repository worker now that the no-self-evolution runtime has no
+    "evolved" concept left to filter on.)
 
     This is advisory to the Orchestrator's own choice, same as
     stuck_tried_workers/candidate_probes -- _enforce_local_exhaustion
@@ -2108,12 +2127,12 @@ def _worker_need_attempt_states_for_prompt(
         if node is None:
             continue
         fingerprint = _need_fingerprint(node.detail)
-        evolved = {worker.id: worker for worker in candidates if worker.parent_worker_ids}
-        if not evolved:
+        tracked = {worker.id: worker for worker in candidates}
+        if not tracked:
             continue
         states[need_id] = {
             worker_id: _worker_need_attempt_state_label(recovery, worker_id, need_id, fingerprint)
-            for worker_id in evolved
+            for worker_id in tracked
         }
     return states
 
@@ -2125,9 +2144,11 @@ def _enforce_local_exhaustion(
     worker_by_id: dict[str, WorkerCard],
 ) -> None:
     """Deterministic enforcement (not advisory-only): a locally-exhausted
-    (worker, need) pairing (evolved workers only -- guardrail 4) cannot
-    execute again while the need's own fingerprint is unchanged, no matter
-    what plan_round itself proposed -- this is the guarantee
+    (worker, need) pairing -- every repository worker, not evolved-only
+    (originally guardrail 4; generalized for the no-self-evolution runtime,
+    see _record_worker_need_attempt's own docstring) -- cannot execute
+    again while the need's own fingerprint is unchanged, no matter what
+    plan_round itself proposed -- this is the guarantee
     _worker_need_attempt_states_for_prompt's own hint alone cannot make.
     Mutates `plan` in place, called right after plan_round returns, same
     pattern as _enforce_no_repeat_stuck_assignment.
@@ -2156,7 +2177,7 @@ def _enforce_local_exhaustion(
         survivors = []
         for worker_id in worker_ids:
             worker = worker_by_id.get(worker_id)
-            if worker is None or not worker.parent_worker_ids:
+            if worker is None:
                 survivors.append(worker_id)
                 continue
             if _worker_need_attempt_state_label(recovery, worker_id, need_id, fingerprint) == (

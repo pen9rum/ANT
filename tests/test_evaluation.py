@@ -64,6 +64,34 @@ def test_run_batch_writes_results(tmp_path: Path) -> None:
     assert (tmp_path / "results.jsonl").exists()
     report = build_report(tmp_path / "results.jsonl")
     assert report.count == 1
+    # No-self-evolution runtime: the ordinary path (use_cross_task_memory
+    # defaults to False) must not record anything a later question could
+    # read back -- see test_run_batch_records_colony_memory_only_when_opted_in
+    # for the opt-in gen_compare.py itself still relies on.
+    assert ColonyMemoryStore(index_path).matching_routes(["authenticate"]) == []
+
+
+def test_run_batch_records_colony_memory_only_when_opted_in(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "auth.py").write_text("def authenticate_user():\n    return True\n", encoding="utf-8")
+    environment = RepoEnvironment(repo)
+    territories = discover_territories(environment)
+    workers = build_worker_cards(environment.root, territories)
+    index_path = tmp_path / ".ant"
+    IndexStore(index_path).save(territories, workers)
+
+    run_batch(
+        examples=[EvalExample(id="q1", question="authenticate", answer="auth.py")],
+        repo_root=repo,
+        index_path=index_path,
+        out_path=tmp_path / "results.jsonl",
+        use_cross_task_memory=True,
+    )
+
+    # ant.evaluation.gen_compare's own SLOW colony-evolution pipeline is the
+    # one caller that opts back into this -- evolve_workers() has nothing
+    # to evolve from without it.
     routes = ColonyMemoryStore(index_path).matching_routes(["authenticate"])
     assert routes
     assert routes[0].worker_ids == ["worker-root"]
@@ -248,7 +276,12 @@ def test_run_gen_compare_freezes_the_gen0_worker_snapshot_before_evolve_mutates_
         judge,
         state_dump_dir=None,
         state_dump_prefix="",
+        use_cross_task_memory=False,
     ):
+        # gen_compare.py's SLOW pipeline must keep opting into cross-task
+        # memory explicitly -- evolve_workers() has nothing to evolve from
+        # otherwise (see run_batch's own docstring).
+        assert use_cross_task_memory is True
         calls.append(f"run_batch:{state_dump_prefix or 'gen0-'}")
         results = []
         for example in examples:
@@ -349,7 +382,9 @@ def test_run_gen_compare_skips_slow_and_fast_stages_when_asked(tmp_path: Path, m
         judge,
         state_dump_dir=None,
         state_dump_prefix="",
+        use_cross_task_memory=False,
     ):
+        assert use_cross_task_memory is True
         calls.append(f"run_batch:{state_dump_prefix or 'gen0-'}")
         out_path.parent.mkdir(parents=True, exist_ok=True)
         with out_path.open("w", encoding="utf-8") as handle:

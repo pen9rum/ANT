@@ -19,6 +19,7 @@ from ant.coordinator.local import (
     _cumulative_need_evidence,
     _dedupe_evidence,
     _enforce_local_exhaustion,
+    _enforce_no_repeat_stuck_assignment,
     _expand_cluster_decisions,
     _matches_term,
     _merge_needs,
@@ -2746,12 +2747,26 @@ class _StubbornlyReassignsTriedWorkerReasoner(_PassthroughLookupsReasoner):
 def test_ask_overrides_a_stuck_reassignment_of_only_already_tried_workers(
     tmp_path: Path,
 ) -> None:
-    # Routing self-correction: once a need is stuck (>= _STUCK_THRESHOLD
-    # rounds without progress), an assignment made up entirely of workers
-    # already recorded as tried-with-no-progress on it must not execute as
-    # a plain repeat -- the coordinator overrides it with a forced
+    # Routing self-correction, end to end: an assignment made up entirely of
+    # workers already known to be making no progress must not execute as a
+    # plain repeat -- the coordinator overrides it with a forced
     # global_fallback rather than trusting the planner to diversify on its
     # own, since this fixture's reasoner deliberately never does.
+    #
+    # With local exhaustion now applying uniformly to every worker (not
+    # evolved-only), THIS specific single-worker/single-file fixture (same
+    # worker, same query, same file every round -> zero materially new
+    # evidence from round 1 onward) trips _enforce_local_exhaustion's own
+    # "everyone proposed is exhausted" escalation before
+    # _enforce_no_repeat_stuck_assignment's separate stuck-episode-streak
+    # override ever gets a chance to -- both mechanisms exist to prevent
+    # exactly this blind-repetition pattern, local exhaustion is simply the
+    # faster-firing one once it is not exempted from base workers.
+    # _enforce_no_repeat_stuck_assignment's own logic is still real and
+    # still covered in isolation, see
+    # test_enforce_no_repeat_stuck_assignment_downgrades_an_all_tried_assignment
+    # below, which exercises it directly without local exhaustion able to
+    # confound the result.
     (tmp_path / "src").mkdir()
     (tmp_path / "src" / "a.py").write_text("def a():\n    pass\n", encoding="utf-8")
     worker = WorkerCard(
@@ -2762,20 +2777,56 @@ def test_ask_overrides_a_stuck_reassignment_of_only_already_tried_workers(
         tmp_path, [worker], reasoner=_StubbornlyReassignsTriedWorkerReasoner()
     ).ask("question", max_rounds=4)
 
-    # Rounds 0-2: not yet stuck (progress flips to "stuck" only after
-    # post_frontier for the *next* round is already computed -- see
-    # _STUCK_THRESHOLD's own bookkeeping -- so the override's earliest
-    # possible round is one later than rounds_without_progress alone would
-    # suggest). By round 3 the reasoner is still proposing the same
-    # already-tried worker_a for the now-stuck root -- confirmed overridden.
-    assert len(state.rounds) == 4
-    for round_index in range(3):
-        assert state.rounds[round_index].node_executions[0].special_tactic == ""
-    round3_executions = state.rounds[3].node_executions
-    assert round3_executions, "expected round 3 to still execute something for the stuck need"
-    assert round3_executions[0].need_id == "root"
-    assert round3_executions[0].special_tactic == "global_fallback"
-    assert round3_executions[0].worker_ids == []
+    # Round 0: first attempt, never exhausted -- executes normally.
+    # Round 1: second attempt -- still not YET enforced (exhaustion is
+    # recorded from this attempt's own zero-new-evidence result, but only
+    # checked -- and therefore only enforced -- against the NEXT proposed
+    # assignment), so this one still executes normally too; this is also
+    # the round whose own no-progress count crosses _STUCK_THRESHOLD,
+    # which is what gives round 2 an already-recognized stuck episode to
+    # attach to.
+    for round_index in (0, 1):
+        executions = state.rounds[round_index].node_executions
+        assert executions[0].need_id == "root"
+        assert executions[0].special_tactic == ""
+    # Round 2 onward: the worker is now locally exhausted (its second
+    # attempt, round 1, found nothing new) -- _enforce_local_exhaustion
+    # strips the assignment and forces global_fallback, which now actually
+    # executes (see local.py's own special-tactics loop: temporary_bridge
+    # needs a recognized stuck episode, global_fallback does not, though by
+    # round 2 one already exists here too).
+    for round_index in range(2, len(state.rounds)):
+        executions = state.rounds[round_index].node_executions
+        assert executions, f"expected round {round_index} to still execute the stuck need"
+        assert executions[0].need_id == "root"
+        assert executions[0].special_tactic == "global_fallback"
+        assert executions[0].worker_ids == []
+
+
+def test_enforce_no_repeat_stuck_assignment_downgrades_an_all_tried_assignment() -> None:
+    # Isolated unit coverage for _enforce_no_repeat_stuck_assignment itself,
+    # independent of _enforce_local_exhaustion -- see the end-to-end test
+    # above for why a real ask() run can no longer isolate this mechanism
+    # on its own now that local exhaustion applies uniformly.
+    plan = RoundPlan(assignments={"root": ["worker-a", "worker-b"]})
+    stuck_tried_workers = {"root": ["worker-a", "worker-b"]}
+
+    _enforce_no_repeat_stuck_assignment(plan, stuck_tried_workers)
+
+    assert "root" not in plan.assignments
+    assert plan.special_tactics.get("root") == "global_fallback"
+
+
+def test_enforce_no_repeat_stuck_assignment_respects_a_deliberate_diversification() -> None:
+    # An assignment naming even one worker outside the tried set is a
+    # deliberate choice and must be left alone.
+    plan = RoundPlan(assignments={"root": ["worker-a", "worker-new"]})
+    stuck_tried_workers = {"root": ["worker-a", "worker-b"]}
+
+    _enforce_no_repeat_stuck_assignment(plan, stuck_tried_workers)
+
+    assert plan.assignments["root"] == ["worker-a", "worker-new"]
+    assert "root" not in plan.special_tactics
 
 
 class _AlwaysUnresolvedSingleWorkerReasoner(_PassthroughLookupsReasoner):
@@ -4752,18 +4803,34 @@ def test_an_attempt_that_finds_new_evidence_clears_local_exhaustion() -> None:
     assert attempt.cumulative_unique_evidence_count == 2
 
 
-def test_a_base_worker_attempt_is_never_recorded() -> None:
+def test_base_worker_attempts_are_tracked_the_same_as_evolved_ones() -> None:
+    # No-self-evolution runtime: local exhaustion applies uniformly to every
+    # repository worker now, not just evolved/overlay ones -- a base worker
+    # (empty parent_worker_ids) must go through the exact same three-attempt
+    # progression (novel, novel, zero-novelty -> exhausted) an evolved
+    # worker does. This is the required base-worker regression the
+    # no-self-evolution cleanup exists to add.
     recovery = RecoveryState()
     worker = _base_worker()
+    first = _evidence("c.py", "q1", worker.id)
+    second = _evidence("c.py", "q2", worker.id)
 
-    _record_worker_need_attempt(
-        recovery, worker, "root", "the need", [_evidence("c.py", "q1", worker.id)]
-    )
-    _record_worker_need_attempt(
-        recovery, worker, "root", "the need", [_evidence("c.py", "q1", worker.id)]
-    )
+    _record_worker_need_attempt(recovery, worker, "root", "the need", [first])
+    attempt = recovery.worker_need_attempts[(worker.id, "root")]
+    assert attempt.attempt_count == 1
+    assert attempt.locally_exhausted is False
 
-    assert recovery.worker_need_attempts == {}
+    _record_worker_need_attempt(recovery, worker, "root", "the need", [second])
+    attempt = recovery.worker_need_attempts[(worker.id, "root")]
+    assert attempt.attempt_count == 2
+    assert attempt.locally_exhausted is False
+    assert attempt.cumulative_unique_evidence_count == 2
+
+    _record_worker_need_attempt(recovery, worker, "root", "the need", [second])
+    attempt = recovery.worker_need_attempts[(worker.id, "root")]
+    assert attempt.attempt_count == 3
+    assert attempt.last_attempt_new_evidence_count == 0
+    assert attempt.locally_exhausted is True
 
 
 def test_a_reframed_need_resets_local_exhaustion_for_the_same_worker() -> None:
@@ -4810,7 +4877,10 @@ def test_worker_need_attempt_state_label_reports_all_three_states() -> None:
     assert _worker_need_attempt_state_label(recovery, worker.id, "root", "new wording") == "untried"
 
 
-def test_worker_need_attempt_states_for_prompt_omits_base_workers() -> None:
+def test_worker_need_attempt_states_for_prompt_includes_all_workers() -> None:
+    # No-self-evolution runtime: this used to omit base (non-evolved)
+    # candidates entirely -- now every candidate is planner-visible,
+    # base and overlay alike.
     recovery = RecoveryState()
     evolved = _evolved_worker()
     base = _base_worker()
@@ -4824,7 +4894,7 @@ def test_worker_need_attempt_states_for_prompt_omits_base_workers() -> None:
 
     states = _worker_need_attempt_states_for_prompt(recovery, graph, {"root": [evolved, base]})
 
-    assert states == {"root": {evolved.id: "untried"}}
+    assert states == {"root": {evolved.id: "untried", base.id: "untried"}}
 
 
 def test_enforce_local_exhaustion_filters_only_the_exhausted_worker_from_a_coalition() -> None:
@@ -4874,12 +4944,12 @@ def test_enforce_local_exhaustion_escalates_to_global_fallback_when_everyone_is_
     assert plan.special_tactics.get("root") == "global_fallback"
 
 
-def test_enforce_local_exhaustion_does_not_touch_base_worker_assignments() -> None:
+def test_enforce_local_exhaustion_filters_an_exhausted_base_worker_too() -> None:
+    # No-self-evolution runtime: enforcement is no longer gated on
+    # parent_worker_ids -- an exhausted base worker must be mechanically
+    # dropped from its assignment exactly like an exhausted evolved one.
     recovery = RecoveryState()
     base = _base_worker()
-    # Even a (nonsensical for a base worker, but defensively constructed)
-    # exhausted-looking entry must never be consulted for a base worker --
-    # guardrail 4: base-worker execution behavior is unchanged.
     recovery.worker_need_attempts[(base.id, "root")] = WorkerNeedAttempt(
         attempt_count=2, need_fingerprint="the need", locally_exhausted=True
     )
@@ -4894,7 +4964,8 @@ def test_enforce_local_exhaustion_does_not_touch_base_worker_assignments() -> No
 
     _enforce_local_exhaustion(plan, recovery, graph, {base.id: base})
 
-    assert plan.assignments["root"] == [base.id]
+    assert "root" not in plan.assignments
+    assert plan.special_tactics.get("root") == "global_fallback"
 
 
 def test_a_worker_reassigned_to_the_same_stuck_need_gets_diversified_after_local_exhaustion(
