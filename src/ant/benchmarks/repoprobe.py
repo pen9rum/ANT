@@ -10,6 +10,7 @@ from pathlib import Path
 
 from ant.agents.base import AgentResult
 from ant.benchmarks.base import TaskExample
+from ant.evaluation_suite.directory_tree import build_directory_structure
 from ant.evaluation_suite.judge import DEFAULT_JUDGE_MODEL, call_judge
 from ant.evaluation_suite.registry import register_benchmark
 from ant.evaluation_suite.scoring import (
@@ -82,14 +83,23 @@ class RepoProbeAdapter:
     `answer`/`checklist`), read directly from the pinned commit's raw CSV
     files -- never a locally re-typed copy.
 
-    Known, disclosed fidelity gap: the official scoring prompt's
-    `repo_info_section` normally contains a `repomix`-flattened directory
-    structure (a Node.js tool, not vendored here to avoid a new
-    non-Python toolchain dependency); this adapter instead passes a plain
-    top-level file/directory listing. This affects only supplementary
-    prompt context, not the checklist itself (the actual scored rubric,
-    `question.scoring_criteria`, is unaffected) -- flagged in
-    MetricResult.metadata so it is never silently invisible.
+    Directory-structure fidelity note (CORRECTED -- see the RepoProbe-Python
+    calibration audit): the official scoring prompt's `repo_info_section`
+    is populated from `repomix-output.md`'s own "Directory Structure"
+    section when the official evaluator has actually run repomix (a
+    Node.js tool, not vendored here to avoid a new non-Python toolchain
+    dependency), and falls back to an EMPTY string when it has not (see
+    evaluator.py's own `_parse_repomix_repo_info`) -- exactly the state
+    this adapter previously shipped in unconditionally. That empty state
+    was confirmed live to cause the judge to flag REAL, verified-existing
+    file citations as "likely fabricated" (100% false-positive
+    hallucination rate on an 8-case controlled ablation), which is why
+    `score()` now calls `build_directory_structure()` (see
+    evaluation_suite/directory_tree.py) for a real, deterministic,
+    dependency-free directory listing of the task's own pinned repository
+    instead. This is a real fix to the scoring INPUT, not the checklist
+    itself (`question.scoring_criteria` is unaffected) -- flagged in
+    MetricResult.metadata so the correction is never silently invisible.
     """
 
     name = "repoprobe"
@@ -167,7 +177,15 @@ class RepoProbeAdapter:
 
     def score(self, example: TaskExample, result: AgentResult) -> MetricResult:
         template = _load_scoring_template()
-        directory_structure = ""  # see class docstring's disclosed fidelity gap
+        # Real, deterministic, gold-answer-independent directory listing of
+        # the task's own pinned repository -- identical for every method's
+        # answer to this same task_id (build_directory_structure takes only
+        # a repo path, never a model name or answer). prepare_environment
+        # is idempotent (returns immediately if already checked out to the
+        # pinned commit), so this is safe to call even if score() is ever
+        # invoked before the caller's own prepare_environment step.
+        repo_dir = self.prepare_environment(example)
+        directory_structure = build_directory_structure(repo_dir)
         prompt = template.format(
             description=example.question,
             repo_info_section=f"**Directory Structure**:\n```\n{directory_structure}\n```",
@@ -227,7 +245,8 @@ class RepoProbeAdapter:
                 "judge_model": self.judge_model,
                 "n_judge_calls": len(grader_runs),
                 "hallucination": bool(first_payload.get("hallucination", False)),
-                "directory_structure_fidelity_gap": True,
+                "directory_structure_fidelity_gap": False,
+                "directory_structure_source": "build_directory_structure (git ls-files)",
                 "generation_model": result.metadata.get("generation_model", "unknown"),
                 "judge_cost_usd": sum(run.get("judge_cost_usd", 0.0) for run in grader_runs),
             },
