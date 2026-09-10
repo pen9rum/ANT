@@ -76,8 +76,25 @@ def test_bounded_representation_truncates_large_trees(tmp_path: Path) -> None:
     files = {f"pkg/module_{i:04d}.py": "x = 1" for i in range(2000)}
     repo = _init_repo_with_files(tmp_path, files)
     tree = build_directory_structure(repo, max_chars=500)
-    assert len(tree) <= 500 + len("\n... (99999 more characters of the directory tree omitted) ...")
-    assert "more characters of the directory tree omitted" in tree
+    assert len(tree) <= 500 + len("\n  ... (99999 more characters omitted) ...")
+    assert "more characters omitted" in tree
+
+
+def test_bounded_representation_gives_every_top_level_entry_a_fair_share(
+    tmp_path: Path,
+) -> None:
+    # Regression test for a real, confirmed defect: naive linear truncation
+    # of an alphabetically sorted tree let one early top-level directory
+    # (aaa_huge/) consume the entire budget, hiding zzz_small/ completely --
+    # exactly what happened with agent-framework's real dotnet/ vs python/
+    # top-level directories.
+    files = {f"aaa_huge/module_{i:04d}.py": "x = 1" for i in range(500)}
+    files["zzz_small/only_file.py"] = "y = 2"
+    repo = _init_repo_with_files(tmp_path, files)
+    tree = build_directory_structure(repo, max_chars=800)
+    assert "aaa_huge/" in tree
+    assert "zzz_small/" in tree
+    assert "only_file.py" in tree
 
 
 def test_truncation_never_cuts_an_entry_mid_line(tmp_path: Path) -> None:
