@@ -108,15 +108,33 @@ class RepoGraphTool:
         signature exactly."""
         self._require_checkout()
         payload = json.dumps({"repo_dir": str(repo_dir), "query": symbol})
-        result = subprocess.run(
-            [str(self.venv_python), "_ant_query.py"],
-            cwd=self.checkout_root / "repograph",
-            input=payload,
-            capture_output=True,
-            text=True,
-            errors="replace",
-            timeout=self.timeout_seconds,
-        )
+        try:
+            result = subprocess.run(
+                [str(self.venv_python), "_ant_query.py"],
+                cwd=self.checkout_root / "repograph",
+                input=payload,
+                capture_output=True,
+                text=True,
+                errors="replace",
+                timeout=self.timeout_seconds,
+            )
+        except subprocess.TimeoutExpired:
+            # RepoGraph's own get_tags_raw() deep-copies the ENTIRE repo
+            # structure dict once PER FILE processed (confirmed by direct
+            # reading of construct_graph.py -- s = deepcopy(self.structure)
+            # inside a per-file loop) -- a genuine, disclosed, method-
+            # inherent O(n^2)-ish scalability limitation of the released
+            # implementation, not something this wrapper works around
+            # algorithmically. Confirmed live: construction on a
+            # 2600-.py-file repo (sglang, RepoProbe-Python) did not
+            # complete within a 600s timeout. A timeout here degrades to
+            # "no evidence found" -- the same posture as any other tool
+            # failure -- rather than crashing the whole agent run; the
+            # repository stays in the evaluated set, RepoGraph simply
+            # never contributes evidence for it. See
+            # third_party/manifests/repograph/manifest.json for the full,
+            # disclosed applicability finding.
+            return []
         marker = '{"found"'
         start = result.stdout.rfind(marker)
         if result.returncode != 0 or start == -1:

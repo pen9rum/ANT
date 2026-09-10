@@ -1,0 +1,103 @@
+{
+  "name": "RepoProbe-Python",
+  "status": "frozen_pilot",
+  "status_note": "Stage 1 (16 task_ids) is the frozen, active pilot sample to run now. Stage 2 extension (16 more task_ids) is PRE-REGISTERED at the same time, via the same seeded draw, but NOT active -- activation is contingent only on Stage 1 running cleanly across all 5 methods with no infrastructure/fairness defect, never on observed scores.",
+  "benchmark": "repoprobe",
+  "benchmark_commit": "5ac4212",
+  "inclusion_criterion": "repository primary_language == 'Python' per RepoProbe's own repos_info.json metadata (benchmark-provided language label, not a derived/heuristic classification)",
+  "included_repositories": [
+    "FieldStation42",
+    "adk-python",
+    "agent-framework",
+    "browser-use",
+    "crawl4ai",
+    "docling",
+    "sglang",
+    "yasb"
+  ],
+  "questions_per_repository_full_dataset": {
+    "FieldStation42": 14,
+    "adk-python": 30,
+    "agent-framework": 9,
+    "browser-use": 5,
+    "crawl4ai": 18,
+    "docling": 10,
+    "sglang": 11,
+    "yasb": 11
+  },
+  "total_questions_full_python_subset": 108,
+  "seed": 20260910,
+  "sampling_method": "ant.evaluation_suite.sampling.stratified_sample, per_stratum=4, stratum_key=repo_short_name -- one deterministic draw of 4 task_ids per repo; first 2 (in the draw's own order) become stage_1, remaining 2 become stage_2_extension. Never resampled independently.",
+  "stage_1_task_ids_by_repo": {
+    "FieldStation42": [
+      "FieldStation42-3",
+      "FieldStation42-8"
+    ],
+    "adk-python": [
+      "adk-python-26",
+      "adk-python-7"
+    ],
+    "agent-framework": [
+      "agent-framework-8",
+      "agent-framework-0"
+    ],
+    "browser-use": [
+      "browser-use-4",
+      "browser-use-0"
+    ],
+    "crawl4ai": [
+      "crawl4ai-17",
+      "crawl4ai-5"
+    ],
+    "docling": [
+      "docling-1",
+      "docling-8"
+    ],
+    "sglang": [
+      "sglang-3",
+      "sglang-2"
+    ],
+    "yasb": [
+      "yasb-1",
+      "yasb-4"
+    ]
+  },
+  "stage_2_extension_task_ids_by_repo": {
+    "FieldStation42": [
+      "FieldStation42-0",
+      "FieldStation42-6"
+    ],
+    "adk-python": [
+      "adk-python-18",
+      "adk-python-27"
+    ],
+    "agent-framework": [
+      "agent-framework-7",
+      "agent-framework-6"
+    ],
+    "browser-use": [
+      "browser-use-2",
+      "browser-use-1"
+    ],
+    "crawl4ai": [
+      "crawl4ai-14",
+      "crawl4ai-13"
+    ],
+    "docling": [
+      "docling-2",
+      "docling-0"
+    ],
+    "sglang": [
+      "sglang-8",
+      "sglang-9"
+    ],
+    "yasb": [
+      "yasb-9",
+      "yasb-0"
+    ]
+  },
+  "stage_1_total": 16,
+  "stage_2_extension_total": 16,
+  "created_at": "2026-09-09T22:29:32.676530+00:00",
+  "fingerprint_sha256": "0361ca2a269205e46c977d35e148f81005a6adec47087fac459d88b6201197be"
+}
