@@ -63,9 +63,57 @@ class RepoGraphTool:
     RepoGraph's own file discovery is Python-only (`find_files` filters
     to `.py`) -- a real, disclosed scope limitation for non-Python repos
     (see the manifest for what this means for RepoProbe applicability).
+
+    FIDELITY AUDIT (found after 0/20 natural search_repograph usage on the
+    SWE-QA-Pro pilot): direct inspection of the official host-agent
+    integration this baseline is meant to match --
+    SWE-agent/config/default.yaml -- shows it is NOT merely a tool schema
+    entry. Two things are present there that this evaluation suite had
+    been omitting:
+      1. `system_template` appends the tool's docstring/signature/
+         arguments directly after `{command_docs}` (the other tools'
+         auto-generated docs) -- a schema-level parity this wrapper's
+         `TOOL_DESCRIPTION` already matches in spirit (one description
+         string handed to MatchedReActAgent's own `extra_tool_descriptions`
+         injection point).
+      2. `instance_template`'s own numbered tips list -- METHOD-INTRINSIC
+         usage instruction, not just a schema entry -- says (verbatim):
+         "6. Before you proceed to edit, always look up for related
+         context using `search_repo` commands." and "7. Always try to use
+         the most related and key FUNCTIONS or CLASSES as search terms
+         when leveraging search commands." This suite's own baseline had
+         NO equivalent instruction -- `search_repograph` was exposed as
+         just one more tool among nine, with no guidance that it should
+         be consulted before finishing or how to pick a search term. This
+         is a genuine, disclosed baseline-fidelity defect, not merely "the
+         model chose not to use an available tool" -- the official
+         integration does not leave that choice unguided.
+
+    Fix: `TOOL_DESCRIPTION` below is a faithful, minimal port of tips #6
+    and #7 above (adapted only for terminology -- "finish and answer"
+    in place of "proceed to edit", since this is a QA setting with no
+    edit step, and this tool's own name in place of `search_repo`) --
+    not new, invented prompting aimed at maximizing usage. Scoped
+    entirely to this one baseline's own tool-description string; nothing
+    about MatchedReActAgent itself, or any other baseline, changed.
     """
 
     name = "repograph"
+
+    #: The exact text every orchestration script should pass as
+    #: `extra_tool_descriptions={"search_repograph": RepoGraphTool.TOOL_DESCRIPTION}`
+    #: -- see the FIDELITY AUDIT note above for where this text comes from
+    #: and why it is not arbitrary. Defined once here so every caller (the
+    #: RepoProbe-Python and SWE-QA-Pro pilots, and any future run) gets the
+    #: identical, correctly-ported description rather than each
+    #: hand-typing a slightly different one.
+    TOOL_DESCRIPTION = (
+        "query a precomputed repository structural code graph for a function or class "
+        "NAME (not a natural-language query); returns its known callers, callees, and "
+        "definition location from static analysis. Before you finish and answer, always "
+        "look up related context using this tool. Always try to use the most related and "
+        "key functions or classes as search terms."
+    )
 
     def __init__(
         self,
