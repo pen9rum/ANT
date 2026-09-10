@@ -6,7 +6,9 @@ from pathlib import Path
 
 from ant.agents.base import AgentResult
 from ant.benchmarks.base import TaskExample
+from ant.domain import TokenUsage
 from ant.evaluation_suite.usage import UsageStats
+from ant.providers.pricing import estimate_cost_usd
 
 SWEQA_PRO_REPO_URL = "https://github.com/TIGER-AI-Lab/SWE-QA-Pro"
 SWEQA_PRO_COMMIT = "93ac6a4"  # kept in sync with benchmarks/sweqa_pro.py's own pin
@@ -156,6 +158,17 @@ class SweQaProNativeAgent:
             )
         raw = json.loads(result.stdout[start:])
         token_usage = raw.get("token_usage") or {}
+        input_tokens = token_usage.get("prompt_tokens", 0)
+        output_tokens = token_usage.get("completion_tokens", 0)
+        # ToolCallingAgent.query() already accumulates real prompt/completion
+        # token counts into final_state itself (its own token-usage
+        # bookkeeping, not something this wrapper adds) -- estimate_cost_usd
+        # is a pure, read-only post-hoc computation over those already-real
+        # numbers (the same pricing table every other baseline's cost figure
+        # uses), never a change to what the agent does or how it runs.
+        estimated_cost_usd = estimate_cost_usd(
+            self.model_key, TokenUsage(input_tokens=input_tokens, output_tokens=output_tokens)
+        )
         return AgentResult(
             benchmark=example.benchmark,
             task_id=example.task_id,
@@ -163,9 +176,10 @@ class SweQaProNativeAgent:
             final_answer=raw.get("answer", ""),
             trajectory=raw.get("trajectory", []),
             usage=UsageStats(
-                input_tokens=token_usage.get("prompt_tokens", 0),
-                output_tokens=token_usage.get("completion_tokens", 0),
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
                 total_tokens=token_usage.get("total_tokens", 0),
+                estimated_cost_usd=estimated_cost_usd,
                 tool_calls=sum((raw.get("tool_usage") or {}).get("counts", {}).values()),
                 # Physically counted via a LangChain callback in
                 # _ant_driver.py, not the official agent's own
