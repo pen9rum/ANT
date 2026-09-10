@@ -149,9 +149,10 @@ def test_matched_react_agent_usage_llm_calls_reflects_a_real_repair_pass(
         # Bypass CountingOpenAIProvider.__init__ itself (monkeypatching it
         # below means referring to it here would re-invoke the patched
         # version and recurse) -- call the grandparent's __init__ directly
-        # and replicate the one line CountingOpenAIProvider.__init__ adds.
+        # and replicate the lines CountingOpenAIProvider.__init__ adds.
         OpenAIProvider.__init__(self, model="gpt-4.1")
         self._physical_call_count = 0
+        self._retry_log = []
         self.settings = replace(self.settings, organization=None, project=None)
 
     monkeypatch.setattr(CountingOpenAIProvider, "__init__", fake_init)
