@@ -1,7 +1,7 @@
 {
   "name": "RepoProbe-Python",
-  "status": "frozen_pilot",
-  "status_note": "Stage 1 (16 task_ids) is the frozen, active pilot sample to run now. Stage 2 extension (16 more task_ids) is PRE-REGISTERED at the same time, via the same seeded draw, but NOT active -- activation is contingent only on Stage 1 running cleanly across all 5 methods with no infrastructure/fairness defect, never on observed scores.",
+  "status": "stage_2_activated",
+  "status_note": "Stage 1 (16 task_ids) ran cleanly across all 5 methods with no infrastructure/fairness defect (the single agent-framework-8/ant HTTP-500 was a transient provider failure, not a defect, and was recovered separately -- see the frozen transient-provider retry policy). Per the pre-registered rule, Stage 2 extension (16 more task_ids, same seeded draw) is now ACTIVATED unconditionally -- this activation was decided before Stage 1's scores were used for anything, and does not depend on what those scores were. Combined Stage 1 + Stage 2 = 32 fixed RepoProbe-Python tasks, 4/repo across the same 8 repositories. Programmatic activation validation: output/runs/repoprobe-python-stage2-activation-validation.json.",
   "benchmark": "repoprobe",
   "benchmark_commit": "5ac4212",
   "inclusion_criterion": "repository primary_language == 'Python' per RepoProbe's own repos_info.json metadata (benchmark-provided language label, not a derived/heuristic classification)",
