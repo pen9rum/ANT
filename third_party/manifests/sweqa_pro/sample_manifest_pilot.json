@@ -1,0 +1,349 @@
+{
+  "name": "SWE-QA-Pro-Pilot",
+  "status": "frozen_pilot",
+  "status_note": "16-20 question pilot on a focused 8-10 repository set, NOT a 26-repository sample. Restricted per explicit instruction. 8 repos (qibo, seaborn, sphinx, yt-dlp, pennylane, sqlfluff, sanic, Pillow) were confirmed genuinely used before this pass -- either via the current SWE-QA-Pro adapter's own prior smoke-test runs (qibo, sphinx, sqlfluff, Pillow -- output/runs/smoke-test-sweqa-pro*) or via ANT's own prior architecture-validation ladder work under a different, custom methodology (seaborn, yt-dlp, pennylane, sanic -- output/runs/<repo>-ant-gen0-gen1* and .ant/sweqa/<repo> indexes), disclosed per-repo below. No additional genuinely-previously-run SWE-QA-Pro-protocol repos beyond these 8 were found in local history -- 2 additional repos (web3.py, checkov) were therefore chosen from ALREADY-CLONED repos (repos/) by a pre-specified diversity criterion (new domain not covered by the 8 + size-range extension), NOT by performance. This is a pilot: 2 questions/repo x 10 repos = 20 tasks, selected deterministically by sorted task_id + first-available (cluster, qa_type) diversity pair, without reading gold answers.",
+  "benchmark": "sweqa_pro",
+  "included_repositories": {
+    "qibo": "qiboteam/qibo",
+    "seaborn": "mwaskom/seaborn",
+    "sphinx": "sphinx-doc/sphinx",
+    "yt-dlp": "yt-dlp/yt-dlp",
+    "pennylane": "PennyLaneAI/pennylane",
+    "sqlfluff": "sqlfluff/sqlfluff",
+    "sanic": "sanic-org/sanic",
+    "Pillow": "python-pillow/Pillow",
+    "web3.py": "ethereum/web3.py",
+    "checkov": "bridgecrewio/checkov"
+  },
+  "prior_evidence_by_repo": {
+    "qibo": "current-adapter smoke (output/runs/smoke-test-sweqa-pro*, task 9c20dc43873e8470) + official ToolCallingAgent smoke (manifest.json) + extensive old-ladder work",
+    "sphinx": "current-adapter smoke (task 90b80dc51b5a8a4a) + extensive old-ladder work (sphinx-ant-gen0-gen1*)",
+    "sqlfluff": "current-adapter smoke only (task cb33e27df8c22e0c); not found in old-ladder output/runs",
+    "Pillow": "current-adapter smoke (task ea4dc7cad46d18c5) + official ToolCallingAgent smoke (manifest.json); not found in old-ladder output/runs",
+    "seaborn": "old-ladder work only (seaborn-ant-gen0-gen1*, single-agent-baseline-seaborn, closed-book-baseline-seaborn); no current-adapter smoke found",
+    "yt-dlp": "old-ladder work only (ytdlp-ant-gen0-gen1*, single-agent-baseline-ytdlp, closed-book-baseline-ytdlp); no current-adapter smoke found",
+    "pennylane": "old-ladder work only (pennylane-ant-gen0-gen1*, single-agent-baseline-pennylane, closed-book-baseline-pennylane); no current-adapter smoke found",
+    "sanic": "old-ladder work only (sanic-latest3gen-1/2/3); no current-adapter smoke found",
+    "web3.py": "NEWLY ADDED this pass -- already cloned (repos/web3.py) but no prior execution of any kind found; selected by diversity criterion, not prior use",
+    "checkov": "NEWLY ADDED this pass -- already cloned (repos/checkov) but no prior execution of any kind found; selected by diversity criterion, not prior use"
+  },
+  "new_repo_selection_criterion": "Pre-specified, performance-independent: (1) must already be cloned under repos/ (no new clone this pass); (2) must introduce a domain not represented among the 8 confirmed repos (quantum computing/ML, data viz, docs, media, SQL tooling, web framework, image processing); (3) should extend the existing repo-size range (qibo 19K - yt-dlp 226K non-test .py lines) rather than duplicate it. web3.py (36K lines, Ethereum/blockchain client -- a wholly new domain) and checkov (8K lines, infrastructure-as-code security scanning -- also a new domain, and the smallest repo in the combined 10, extending the range below qibo) were selected on this basis alone, before any task_id was drawn or any question read.",
+  "repo_sizes_non_test_py_lines": {
+    "qibo": 19128,
+    "seaborn": 31670,
+    "sphinx": 74325,
+    "yt-dlp": 226070,
+    "pennylane": 128531,
+    "sqlfluff": 87261,
+    "sanic": 31916,
+    "Pillow": 33753,
+    "web3.py": 35947,
+    "checkov": 8016
+  },
+  "selection_by_repo": {
+    "qibo": {
+      "repo_full_name": "qiboteam/qibo",
+      "task_ids": [
+        "355a4aa23fedfe23",
+        "3f0918f490f79681"
+      ],
+      "clusters": [
+        {
+          "id": "2.3",
+          "name": "type and attribute errors / initialization / CLI workflow"
+        },
+        {
+          "id": "8.0",
+          "name": "tensors / training / GPU / ML experiment logging / tuning"
+        }
+      ],
+      "qa_types": [
+        {
+          "class_name": "What (Factual Queries)",
+          "sub_class_name": "Dependency & Inheritance"
+        },
+        {
+          "class_name": "How (Procedural Queries)",
+          "sub_class_name": "Algorithm Implementation"
+        }
+      ],
+      "total_examples_in_repo": 10
+    },
+    "seaborn": {
+      "repo_full_name": "mwaskom/seaborn",
+      "task_ids": [
+        "1347185dd7392829",
+        "28d9b344cb4c13fc"
+      ],
+      "clusters": [
+        {
+          "id": "8.2",
+          "name": "time series / feature engineering / explainability methods / behavioral analysis / computational semantics"
+        },
+        {
+          "id": "8.2",
+          "name": "time series / feature engineering / explainability methods / behavioral analysis / computational semantics"
+        }
+      ],
+      "qa_types": [
+        {
+          "class_name": "Where (Localization Queries)",
+          "sub_class_name": "Data & Control Flow"
+        },
+        {
+          "class_name": "What (Factual Queries)",
+          "sub_class_name": "Dependency & Inheritance"
+        }
+      ],
+      "total_examples_in_repo": 10
+    },
+    "sphinx": {
+      "repo_full_name": "sphinx-doc/sphinx",
+      "task_ids": [
+        "39de7debd3fdb4c2",
+        "48deec23c86a40d8"
+      ],
+      "clusters": [
+        {
+          "id": "4.0",
+          "name": "version control / Docker / build cache"
+        },
+        {
+          "id": "9.1",
+          "name": "plotting systems / widgets / maps / UI animation / usability"
+        }
+      ],
+      "qa_types": [
+        {
+          "class_name": "Where (Localization Queries)",
+          "sub_class_name": "Feature Location"
+        },
+        {
+          "class_name": "What (Factual Queries)",
+          "sub_class_name": "Concepts & Definitions"
+        }
+      ],
+      "total_examples_in_repo": 10
+    },
+    "yt-dlp": {
+      "repo_full_name": "yt-dlp/yt-dlp",
+      "task_ids": [
+        "05533ae903375e6b",
+        "075628f5cefca956"
+      ],
+      "clusters": [
+        {
+          "id": "7.1",
+          "name": "media download / playlist / metadata / client-side proxy config"
+        },
+        {
+          "id": "5.2",
+          "name": "runtime error handling / DB transactions / retry / logging system"
+        }
+      ],
+      "qa_types": [
+        {
+          "class_name": "How (Procedural Queries)",
+          "sub_class_name": "Algorithm Implementation"
+        },
+        {
+          "class_name": "Where (Localization Queries)",
+          "sub_class_name": "Feature Location"
+        }
+      ],
+      "total_examples_in_repo": 10
+    },
+    "pennylane": {
+      "repo_full_name": "PennyLaneAI/pennylane",
+      "task_ids": [
+        "247e8f0767c3070f",
+        "47af69971c1baaaa"
+      ],
+      "clusters": [
+        {
+          "id": "6.3",
+          "name": "compiler toolchain / cross-compile / env vars / code quality analysis"
+        },
+        {
+          "id": "8.1",
+          "name": "ML analytical visualization / Fourier / ML animation / calibration"
+        }
+      ],
+      "qa_types": [
+        {
+          "class_name": "Where (Localization Queries)",
+          "sub_class_name": "Identifier Location"
+        },
+        {
+          "class_name": "Where (Localization Queries)",
+          "sub_class_name": "Feature Location"
+        }
+      ],
+      "total_examples_in_repo": 10
+    },
+    "sqlfluff": {
+      "repo_full_name": "sqlfluff/sqlfluff",
+      "task_ids": [
+        "329382a86e7a279f",
+        "5bf8a9864321440e"
+      ],
+      "clusters": [
+        {
+          "id": "0.1",
+          "name": "SQL / structured grammar / templating Engine"
+        },
+        {
+          "id": "0.1",
+          "name": "SQL / structured grammar / templating Engine"
+        }
+      ],
+      "qa_types": [
+        {
+          "class_name": "How (Procedural Queries)",
+          "sub_class_name": "Algorithm Implementation"
+        },
+        {
+          "class_name": "Where (Localization Queries)",
+          "sub_class_name": "Feature Location"
+        }
+      ],
+      "total_examples_in_repo": 10
+    },
+    "sanic": {
+      "repo_full_name": "sanic-org/sanic",
+      "task_ids": [
+        "0b6be6237e54890e",
+        "271fa47a0fbfb2df"
+      ],
+      "clusters": [
+        {
+          "id": "5.4",
+          "name": "connection lifecycle / protocol handling / low-level failures"
+        },
+        {
+          "id": "5.4",
+          "name": "connection lifecycle / protocol handling / low-level failures"
+        }
+      ],
+      "qa_types": [
+        {
+          "class_name": "Where (Localization Queries)",
+          "sub_class_name": "Feature Location"
+        },
+        {
+          "class_name": "How (Procedural Queries)",
+          "sub_class_name": "Algorithm Implementation"
+        }
+      ],
+      "total_examples_in_repo": 10
+    },
+    "Pillow": {
+      "repo_full_name": "python-pillow/Pillow",
+      "task_ids": [
+        "6b736c354c51b8ec",
+        "9219e15094c9fa5d"
+      ],
+      "clusters": [
+        {
+          "id": "3.3",
+          "name": "extensibility / configuration framework / plugin architecture"
+        },
+        {
+          "id": "1.0",
+          "name": "data formats / FITS / Astropy / units / WCS"
+        }
+      ],
+      "qa_types": [
+        {
+          "class_name": "How (Procedural Queries)",
+          "sub_class_name": "System Design & Patterns"
+        },
+        {
+          "class_name": "Where (Localization Queries)",
+          "sub_class_name": "Identifier Location"
+        }
+      ],
+      "total_examples_in_repo": 10
+    },
+    "web3.py": {
+      "repo_full_name": "ethereum/web3.py",
+      "task_ids": [
+        "386d0ac443390bc8",
+        "3a0f5ab0b09f7da4"
+      ],
+      "clusters": [
+        {
+          "id": "7.2",
+          "name": "auth systems / deployment / extension plugins / cloud services"
+        },
+        {
+          "id": "5.0",
+          "name": "asyncio / async context / resource cleanup"
+        }
+      ],
+      "qa_types": [
+        {
+          "class_name": "Where (Localization Queries)",
+          "sub_class_name": "Data & Control Flow"
+        },
+        {
+          "class_name": "Where (Localization Queries)",
+          "sub_class_name": "Feature Location"
+        }
+      ],
+      "total_examples_in_repo": 10
+    },
+    "checkov": {
+      "repo_full_name": "bridgecrewio/checkov",
+      "task_ids": [
+        "035185198e860381",
+        "3981e7604e92bda3"
+      ],
+      "clusters": [
+        {
+          "id": "7.3",
+          "name": "AWS / Azure / K8s / container security / IAM policy"
+        },
+        {
+          "id": "2.3",
+          "name": "type and attribute errors / initialization / CLI workflow"
+        }
+      ],
+      "qa_types": [
+        {
+          "class_name": "How (Procedural Queries)",
+          "sub_class_name": "API & Framework Support"
+        },
+        {
+          "class_name": "Where (Localization Queries)",
+          "sub_class_name": "Identifier Location"
+        }
+      ],
+      "total_examples_in_repo": 10
+    }
+  },
+  "task_ids": [
+    "035185198e860381",
+    "05533ae903375e6b",
+    "075628f5cefca956",
+    "0b6be6237e54890e",
+    "1347185dd7392829",
+    "247e8f0767c3070f",
+    "271fa47a0fbfb2df",
+    "28d9b344cb4c13fc",
+    "329382a86e7a279f",
+    "355a4aa23fedfe23",
+    "386d0ac443390bc8",
+    "3981e7604e92bda3",
+    "39de7debd3fdb4c2",
+    "3a0f5ab0b09f7da4",
+    "3f0918f490f79681",
+    "47af69971c1baaaa",
+    "48deec23c86a40d8",
+    "5bf8a9864321440e",
+    "6b736c354c51b8ec",
+    "9219e15094c9fa5d"
+  ],
+  "total_task_ids": 20,
+  "created_at": "2026-09-10T18:10:31.123883+00:00"
+}
