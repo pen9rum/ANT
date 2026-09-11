@@ -1,0 +1,127 @@
+{
+  "name": "RepoProbe-Python-Full RepoGraph efficiency bookkeeping",
+  "status": "frozen",
+  "note": "Read-only arithmetic derivation over the already-frozen 108-task MR+RepoGraph results (output/runs/repoprobe-python-full/, gitignored). No output file, score, or method behavior was changed to produce this. Separates one-time successful graph preprocessing time from failed-preprocessing/timeout overhead and estimated actual per-question inference runtime, so the paper-facing efficiency table does not misattribute repeated preprocessing timeout tax to pure inference latency.",
+  "frozen_timeout_seconds": 150,
+  "frozen_timeout_note": "RepoGraphTool(timeout_seconds=150) is the hard per-call ceiling any single search_repograph invocation can spend attempting construction before returning empty results.",
+  "caveats": [
+    "No per-tool-call timestamp is recorded in the frozen trajectories, so overhead figures for repos where construction never succeeded (adk-python, sglang) are an UPPER BOUND (failed_calls x 150s ceiling), not a measured duration -- a call could in principle fail faster than the full ceiling on some invocations.",
+    "For agent-framework and yasb, which succeeded live during the 108-task run despite failing the isolated single-repo applicability check, the exact one-time construction duration is not separately instrumented; it is bounded above by the same 150s per-call ceiling since a successful call must have completed within that budget.",
+    "'inference (est.)' = raw MR+RepoGraph wall-clock for that repo's tasks minus the overhead upper bound; treat as an estimate, not an exact measurement."
+  ],
+  "per_repo": {
+    "FieldStation42": {
+      "task_count": 14,
+      "eligible_py_files": 74,
+      "isolated_applicability_check": {"outcome": "SUCCESS", "wall_clock_seconds": 12.9},
+      "one_time_preprocessing_seconds": 12.9,
+      "preprocessing_measured": true,
+      "cache_present_during_run": true,
+      "failed_preprocessing_overhead_seconds_upper_bound": 0,
+      "search_repograph_calls_total": 27,
+      "matched_react_wall_clock_seconds_total": 437.3,
+      "matched_react_repograph_wall_clock_seconds_total": 927.5,
+      "inference_estimate_seconds": 927.5
+    },
+    "adk-python": {
+      "task_count": 30,
+      "eligible_py_files": 1032,
+      "isolated_applicability_check": {"outcome": "TIMEOUT_DEGRADED", "wall_clock_seconds": 150.1},
+      "one_time_preprocessing_seconds": null,
+      "preprocessing_measured": false,
+      "cache_present_during_run": false,
+      "failed_preprocessing_overhead_seconds_upper_bound": 7050,
+      "search_repograph_calls_total": 47,
+      "matched_react_wall_clock_seconds_total": 1247.0,
+      "matched_react_repograph_wall_clock_seconds_total": 8952.1,
+      "inference_estimate_seconds": 1902.1
+    },
+    "agent-framework": {
+      "task_count": 9,
+      "eligible_py_files": 669,
+      "isolated_applicability_check": {"outcome": "TIMEOUT_DEGRADED", "wall_clock_seconds": 150.0},
+      "one_time_preprocessing_seconds": null,
+      "preprocessing_measured": false,
+      "preprocessing_note": "succeeded live during the run (cache present) despite failing the isolated check; duration bounded by <=150s ceiling",
+      "cache_present_during_run": true,
+      "failed_preprocessing_overhead_seconds_upper_bound": 0,
+      "search_repograph_calls_total": 15,
+      "matched_react_wall_clock_seconds_total": 639.0,
+      "matched_react_repograph_wall_clock_seconds_total": 1075.1,
+      "inference_estimate_seconds": 1075.1
+    },
+    "browser-use": {
+      "task_count": 5,
+      "eligible_py_files": 322,
+      "isolated_applicability_check": {"outcome": "SUCCESS", "wall_clock_seconds": 45.1},
+      "one_time_preprocessing_seconds": 45.1,
+      "preprocessing_measured": true,
+      "cache_present_during_run": true,
+      "failed_preprocessing_overhead_seconds_upper_bound": 0,
+      "search_repograph_calls_total": 11,
+      "matched_react_wall_clock_seconds_total": 168.6,
+      "matched_react_repograph_wall_clock_seconds_total": 224.9,
+      "inference_estimate_seconds": 224.9
+    },
+    "crawl4ai": {
+      "task_count": 18,
+      "eligible_py_files": 370,
+      "isolated_applicability_check": {"outcome": "SUCCESS", "wall_clock_seconds": 57.0},
+      "one_time_preprocessing_seconds": 57.0,
+      "preprocessing_measured": true,
+      "cache_present_during_run": true,
+      "failed_preprocessing_overhead_seconds_upper_bound": 0,
+      "search_repograph_calls_total": 32,
+      "matched_react_wall_clock_seconds_total": 694.6,
+      "matched_react_repograph_wall_clock_seconds_total": 978.3,
+      "inference_estimate_seconds": 978.3
+    },
+    "docling": {
+      "task_count": 10,
+      "eligible_py_files": 192,
+      "isolated_applicability_check": {"outcome": "SUCCESS", "wall_clock_seconds": 24.1},
+      "one_time_preprocessing_seconds": 24.1,
+      "preprocessing_measured": true,
+      "cache_present_during_run": true,
+      "failed_preprocessing_overhead_seconds_upper_bound": 0,
+      "search_repograph_calls_total": 23,
+      "matched_react_wall_clock_seconds_total": 398.7,
+      "matched_react_repograph_wall_clock_seconds_total": 612.7,
+      "inference_estimate_seconds": 612.7
+    },
+    "sglang": {
+      "task_count": 11,
+      "eligible_py_files": 2602,
+      "isolated_applicability_check": {"outcome": "TIMEOUT_DEGRADED", "wall_clock_seconds": 150.0},
+      "one_time_preprocessing_seconds": null,
+      "preprocessing_measured": false,
+      "cache_present_during_run": false,
+      "failed_preprocessing_overhead_seconds_upper_bound": 1500,
+      "search_repograph_calls_total": 10,
+      "matched_react_wall_clock_seconds_total": 987.7,
+      "matched_react_repograph_wall_clock_seconds_total": 2262.2,
+      "inference_estimate_seconds": 762.2
+    },
+    "yasb": {
+      "task_count": 11,
+      "eligible_py_files": 285,
+      "isolated_applicability_check": {"outcome": "TIMEOUT_DEGRADED", "wall_clock_seconds": 150.0},
+      "one_time_preprocessing_seconds": null,
+      "preprocessing_measured": false,
+      "preprocessing_note": "succeeded live during the run (cache present) despite failing the isolated check; duration bounded by <=150s ceiling",
+      "cache_present_during_run": true,
+      "failed_preprocessing_overhead_seconds_upper_bound": 0,
+      "search_repograph_calls_total": 14,
+      "matched_react_wall_clock_seconds_total": 317.1,
+      "matched_react_repograph_wall_clock_seconds_total": 352.6,
+      "inference_estimate_seconds": 352.6
+    }
+  },
+  "totals": {
+    "raw_mr_repograph_wall_clock_hours": 4.27,
+    "timeout_overhead_upper_bound_hours": 2.38,
+    "timeout_overhead_upper_bound_fraction": 0.556,
+    "inference_estimate_hours": 1.90,
+    "inference_estimate_fraction": 0.444
+  }
+}

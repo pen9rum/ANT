@@ -267,5 +267,7 @@
   "baseline_results_status": "frozen_final",
   "baseline_results_note": "All 108 tasks x 4 baseline methods (Direct, Retrieval, Matched ReAct, MR+RepoGraph) generated and scored with zero exceptions; results in output/runs/repoprobe-python-full/ (gitignored). Direct/Retrieval/Matched ReAct reused the pre-existing frozen 32-task canonical generations verbatim where task_ids overlapped (32/108 reused, 76/108 freshly generated); MR+RepoGraph was regenerated on all 108 tasks fresh (0/108 reused) because the prior 32-task MR+RepoGraph results predated the RepoGraph TOOL_DESCRIPTION fidelity fix -- those pre-fix outputs are archived under output/runs/repoprobe-python-matched-react-repograph-pre-fidelity-fix/. ANT was not touched in this pass (still frozen at its prior 32-task sample). Do not tune any baseline method from these results.",
   "baseline_methods": ["direct", "retrieval", "matched_react", "matched_react_repograph"],
-  "baseline_excluded": "ant (untouched, still frozen at 32/108 tasks from a prior pass)"
+  "baseline_excluded": "ant (untouched, still frozen at 32/108 tasks from a prior pass)",
+  "repograph_efficiency_bookkeeping": "third_party/manifests/repoprobe/repograph_efficiency_repoprobe_python_full.json",
+  "frozen_final": true
 }
