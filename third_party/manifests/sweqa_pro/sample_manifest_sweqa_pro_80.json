@@ -1,0 +1,1154 @@
+{
+  "name": "SWE-QA-Pro-80",
+  "status": "frozen_full",
+  "status_note": "80-task evaluation set: 8 repositories x 10 questions each, the SAME 8 repos as the frozen 20-task pilot (qibo, seaborn, sphinx, yt-dlp, pennylane, sqlfluff, sanic, Pillow) -- web3.py and checkov (the pilot's 2 diversity-extension repos) are excluded from this expansion per explicit instruction. The existing 16 pilot task_ids (2/repo) are preserved verbatim. The 64 new task_ids are the FULL REMAINDER of each repo's own dataset (each of these 8 repos has exactly 10 total examples in the live SWE-QA-Pro dataset, verified live at build time) -- selection therefore required no discretionary choice: every non-pilot example for these repos is included. No score of any kind (pilot method scores, ANT performance, baseline performance, gold/reference answer content) was read or used to choose any task_id; only task_id, repo, cluster, and qa_type metadata were consulted.",
+  "benchmark": "sweqa_pro",
+  "benchmark_commit": null,
+  "included_repositories": {
+    "qibo": "qiboteam/qibo",
+    "seaborn": "mwaskom/seaborn",
+    "sphinx": "sphinx-doc/sphinx",
+    "yt-dlp": "yt-dlp/yt-dlp",
+    "pennylane": "PennyLaneAI/pennylane",
+    "sqlfluff": "sqlfluff/sqlfluff",
+    "sanic": "sanic-org/sanic",
+    "Pillow": "python-pillow/Pillow"
+  },
+  "pilot_manifest_reference": "third_party/manifests/sweqa_pro/sample_manifest_pilot.json",
+  "excluded_pilot_repos": {
+    "web3.py": "ethereum/web3.py",
+    "checkov": "bridgecrewio/checkov"
+  },
+  "selection_by_repo": {
+    "qibo": {
+      "repo_full_name": "qiboteam/qibo",
+      "pilot_task_ids": [
+        "355a4aa23fedfe23",
+        "3f0918f490f79681"
+      ],
+      "new_task_ids": [
+        "5cb320d719566e23",
+        "6656a3f809e31c27",
+        "91f6683f1816424a",
+        "9472b73920d049d9",
+        "9c20dc43873e8470",
+        "a6137d3b8c71c61f",
+        "b93c31147ace128d",
+        "dc7063c430604eac"
+      ],
+      "new_task_metadata": [
+        {
+          "task_id": "5cb320d719566e23",
+          "cluster": {
+            "id": "8.5",
+            "name": "ML APIs / decorators / metrics / optimization strategies"
+          },
+          "qa_type": {
+            "class_name": "How (Procedural Queries)",
+            "sub_class_name": "Algorithm Implementation"
+          }
+        },
+        {
+          "task_id": "6656a3f809e31c27",
+          "cluster": {
+            "id": "9.1",
+            "name": "plotting systems / widgets / maps / UI animation / usability"
+          },
+          "qa_type": {
+            "class_name": "Where (Localization Queries)",
+            "sub_class_name": "Feature Location"
+          }
+        },
+        {
+          "task_id": "91f6683f1816424a",
+          "cluster": {
+            "id": "8.4",
+            "name": "bayesian models / MCMC / statistics / reproducibility"
+          },
+          "qa_type": {
+            "class_name": "What (Factual Queries)",
+            "sub_class_name": "Architecture & Components"
+          }
+        },
+        {
+          "task_id": "9472b73920d049d9",
+          "cluster": {
+            "id": "8.1",
+            "name": "ML analytical visualization / Fourier / ML animation / calibration"
+          },
+          "qa_type": {
+            "class_name": "How (Procedural Queries)",
+            "sub_class_name": "System Design & Patterns"
+          }
+        },
+        {
+          "task_id": "9c20dc43873e8470",
+          "cluster": {
+            "id": "8.3",
+            "name": "data parallel / compression / ML plugin / indexing"
+          },
+          "qa_type": {
+            "class_name": "Where (Localization Queries)",
+            "sub_class_name": "Data & Control Flow"
+          }
+        },
+        {
+          "task_id": "a6137d3b8c71c61f",
+          "cluster": {
+            "id": "8.1",
+            "name": "ML analytical visualization / Fourier / ML animation / calibration"
+          },
+          "qa_type": {
+            "class_name": "What (Factual Queries)",
+            "sub_class_name": "Architecture & Components"
+          }
+        },
+        {
+          "task_id": "b93c31147ace128d",
+          "cluster": {
+            "id": "9.3",
+            "name": "3D rendering / legends / color mapping / visualization formatting"
+          },
+          "qa_type": {
+            "class_name": "Where (Localization Queries)",
+            "sub_class_name": "Identifier Location"
+          }
+        },
+        {
+          "task_id": "dc7063c430604eac",
+          "cluster": {
+            "id": "5.5",
+            "name": "parallel execution / distributed frameworks / task graphs"
+          },
+          "qa_type": {
+            "class_name": "Why (Causal Queries)",
+            "sub_class_name": "Design Rationale"
+          }
+        }
+      ],
+      "all_task_ids": [
+        "355a4aa23fedfe23",
+        "3f0918f490f79681",
+        "5cb320d719566e23",
+        "6656a3f809e31c27",
+        "91f6683f1816424a",
+        "9472b73920d049d9",
+        "9c20dc43873e8470",
+        "a6137d3b8c71c61f",
+        "b93c31147ace128d",
+        "dc7063c430604eac"
+      ],
+      "total_examples_in_repo": 10
+    },
+    "seaborn": {
+      "repo_full_name": "mwaskom/seaborn",
+      "pilot_task_ids": [
+        "1347185dd7392829",
+        "28d9b344cb4c13fc"
+      ],
+      "new_task_ids": [
+        "6ac2f0f051a755da",
+        "7094a83feebd84a6",
+        "9c364a4a784e153a",
+        "ad60de6c0d6748a0",
+        "af28a26347def680",
+        "d7bda034a4d52b9b",
+        "e7d70302d958409d",
+        "fccb59e36e13b4b7"
+      ],
+      "new_task_metadata": [
+        {
+          "task_id": "6ac2f0f051a755da",
+          "cluster": {
+            "id": "8.2",
+            "name": "time series / feature engineering / explainability methods / behavioral analysis / computational semantics"
+          },
+          "qa_type": {
+            "class_name": "Where (Localization Queries)",
+            "sub_class_name": "Feature Location"
+          }
+        },
+        {
+          "task_id": "7094a83feebd84a6",
+          "cluster": {
+            "id": "8.4",
+            "name": "bayesian models / MCMC / statistics / reproducibility"
+          },
+          "qa_type": {
+            "class_name": "Where (Localization Queries)",
+            "sub_class_name": "Data & Control Flow"
+          }
+        },
+        {
+          "task_id": "9c364a4a784e153a",
+          "cluster": {
+            "id": "6.2",
+            "name": "build pipeline / doc building / Sphinx / cloud provisioning"
+          },
+          "qa_type": {
+            "class_name": "Where (Localization Queries)",
+            "sub_class_name": "Identifier Location"
+          }
+        },
+        {
+          "task_id": "ad60de6c0d6748a0",
+          "cluster": {
+            "id": "8.4",
+            "name": "bayesian models / MCMC / statistics / reproducibility"
+          },
+          "qa_type": {
+            "class_name": "Why (Causal Queries)",
+            "sub_class_name": "Performance & Scalability"
+          }
+        },
+        {
+          "task_id": "af28a26347def680",
+          "cluster": {
+            "id": "4.1",
+            "name": "release management / changelog / license / community"
+          },
+          "qa_type": {
+            "class_name": "Where (Localization Queries)",
+            "sub_class_name": "Feature Location"
+          }
+        },
+        {
+          "task_id": "d7bda034a4d52b9b",
+          "cluster": {
+            "id": "6.2",
+            "name": "build pipeline / doc building / Sphinx / cloud provisioning"
+          },
+          "qa_type": {
+            "class_name": "Why (Causal Queries)",
+            "sub_class_name": "Performance & Scalability"
+          }
+        },
+        {
+          "task_id": "e7d70302d958409d",
+          "cluster": {
+            "id": "8.4",
+            "name": "bayesian models / MCMC / statistics / reproducibility"
+          },
+          "qa_type": {
+            "class_name": "Where (Localization Queries)",
+            "sub_class_name": "Identifier Location"
+          }
+        },
+        {
+          "task_id": "fccb59e36e13b4b7",
+          "cluster": {
+            "id": "1.1",
+            "name": "pandas / parquet / datetime / Dask / table schema"
+          },
+          "qa_type": {
+            "class_name": "Why (Causal Queries)",
+            "sub_class_name": "Performance & Scalability"
+          }
+        }
+      ],
+      "all_task_ids": [
+        "1347185dd7392829",
+        "28d9b344cb4c13fc",
+        "6ac2f0f051a755da",
+        "7094a83feebd84a6",
+        "9c364a4a784e153a",
+        "ad60de6c0d6748a0",
+        "af28a26347def680",
+        "d7bda034a4d52b9b",
+        "e7d70302d958409d",
+        "fccb59e36e13b4b7"
+      ],
+      "total_examples_in_repo": 10
+    },
+    "sphinx": {
+      "repo_full_name": "sphinx-doc/sphinx",
+      "pilot_task_ids": [
+        "39de7debd3fdb4c2",
+        "48deec23c86a40d8"
+      ],
+      "new_task_ids": [
+        "812a9dc1bcb3c13d",
+        "90b80dc51b5a8a4a",
+        "95e60f2cabd48e5e",
+        "9bf2cf5fdecc36bf",
+        "9f4acafcaa2cc210",
+        "d5d4fa1f763d1fb9",
+        "f42a5cb34a0c080c",
+        "f94c102bd15661ac"
+      ],
+      "new_task_metadata": [
+        {
+          "task_id": "812a9dc1bcb3c13d",
+          "cluster": {
+            "id": "4.3",
+            "name": "async refactor / migration / logging infra / i18n"
+          },
+          "qa_type": {
+            "class_name": "How (Procedural Queries)",
+            "sub_class_name": "System Design & Patterns"
+          }
+        },
+        {
+          "task_id": "90b80dc51b5a8a4a",
+          "cluster": {
+            "id": "4.0",
+            "name": "version control / Docker / build cache"
+          },
+          "qa_type": {
+            "class_name": "What (Factual Queries)",
+            "sub_class_name": "Dependency & Inheritance"
+          }
+        },
+        {
+          "task_id": "95e60f2cabd48e5e",
+          "cluster": {
+            "id": "4.1",
+            "name": "release management / changelog / license / community"
+          },
+          "qa_type": {
+            "class_name": "How (Procedural Queries)",
+            "sub_class_name": "System Design & Patterns"
+          }
+        },
+        {
+          "task_id": "9bf2cf5fdecc36bf",
+          "cluster": {
+            "id": "4.0",
+            "name": "version control / Docker / build cache"
+          },
+          "qa_type": {
+            "class_name": "Why (Causal Queries)",
+            "sub_class_name": "Performance & Scalability"
+          }
+        },
+        {
+          "task_id": "9f4acafcaa2cc210",
+          "cluster": {
+            "id": "6.2",
+            "name": "build pipeline / doc building / Sphinx / cloud provisioning"
+          },
+          "qa_type": {
+            "class_name": "Where (Localization Queries)",
+            "sub_class_name": "Identifier Location"
+          }
+        },
+        {
+          "task_id": "d5d4fa1f763d1fb9",
+          "cluster": {
+            "id": "4.1",
+            "name": "release management / changelog / license / community"
+          },
+          "qa_type": {
+            "class_name": "What (Factual Queries)",
+            "sub_class_name": "Architecture & Components"
+          }
+        },
+        {
+          "task_id": "f42a5cb34a0c080c",
+          "cluster": {
+            "id": "7.5",
+            "name": "OAuth / JWT / SSL / access control / user sessions/ token lifecycle"
+          },
+          "qa_type": {
+            "class_name": "What (Factual Queries)",
+            "sub_class_name": "Dependency & Inheritance"
+          }
+        },
+        {
+          "task_id": "f94c102bd15661ac",
+          "cluster": {
+            "id": "5.3",
+            "name": "threading / execution limits / scheduling / memory / timeout"
+          },
+          "qa_type": {
+            "class_name": "What (Factual Queries)",
+            "sub_class_name": "Dependency & Inheritance"
+          }
+        }
+      ],
+      "all_task_ids": [
+        "39de7debd3fdb4c2",
+        "48deec23c86a40d8",
+        "812a9dc1bcb3c13d",
+        "90b80dc51b5a8a4a",
+        "95e60f2cabd48e5e",
+        "9bf2cf5fdecc36bf",
+        "9f4acafcaa2cc210",
+        "d5d4fa1f763d1fb9",
+        "f42a5cb34a0c080c",
+        "f94c102bd15661ac"
+      ],
+      "total_examples_in_repo": 10
+    },
+    "yt-dlp": {
+      "repo_full_name": "yt-dlp/yt-dlp",
+      "pilot_task_ids": [
+        "05533ae903375e6b",
+        "075628f5cefca956"
+      ],
+      "new_task_ids": [
+        "260cf927c611b25a",
+        "2c098d175a4e1d21",
+        "64be8a3702a1b025",
+        "72ff3fbf2a9985c5",
+        "7fdcdb38110cc7a4",
+        "a26040b6b0b37378",
+        "d365d1dbf8341d7b",
+        "e3f6857934e88658"
+      ],
+      "new_task_metadata": [
+        {
+          "task_id": "260cf927c611b25a",
+          "cluster": {
+            "id": "9.2",
+            "name": "runtime UI config / UI permission management / upload handling / customization / user-facing runtime extensibility"
+          },
+          "qa_type": {
+            "class_name": "Where (Localization Queries)",
+            "sub_class_name": "Feature Location"
+          }
+        },
+        {
+          "task_id": "2c098d175a4e1d21",
+          "cluster": {
+            "id": "7.1",
+            "name": "media download / playlist / metadata / client-side proxy config"
+          },
+          "qa_type": {
+            "class_name": "What (Factual Queries)",
+            "sub_class_name": "Concepts & Definitions"
+          }
+        },
+        {
+          "task_id": "64be8a3702a1b025",
+          "cluster": {
+            "id": "5.2",
+            "name": "runtime error handling / DB transactions / retry / logging system"
+          },
+          "qa_type": {
+            "class_name": "Where (Localization Queries)",
+            "sub_class_name": "Identifier Location"
+          }
+        },
+        {
+          "task_id": "72ff3fbf2a9985c5",
+          "cluster": {
+            "id": "2.1",
+            "name": "dependency injection / config / attrs / API design"
+          },
+          "qa_type": {
+            "class_name": "How (Procedural Queries)",
+            "sub_class_name": "System Design & Patterns"
+          }
+        },
+        {
+          "task_id": "7fdcdb38110cc7a4",
+          "cluster": {
+            "id": "7.1",
+            "name": "media download / playlist / metadata / client-side proxy config"
+          },
+          "qa_type": {
+            "class_name": "How (Procedural Queries)",
+            "sub_class_name": "Algorithm Implementation"
+          }
+        },
+        {
+          "task_id": "a26040b6b0b37378",
+          "cluster": {
+            "id": "0.3",
+            "name": "file import/export / metadata / sorting / recurrence"
+          },
+          "qa_type": {
+            "class_name": "Where (Localization Queries)",
+            "sub_class_name": "Identifier Location"
+          }
+        },
+        {
+          "task_id": "d365d1dbf8341d7b",
+          "cluster": {
+            "id": "3.3",
+            "name": "extensibility / configuration framework / plugin architecture"
+          },
+          "qa_type": {
+            "class_name": "Why (Causal Queries)",
+            "sub_class_name": "Purpose & Role"
+          }
+        },
+        {
+          "task_id": "e3f6857934e88658",
+          "cluster": {
+            "id": "3.3",
+            "name": "extensibility / configuration framework / plugin architecture"
+          },
+          "qa_type": {
+            "class_name": "How (Procedural Queries)",
+            "sub_class_name": "System Design & Patterns"
+          }
+        }
+      ],
+      "all_task_ids": [
+        "05533ae903375e6b",
+        "075628f5cefca956",
+        "260cf927c611b25a",
+        "2c098d175a4e1d21",
+        "64be8a3702a1b025",
+        "72ff3fbf2a9985c5",
+        "7fdcdb38110cc7a4",
+        "a26040b6b0b37378",
+        "d365d1dbf8341d7b",
+        "e3f6857934e88658"
+      ],
+      "total_examples_in_repo": 10
+    },
+    "pennylane": {
+      "repo_full_name": "PennyLaneAI/pennylane",
+      "pilot_task_ids": [
+        "247e8f0767c3070f",
+        "47af69971c1baaaa"
+      ],
+      "new_task_ids": [
+        "5208c28996a3ee18",
+        "5a28cbff8aa562af",
+        "63a469b2235e6947",
+        "801a55b555cd09d9",
+        "83e365be1fecc6c0",
+        "c905d378bea35eeb",
+        "daeaf1aacc1da4e8",
+        "f85cae6b4fe06bcb"
+      ],
+      "new_task_metadata": [
+        {
+          "task_id": "5208c28996a3ee18",
+          "cluster": {
+            "id": "8.0",
+            "name": "tensors / training / GPU / ML experiment logging / tuning"
+          },
+          "qa_type": {
+            "class_name": "What (Factual Queries)",
+            "sub_class_name": "Dependency & Inheritance"
+          }
+        },
+        {
+          "task_id": "5a28cbff8aa562af",
+          "cluster": {
+            "id": "8.1",
+            "name": "ML analytical visualization / Fourier / ML animation / calibration"
+          },
+          "qa_type": {
+            "class_name": "What (Factual Queries)",
+            "sub_class_name": "Concepts & Definitions"
+          }
+        },
+        {
+          "task_id": "63a469b2235e6947",
+          "cluster": {
+            "id": "2.1",
+            "name": "dependency injection / config / attrs / API design"
+          },
+          "qa_type": {
+            "class_name": "What (Factual Queries)",
+            "sub_class_name": "Dependency & Inheritance"
+          }
+        },
+        {
+          "task_id": "801a55b555cd09d9",
+          "cluster": {
+            "id": "8.0",
+            "name": "tensors / training / GPU / ML experiment logging / tuning"
+          },
+          "qa_type": {
+            "class_name": "Where (Localization Queries)",
+            "sub_class_name": "Data & Control Flow"
+          }
+        },
+        {
+          "task_id": "83e365be1fecc6c0",
+          "cluster": {
+            "id": "5.2",
+            "name": "runtime error handling / DB transactions / retry / logging system"
+          },
+          "qa_type": {
+            "class_name": "Where (Localization Queries)",
+            "sub_class_name": "Identifier Location"
+          }
+        },
+        {
+          "task_id": "c905d378bea35eeb",
+          "cluster": {
+            "id": "2.0",
+            "name": "protocol serialization / encoding / headers / API compatibility"
+          },
+          "qa_type": {
+            "class_name": "How (Procedural Queries)",
+            "sub_class_name": "System Design & Patterns"
+          }
+        },
+        {
+          "task_id": "daeaf1aacc1da4e8",
+          "cluster": {
+            "id": "5.5",
+            "name": "parallel execution / distributed frameworks / task graphs"
+          },
+          "qa_type": {
+            "class_name": "Where (Localization Queries)",
+            "sub_class_name": "Data & Control Flow"
+          }
+        },
+        {
+          "task_id": "f85cae6b4fe06bcb",
+          "cluster": {
+            "id": "0.3",
+            "name": "file import/export / metadata / sorting / recurrence"
+          },
+          "qa_type": {
+            "class_name": "Where (Localization Queries)",
+            "sub_class_name": "Data & Control Flow"
+          }
+        }
+      ],
+      "all_task_ids": [
+        "247e8f0767c3070f",
+        "47af69971c1baaaa",
+        "5208c28996a3ee18",
+        "5a28cbff8aa562af",
+        "63a469b2235e6947",
+        "801a55b555cd09d9",
+        "83e365be1fecc6c0",
+        "c905d378bea35eeb",
+        "daeaf1aacc1da4e8",
+        "f85cae6b4fe06bcb"
+      ],
+      "total_examples_in_repo": 10
+    },
+    "sqlfluff": {
+      "repo_full_name": "sqlfluff/sqlfluff",
+      "pilot_task_ids": [
+        "329382a86e7a279f",
+        "5bf8a9864321440e"
+      ],
+      "new_task_ids": [
+        "6610d8971a34ae08",
+        "79b4bc87011da84b",
+        "849c94676310c3f6",
+        "8c32272010caad03",
+        "b28ce492fa40f85c",
+        "bbf83e5b28e7b1ae",
+        "bcf09b0201e4d2f4",
+        "cb33e27df8c22e0c"
+      ],
+      "new_task_metadata": [
+        {
+          "task_id": "6610d8971a34ae08",
+          "cluster": {
+            "id": "0.3",
+            "name": "file import/export / metadata / sorting / recurrence"
+          },
+          "qa_type": {
+            "class_name": "Why (Causal Queries)",
+            "sub_class_name": "Performance & Scalability"
+          }
+        },
+        {
+          "task_id": "79b4bc87011da84b",
+          "cluster": {
+            "id": "2.3",
+            "name": "type and attribute errors / initialization / CLI workflow"
+          },
+          "qa_type": {
+            "class_name": "Where (Localization Queries)",
+            "sub_class_name": "Feature Location"
+          }
+        },
+        {
+          "task_id": "849c94676310c3f6",
+          "cluster": {
+            "id": "0.1",
+            "name": "SQL / structured grammar / templating Engine"
+          },
+          "qa_type": {
+            "class_name": "What (Factual Queries)",
+            "sub_class_name": "Dependency & Inheritance"
+          }
+        },
+        {
+          "task_id": "8c32272010caad03",
+          "cluster": {
+            "id": "2.3",
+            "name": "type and attribute errors / initialization / CLI workflow"
+          },
+          "qa_type": {
+            "class_name": "Where (Localization Queries)",
+            "sub_class_name": "Identifier Location"
+          }
+        },
+        {
+          "task_id": "b28ce492fa40f85c",
+          "cluster": {
+            "id": "5.1",
+            "name": "multiprocessing / advanced runtime / concurrency / heterogeneous compute"
+          },
+          "qa_type": {
+            "class_name": "Why (Causal Queries)",
+            "sub_class_name": "Design Rationale"
+          }
+        },
+        {
+          "task_id": "bbf83e5b28e7b1ae",
+          "cluster": {
+            "id": "6.1",
+            "name": "unit testing / mocking / test automation"
+          },
+          "qa_type": {
+            "class_name": "Where (Localization Queries)",
+            "sub_class_name": "Identifier Location"
+          }
+        },
+        {
+          "task_id": "bcf09b0201e4d2f4",
+          "cluster": {
+            "id": "0.1",
+            "name": "SQL / structured grammar / templating Engine"
+          },
+          "qa_type": {
+            "class_name": "How (Procedural Queries)",
+            "sub_class_name": "Algorithm Implementation"
+          }
+        },
+        {
+          "task_id": "cb33e27df8c22e0c",
+          "cluster": {
+            "id": "5.2",
+            "name": "runtime error handling / DB transactions / retry / logging system"
+          },
+          "qa_type": {
+            "class_name": "What (Factual Queries)",
+            "sub_class_name": "Architecture & Components"
+          }
+        }
+      ],
+      "all_task_ids": [
+        "329382a86e7a279f",
+        "5bf8a9864321440e",
+        "6610d8971a34ae08",
+        "79b4bc87011da84b",
+        "849c94676310c3f6",
+        "8c32272010caad03",
+        "b28ce492fa40f85c",
+        "bbf83e5b28e7b1ae",
+        "bcf09b0201e4d2f4",
+        "cb33e27df8c22e0c"
+      ],
+      "total_examples_in_repo": 10
+    },
+    "sanic": {
+      "repo_full_name": "sanic-org/sanic",
+      "pilot_task_ids": [
+        "0b6be6237e54890e",
+        "271fa47a0fbfb2df"
+      ],
+      "new_task_ids": [
+        "3095fffab0d6ac06",
+        "3f9e378b6e580e8f",
+        "5e37af2e50a35d6f",
+        "5f1272f5eb849bdc",
+        "90aaeda9da28f687",
+        "9e6f96f277f0f971",
+        "a4f9ee492dec47b1",
+        "d9b86a6c98603d5b"
+      ],
+      "new_task_metadata": [
+        {
+          "task_id": "3095fffab0d6ac06",
+          "cluster": {
+            "id": "5.1",
+            "name": "multiprocessing / advanced runtime / concurrency / heterogeneous compute"
+          },
+          "qa_type": {
+            "class_name": "Why (Causal Queries)",
+            "sub_class_name": "Purpose & Role"
+          }
+        },
+        {
+          "task_id": "3f9e378b6e580e8f",
+          "cluster": {
+            "id": "5.0",
+            "name": "asyncio / async context / resource cleanup"
+          },
+          "qa_type": {
+            "class_name": "Why (Causal Queries)",
+            "sub_class_name": "Design Rationale"
+          }
+        },
+        {
+          "task_id": "5e37af2e50a35d6f",
+          "cluster": {
+            "id": "5.0",
+            "name": "asyncio / async context / resource cleanup"
+          },
+          "qa_type": {
+            "class_name": "What (Factual Queries)",
+            "sub_class_name": "Dependency & Inheritance"
+          }
+        },
+        {
+          "task_id": "5f1272f5eb849bdc",
+          "cluster": {
+            "id": "7.5",
+            "name": "OAuth / JWT / SSL / access control / user sessions/ token lifecycle"
+          },
+          "qa_type": {
+            "class_name": "How (Procedural Queries)",
+            "sub_class_name": "System Design & Patterns"
+          }
+        },
+        {
+          "task_id": "90aaeda9da28f687",
+          "cluster": {
+            "id": "3.1",
+            "name": "install / virtual env / OS / hardware requirements / cloud deploy"
+          },
+          "qa_type": {
+            "class_name": "Why (Causal Queries)",
+            "sub_class_name": "Design Rationale"
+          }
+        },
+        {
+          "task_id": "9e6f96f277f0f971",
+          "cluster": {
+            "id": "5.1",
+            "name": "multiprocessing / advanced runtime / concurrency / heterogeneous compute"
+          },
+          "qa_type": {
+            "class_name": "Why (Causal Queries)",
+            "sub_class_name": "Performance & Scalability"
+          }
+        },
+        {
+          "task_id": "a4f9ee492dec47b1",
+          "cluster": {
+            "id": "9.0",
+            "name": "UI layout / CSS / markdown / table extraction / frontend security"
+          },
+          "qa_type": {
+            "class_name": "Where (Localization Queries)",
+            "sub_class_name": "Feature Location"
+          }
+        },
+        {
+          "task_id": "d9b86a6c98603d5b",
+          "cluster": {
+            "id": "2.3",
+            "name": "type and attribute errors / initialization / CLI workflow"
+          },
+          "qa_type": {
+            "class_name": "What (Factual Queries)",
+            "sub_class_name": "Architecture & Components"
+          }
+        }
+      ],
+      "all_task_ids": [
+        "0b6be6237e54890e",
+        "271fa47a0fbfb2df",
+        "3095fffab0d6ac06",
+        "3f9e378b6e580e8f",
+        "5e37af2e50a35d6f",
+        "5f1272f5eb849bdc",
+        "90aaeda9da28f687",
+        "9e6f96f277f0f971",
+        "a4f9ee492dec47b1",
+        "d9b86a6c98603d5b"
+      ],
+      "total_examples_in_repo": 10
+    },
+    "Pillow": {
+      "repo_full_name": "python-pillow/Pillow",
+      "pilot_task_ids": [
+        "6b736c354c51b8ec",
+        "9219e15094c9fa5d"
+      ],
+      "new_task_ids": [
+        "6ce28ca3a6a06cc2",
+        "ad0cbdd80b535439",
+        "b25530160e601835",
+        "bc2529a9b2fc8ffc",
+        "d298a1fd5ee5c00b",
+        "ea4dc7cad46d18c5",
+        "ea992eaecbd8e4d9",
+        "ed64f29ea4a556f5"
+      ],
+      "new_task_metadata": [
+        {
+          "task_id": "6ce28ca3a6a06cc2",
+          "cluster": {
+            "id": "3.3",
+            "name": "extensibility / configuration framework / plugin architecture"
+          },
+          "qa_type": {
+            "class_name": "How (Procedural Queries)",
+            "sub_class_name": "System Design & Patterns"
+          }
+        },
+        {
+          "task_id": "ad0cbdd80b535439",
+          "cluster": {
+            "id": "4.3",
+            "name": "async refactor / migration / logging infra / i18n"
+          },
+          "qa_type": {
+            "class_name": "How (Procedural Queries)",
+            "sub_class_name": "API & Framework Support"
+          }
+        },
+        {
+          "task_id": "b25530160e601835",
+          "cluster": {
+            "id": "4.4",
+            "name": "CI pipelines / coverage / lint / GitHub Actions / security checks"
+          },
+          "qa_type": {
+            "class_name": "Where (Localization Queries)",
+            "sub_class_name": "Identifier Location"
+          }
+        },
+        {
+          "task_id": "bc2529a9b2fc8ffc",
+          "cluster": {
+            "id": "1.2",
+            "name": "numpy / dask arrays / dtype / array serialization / parallel"
+          },
+          "qa_type": {
+            "class_name": "Why (Causal Queries)",
+            "sub_class_name": "Design Rationale"
+          }
+        },
+        {
+          "task_id": "d298a1fd5ee5c00b",
+          "cluster": {
+            "id": "5.2",
+            "name": "runtime error handling / DB transactions / retry / logging system"
+          },
+          "qa_type": {
+            "class_name": "Why (Causal Queries)",
+            "sub_class_name": "Performance & Scalability"
+          }
+        },
+        {
+          "task_id": "ea4dc7cad46d18c5",
+          "cluster": {
+            "id": "3.3",
+            "name": "extensibility / configuration framework / plugin architecture"
+          },
+          "qa_type": {
+            "class_name": "Why (Causal Queries)",
+            "sub_class_name": "Design Rationale"
+          }
+        },
+        {
+          "task_id": "ea992eaecbd8e4d9",
+          "cluster": {
+            "id": "8.3",
+            "name": "data parallel / compression / ML plugin / indexing"
+          },
+          "qa_type": {
+            "class_name": "Where (Localization Queries)",
+            "sub_class_name": "Feature Location"
+          }
+        },
+        {
+          "task_id": "ed64f29ea4a556f5",
+          "cluster": {
+            "id": "3.3",
+            "name": "extensibility / configuration framework / plugin architecture"
+          },
+          "qa_type": {
+            "class_name": "Why (Causal Queries)",
+            "sub_class_name": "Design Rationale"
+          }
+        }
+      ],
+      "all_task_ids": [
+        "6b736c354c51b8ec",
+        "9219e15094c9fa5d",
+        "6ce28ca3a6a06cc2",
+        "ad0cbdd80b535439",
+        "b25530160e601835",
+        "bc2529a9b2fc8ffc",
+        "d298a1fd5ee5c00b",
+        "ea4dc7cad46d18c5",
+        "ea992eaecbd8e4d9",
+        "ed64f29ea4a556f5"
+      ],
+      "total_examples_in_repo": 10
+    }
+  },
+  "pilot_task_ids": [
+    "05533ae903375e6b",
+    "075628f5cefca956",
+    "0b6be6237e54890e",
+    "1347185dd7392829",
+    "247e8f0767c3070f",
+    "271fa47a0fbfb2df",
+    "28d9b344cb4c13fc",
+    "329382a86e7a279f",
+    "355a4aa23fedfe23",
+    "39de7debd3fdb4c2",
+    "3f0918f490f79681",
+    "47af69971c1baaaa",
+    "48deec23c86a40d8",
+    "5bf8a9864321440e",
+    "6b736c354c51b8ec",
+    "9219e15094c9fa5d"
+  ],
+  "new_task_ids": [
+    "260cf927c611b25a",
+    "2c098d175a4e1d21",
+    "3095fffab0d6ac06",
+    "3f9e378b6e580e8f",
+    "5208c28996a3ee18",
+    "5a28cbff8aa562af",
+    "5cb320d719566e23",
+    "5e37af2e50a35d6f",
+    "5f1272f5eb849bdc",
+    "63a469b2235e6947",
+    "64be8a3702a1b025",
+    "6610d8971a34ae08",
+    "6656a3f809e31c27",
+    "6ac2f0f051a755da",
+    "6ce28ca3a6a06cc2",
+    "7094a83feebd84a6",
+    "72ff3fbf2a9985c5",
+    "79b4bc87011da84b",
+    "7fdcdb38110cc7a4",
+    "801a55b555cd09d9",
+    "812a9dc1bcb3c13d",
+    "83e365be1fecc6c0",
+    "849c94676310c3f6",
+    "8c32272010caad03",
+    "90aaeda9da28f687",
+    "90b80dc51b5a8a4a",
+    "91f6683f1816424a",
+    "9472b73920d049d9",
+    "95e60f2cabd48e5e",
+    "9bf2cf5fdecc36bf",
+    "9c20dc43873e8470",
+    "9c364a4a784e153a",
+    "9e6f96f277f0f971",
+    "9f4acafcaa2cc210",
+    "a26040b6b0b37378",
+    "a4f9ee492dec47b1",
+    "a6137d3b8c71c61f",
+    "ad0cbdd80b535439",
+    "ad60de6c0d6748a0",
+    "af28a26347def680",
+    "b25530160e601835",
+    "b28ce492fa40f85c",
+    "b93c31147ace128d",
+    "bbf83e5b28e7b1ae",
+    "bc2529a9b2fc8ffc",
+    "bcf09b0201e4d2f4",
+    "c905d378bea35eeb",
+    "cb33e27df8c22e0c",
+    "d298a1fd5ee5c00b",
+    "d365d1dbf8341d7b",
+    "d5d4fa1f763d1fb9",
+    "d7bda034a4d52b9b",
+    "d9b86a6c98603d5b",
+    "daeaf1aacc1da4e8",
+    "dc7063c430604eac",
+    "e3f6857934e88658",
+    "e7d70302d958409d",
+    "ea4dc7cad46d18c5",
+    "ea992eaecbd8e4d9",
+    "ed64f29ea4a556f5",
+    "f42a5cb34a0c080c",
+    "f85cae6b4fe06bcb",
+    "f94c102bd15661ac",
+    "fccb59e36e13b4b7"
+  ],
+  "task_ids": [
+    "05533ae903375e6b",
+    "075628f5cefca956",
+    "0b6be6237e54890e",
+    "1347185dd7392829",
+    "247e8f0767c3070f",
+    "260cf927c611b25a",
+    "271fa47a0fbfb2df",
+    "28d9b344cb4c13fc",
+    "2c098d175a4e1d21",
+    "3095fffab0d6ac06",
+    "329382a86e7a279f",
+    "355a4aa23fedfe23",
+    "39de7debd3fdb4c2",
+    "3f0918f490f79681",
+    "3f9e378b6e580e8f",
+    "47af69971c1baaaa",
+    "48deec23c86a40d8",
+    "5208c28996a3ee18",
+    "5a28cbff8aa562af",
+    "5bf8a9864321440e",
+    "5cb320d719566e23",
+    "5e37af2e50a35d6f",
+    "5f1272f5eb849bdc",
+    "63a469b2235e6947",
+    "64be8a3702a1b025",
+    "6610d8971a34ae08",
+    "6656a3f809e31c27",
+    "6ac2f0f051a755da",
+    "6b736c354c51b8ec",
+    "6ce28ca3a6a06cc2",
+    "7094a83feebd84a6",
+    "72ff3fbf2a9985c5",
+    "79b4bc87011da84b",
+    "7fdcdb38110cc7a4",
+    "801a55b555cd09d9",
+    "812a9dc1bcb3c13d",
+    "83e365be1fecc6c0",
+    "849c94676310c3f6",
+    "8c32272010caad03",
+    "90aaeda9da28f687",
+    "90b80dc51b5a8a4a",
+    "91f6683f1816424a",
+    "9219e15094c9fa5d",
+    "9472b73920d049d9",
+    "95e60f2cabd48e5e",
+    "9bf2cf5fdecc36bf",
+    "9c20dc43873e8470",
+    "9c364a4a784e153a",
+    "9e6f96f277f0f971",
+    "9f4acafcaa2cc210",
+    "a26040b6b0b37378",
+    "a4f9ee492dec47b1",
+    "a6137d3b8c71c61f",
+    "ad0cbdd80b535439",
+    "ad60de6c0d6748a0",
+    "af28a26347def680",
+    "b25530160e601835",
+    "b28ce492fa40f85c",
+    "b93c31147ace128d",
+    "bbf83e5b28e7b1ae",
+    "bc2529a9b2fc8ffc",
+    "bcf09b0201e4d2f4",
+    "c905d378bea35eeb",
+    "cb33e27df8c22e0c",
+    "d298a1fd5ee5c00b",
+    "d365d1dbf8341d7b",
+    "d5d4fa1f763d1fb9",
+    "d7bda034a4d52b9b",
+    "d9b86a6c98603d5b",
+    "daeaf1aacc1da4e8",
+    "dc7063c430604eac",
+    "e3f6857934e88658",
+    "e7d70302d958409d",
+    "ea4dc7cad46d18c5",
+    "ea992eaecbd8e4d9",
+    "ed64f29ea4a556f5",
+    "f42a5cb34a0c080c",
+    "f85cae6b4fe06bcb",
+    "f94c102bd15661ac",
+    "fccb59e36e13b4b7"
+  ],
+  "total_task_ids": 80,
+  "total_repositories": 8,
+  "questions_per_repository": 10,
+  "created_at": "2026-09-11T16:35:21.836322+00:00"
+}
