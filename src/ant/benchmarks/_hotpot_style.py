@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any, cast
 
 from ant.agents.base import AgentResult
 from ant.benchmarks.base import TaskExample
@@ -24,7 +25,13 @@ def load_hotpot_style_examples(
 ) -> list[TaskExample]:
     from datasets import load_dataset
 
-    rows = load_dataset(hf_path, hf_config, split=split)
+    # cast(Any, ...): `load_dataset`'s return type is a large overloaded
+    # union (Dataset | IterableDataset | ...DatasetDict variants) keyed off
+    # `streaming=`/other args in ways static analysis can't narrow from
+    # this call site alone; the actual runtime object (a `Dataset`, since
+    # `split` is a plain string and `streaming` is never passed) is a
+    # dict-row-yielding sequence, which is all this function relies on.
+    rows = cast(Any, load_dataset(hf_path, hf_config, split=split))
     examples: list[TaskExample] = []
     for row in rows:
         titles = row["context"]["title"]
@@ -78,7 +85,9 @@ def prepare_hotpot_style_environment(example: TaskExample, *, benchmark_name: st
     return root.resolve()
 
 
-def score_hotpot_style(example: TaskExample, result: AgentResult, *, benchmark_name: str) -> MetricResult:
+def score_hotpot_style(
+    example: TaskExample, result: AgentResult, *, benchmark_name: str
+) -> MetricResult:
     ground_truths = json.loads(example.reference)
     metrics = score_qa(result.final_answer, ground_truths)
     native_score = metrics["f1"]  # F1 is the primary reported metric for these benchmarks

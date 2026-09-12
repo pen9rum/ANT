@@ -79,6 +79,14 @@ class EvalDocumentEnvironment(RepoEnvironment):
     `RepoEnvironment` (LocalSearchTool, ANT's own AutonomousWorker path).
     """
 
+    # Declared at class level (type-only, no dataclass field machinery) so
+    # static analysis knows these instance attributes exist -- they are
+    # still only ever assigned via object.__setattr__ below, bypassing the
+    # frozen-dataclass __setattr__ this class inherits from RepoEnvironment.
+    _ordered_doc_ids: list[str]
+    _by_doc_id: dict[str, DocumentRecord]
+    _filename_by_doc_id: dict[str, str]
+
     def __init__(self, root: Path, documents: list[DocumentRecord]) -> None:
         object.__setattr__(self, "root", root.resolve())
         ordered_ids = [doc.doc_id for doc in documents]

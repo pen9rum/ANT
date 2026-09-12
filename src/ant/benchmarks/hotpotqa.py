@@ -10,12 +10,12 @@ from __future__ import annotations
 from pathlib import Path
 
 from ant.agents.base import AgentResult
-from ant.benchmarks.base import TaskExample
 from ant.benchmarks._hotpot_style import (
     load_hotpot_style_examples,
     prepare_hotpot_style_environment,
     score_hotpot_style,
 )
+from ant.benchmarks.base import TaskExample
 from ant.evaluation_suite.registry import register_benchmark
 from ant.evaluation_suite.scoring import MetricResult
 
@@ -27,9 +27,15 @@ HF_SPLIT = "validation"
 class HotpotQaAdapter:
     name = "hotpotqa"
 
-    def load_examples(self, limit: int | None = None, repo_filter: str | None = None) -> list[TaskExample]:
+    def load_examples(
+        self, limit: int | None = None, repo_filter: str | None = None
+    ) -> list[TaskExample]:
         return load_hotpot_style_examples(
-            benchmark_name=self.name, hf_path=HF_PATH, hf_config=HF_CONFIG, split=HF_SPLIT, limit=limit
+            benchmark_name=self.name,
+            hf_path=HF_PATH,
+            hf_config=HF_CONFIG,
+            split=HF_SPLIT,
+            limit=limit,
         )
 
     def prepare_environment(self, example: TaskExample) -> Path:

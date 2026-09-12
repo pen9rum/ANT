@@ -63,7 +63,9 @@ def navigate_chunk(
     return chunks[target]
 
 
-def chunk_by_global_index(chunks: list[DocumentChunk], global_chunk_index: int) -> DocumentChunk | None:
+def chunk_by_global_index(
+    chunks: list[DocumentChunk], global_chunk_index: int
+) -> DocumentChunk | None:
     """Direct lookup by global_chunk_index, used to resolve a ReAct agent's
     own navigate(chunk_id) argument (a string it must parse to an int) back
     to the chunk object before navigate_chunk can step from it."""

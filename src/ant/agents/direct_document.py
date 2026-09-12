@@ -19,6 +19,7 @@ import tiktoken
 
 from ant.agents.base import AgentResult
 from ant.benchmarks.base import TaskExample
+from ant.evaluation_suite.answer_contract import condense_to_answer_span
 from ant.evaluation_suite.counting_provider import CountingOpenAIProvider
 from ant.evaluation_suite.document_scope import DocumentRecord
 from ant.evaluation_suite.usage import UsageStats
@@ -95,6 +96,13 @@ class DirectDocumentAgent:
         provider = CountingOpenAIProvider(model=self.model)
         started = time.time()
         result = provider.responses_text(prompt, max_output_tokens=1024)
+        # Shared short-answer contract (Part A): applied as the LAST step,
+        # after the method's own answer is fully computed -- see
+        # ant.evaluation_suite.answer_contract's own module docstring for
+        # why this is a post-hoc wrapper, never a prompt-injection change,
+        # and identical across all five methods.
+        raw_answer = result.text.strip()
+        final_answer = condense_to_answer_span(provider, example.question, raw_answer)
         token_usage = provider.drain_usage()
         llm_calls = provider.drain_call_count()
         elapsed = time.time() - started
@@ -103,7 +111,7 @@ class DirectDocumentAgent:
             benchmark=example.benchmark,
             task_id=example.task_id,
             method=self.name,
-            final_answer=result.text.strip(),
+            final_answer=final_answer,
             trajectory=[{"prompt_tokens_estimate": prompt_tokens}],
             usage=UsageStats(
                 llm_calls=llm_calls,
@@ -115,7 +123,11 @@ class DirectDocumentAgent:
                 unique_files_inspected=len(documents),
             ),
             termination_reason="single_call_complete",
-            metadata={"generation_model": self.model, "prompt_tokens_estimate": prompt_tokens},
+            metadata={
+                "generation_model": self.model,
+                "prompt_tokens_estimate": prompt_tokens,
+                "raw_answer_before_condensation": raw_answer,
+            },
         )
 
 

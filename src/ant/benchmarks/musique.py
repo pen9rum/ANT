@@ -10,10 +10,11 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any, cast
 
 from ant.agents.base import AgentResult
-from ant.benchmarks.base import TaskExample
 from ant.benchmarks._hotpot_style import DOCUMENT_ENV_ROOT
+from ant.benchmarks.base import TaskExample
 from ant.evaluation_suite.document_scope import DocumentRecord, materialize_documents
 from ant.evaluation_suite.qa_metrics import score_qa
 from ant.evaluation_suite.registry import register_benchmark
@@ -27,10 +28,15 @@ HF_SPLIT = "validation"
 class MuSiQueAdapter:
     name = "musique"
 
-    def load_examples(self, limit: int | None = None, repo_filter: str | None = None) -> list[TaskExample]:
+    def load_examples(
+        self, limit: int | None = None, repo_filter: str | None = None
+    ) -> list[TaskExample]:
         from datasets import load_dataset
 
-        rows = load_dataset(HF_PATH, HF_CONFIG, split=HF_SPLIT)
+        # cast(Any, ...): see _hotpot_style.py's own identical comment --
+        # same overloaded-return-type static-analysis limitation, same
+        # actual runtime shape (a dict-row-yielding Dataset).
+        rows = cast(Any, load_dataset(HF_PATH, HF_CONFIG, split=HF_SPLIT))
         examples: list[TaskExample] = []
         for row in rows:
             documents = [

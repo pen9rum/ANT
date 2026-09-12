@@ -58,6 +58,7 @@ from ant.agents.base import AgentResult
 from ant.benchmarks.base import TaskExample
 from ant.coordinator import LocalCoordinator
 from ant.domain.models import Territory
+from ant.evaluation_suite.answer_contract import condense_to_answer_span
 from ant.evaluation_suite.counting_provider import CountingOpenAIProvider
 from ant.evaluation_suite.document_scope import DocumentRecord, EvalDocumentEnvironment
 from ant.evaluation_suite.usage import UsageStats
@@ -81,7 +82,11 @@ def _document_territories(environment: EvalDocumentEnvironment) -> list[Territor
                 id=f"doc-{document.doc_id}",
                 root=document.doc_id,
                 files=[relative],
-                summary=f"Document: {document.title}" if document.title else f"Document {document.doc_id}",
+                summary=(
+                    f"Document: {document.title}"
+                    if document.title
+                    else f"Document {document.doc_id}"
+                ),
             )
         )
     return territories
@@ -141,6 +146,22 @@ class AntDocumentAgent:
             # same "ordinary clean runtime" shape as ant_adapter.AntAgent.
         )
         state = coordinator.ask(example.question, max_rounds=self.max_rounds)
+        # Shared short-answer contract (Part A of the long-context spec) --
+        # applied STRICTLY after coordinator.ask() has already returned its
+        # complete, unmodified result. This is the critical property for
+        # ANT specifically: `question` is reused throughout frozen
+        # local.py for root-Need text, worker instructions, coverage-need
+        # normalization, and lexical term extraction
+        # (TOKEN_RE.findall(question)), so injecting the contract INTO
+        # that string (the way a prompt-template change would) risks
+        # measurably altering search-term extraction and worker routing --
+        # a real algorithmic effect disguised as "just data". Condensing
+        # `state.answer` after the fact touches none of that: routing,
+        # Need Graph structure, reroutes, and recovery are provably
+        # byte-identical to a run with this call deleted; only the string
+        # returned to the harness changes.
+        raw_answer = state.answer
+        final_answer = condense_to_answer_span(provider, example.question, raw_answer)
         llm_calls = provider.drain_call_count()
 
         # Behavioral-diagnostic counts for Section 13/14 of the long-context
@@ -177,7 +198,7 @@ class AntDocumentAgent:
             benchmark=example.benchmark,
             task_id=example.task_id,
             method=self.name,
-            final_answer=state.answer,
+            final_answer=final_answer,
             trajectory=[round_.model_dump() for round_ in state.rounds],
             evidence=[item.model_dump() for item in state.evidence],
             usage=UsageStats(
@@ -210,6 +231,7 @@ class AntDocumentAgent:
                 "reroutes": reroutes,
                 "recovery_events": recovery_events,
                 "evidence_count": len(state.evidence),
+                "raw_answer_before_condensation": raw_answer,
             },
         )
 

@@ -10,6 +10,7 @@ import tiktoken
 from ant.agents.base import AgentResult
 from ant.benchmarks.base import TaskExample
 from ant.domain import TokenUsage
+from ant.evaluation_suite.answer_contract import condense_to_answer_span
 from ant.evaluation_suite.counting_provider import CountingOpenAIProvider
 from ant.evaluation_suite.repo_scope import EvalRepoEnvironment
 from ant.evaluation_suite.usage import UsageStats
@@ -303,6 +304,7 @@ class LongAgentAdapter:
         chunk_size_tokens: int = DEFAULT_CHUNK_SIZE_TOKENS,
         max_leader_decisions: int = DEFAULT_MAX_LEADER_DECISIONS,
         member_concurrency: int = DEFAULT_MEMBER_CONCURRENCY,
+        apply_concise_answer_contract: bool = False,
     ) -> None:
         self.model = model
         self.chunk_size_tokens = chunk_size_tokens
@@ -312,6 +314,19 @@ class LongAgentAdapter:
         # per example within a run; fixed once at construction time and
         # logged into every result's metadata.
         self.member_concurrency = member_concurrency
+        # Default False: this class is shared between the repository-QA
+        # track and the document/long-context track (Section 8 of the
+        # long-context spec requires reusing the SAME implementation, not
+        # forking one). Applying the Part A short-answer contract must not
+        # silently change repository-QA LongAgent behavior for any caller
+        # that doesn't explicitly ask for it -- only the document-track
+        # driver constructs this with True. When True, the ONLY effect is
+        # a post-hoc condensation of the already-fully-decided final
+        # answer (see run()'s own call site below); the leader/member
+        # NEW_STATE/CONFLICT/ANSWER protocol itself is completely
+        # unaffected, since condensation runs strictly after that protocol
+        # has already produced final_answer.
+        self.apply_concise_answer_contract = apply_concise_answer_contract
 
     def run(self, example: TaskExample, environment_root: Path) -> AgentResult:
         provider = CountingOpenAIProvider(model=self.model)
@@ -466,6 +481,10 @@ class LongAgentAdapter:
                 }
             )
 
+        raw_answer = final_answer
+        if self.apply_concise_answer_contract:
+            final_answer = condense_to_answer_span(provider, example.question, final_answer)
+
         # `drain_*` calls empty the provider's internal counters, so each
         # must be captured exactly once into a local before use. Leader
         # calls all go through the single shared `provider` (never
@@ -502,6 +521,8 @@ class LongAgentAdapter:
                 "upstream_repo_note": UPSTREAM_REPO_NOTE,
                 "chunk_size_tokens": self.chunk_size_tokens,
                 "member_concurrency": self.member_concurrency,
+                "apply_concise_answer_contract": self.apply_concise_answer_contract,
+                "raw_answer_before_condensation": raw_answer,
                 "n_chunks": n_members,
                 "n_members": n_members,
                 "leader_rounds": new_state_rounds,

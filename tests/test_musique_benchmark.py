@@ -27,9 +27,24 @@ def _fake_rows() -> list[dict]:
             "answer_aliases": ["Jane R. Doe"],
             "answerable": True,
             "paragraphs": [
-                {"idx": 0, "title": "Performer Bio", "paragraph_text": "The performer married Jane Doe.", "is_supporting": True},
-                {"idx": 1, "title": "Unrelated", "paragraph_text": "Filler content about weather.", "is_supporting": False},
-                {"idx": 2, "title": "Another Support", "paragraph_text": "More detail on the marriage.", "is_supporting": True},
+                {
+                    "idx": 0,
+                    "title": "Performer Bio",
+                    "paragraph_text": "The performer married Jane Doe.",
+                    "is_supporting": True,
+                },
+                {
+                    "idx": 1,
+                    "title": "Unrelated",
+                    "paragraph_text": "Filler content about weather.",
+                    "is_supporting": False,
+                },
+                {
+                    "idx": 2,
+                    "title": "Another Support",
+                    "paragraph_text": "More detail on the marriage.",
+                    "is_supporting": True,
+                },
             ],
         }
     ]

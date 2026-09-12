@@ -35,8 +35,12 @@ from ant.indexing import build_worker_cards
 
 def _sample_documents() -> list[DocumentRecord]:
     return [
-        DocumentRecord(doc_id="doc0", title="Auth Systems", text="authenticate_user returns True."),
-        DocumentRecord(doc_id="doc1", title="Unrelated Topic", text="This document is about gardening."),
+        DocumentRecord(
+            doc_id="doc0", title="Auth Systems", text="authenticate_user returns True."
+        ),
+        DocumentRecord(
+            doc_id="doc1", title="Unrelated Topic", text="This document is about gardening."
+        ),
         DocumentRecord(doc_id="doc2", title="", text="A document with an empty title."),
     ]
 

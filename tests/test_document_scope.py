@@ -12,7 +12,6 @@ from pathlib import Path
 import pytest
 
 from ant.evaluation_suite.document_scope import (
-    DocumentChunk,
     DocumentRecord,
     EvalDocumentEnvironment,
     build_positional_variants,
@@ -35,7 +34,8 @@ def test_materialize_documents_writes_in_original_order_with_positional_filename
     paths = materialize_documents(_docs(), tmp_path)
 
     assert [p.name for p in paths.values()] == ["doc_0000.txt", "doc_0001.txt", "doc_0002.txt"]
-    assert (tmp_path / "doc_0000.txt").read_text(encoding="utf-8") == "Title: Alpha\n\nalpha body text"
+    content = (tmp_path / "doc_0000.txt").read_text(encoding="utf-8")
+    assert content == "Title: Alpha\n\nalpha body text"
     # Empty title: no "Title: " line prefixed.
     assert (tmp_path / "doc_0002.txt").read_text(encoding="utf-8") == "gamma body text, no title"
 
@@ -62,10 +62,13 @@ def test_eval_document_environment_round_trips_doc_id_and_relative_path(tmp_path
     assert environment.relative_path_for("doc1") == "doc_0001.txt"
     assert environment.doc_id_for_relative_path("doc_0001.txt") == "doc1"
     assert environment.doc_id_for_relative_path("no-such-file.txt") is None
-    assert environment.document("doc1").title == "Beta"
+    doc1 = environment.document("doc1")
+    assert doc1 is not None
+    assert doc1.title == "Beta"
     assert environment.document("doc-missing") is None
     assert [d.doc_id for d in environment.ordered_documents()] == ["doc0", "doc1", "doc2"]
-    assert [p.name for p in environment.iter_files()] == ["doc_0000.txt", "doc_0001.txt", "doc_0002.txt"]
+    expected_names = ["doc_0000.txt", "doc_0001.txt", "doc_0002.txt"]
+    assert [p.name for p in environment.iter_files()] == expected_names
 
 
 def test_chunk_documents_never_crosses_a_document_boundary() -> None:
@@ -111,7 +114,7 @@ def test_chunk_documents_is_deterministic_across_repeated_calls() -> None:
     assert [c.model_dump() for c in first] == [c.model_dump() for c in second]
 
 
-def test_build_positional_variants_preserves_document_set_text_and_relative_distractor_order() -> None:
+def test_build_positional_variants_preserves_document_set_text_and_relative_order() -> None:
     docs = [DocumentRecord(doc_id=f"doc{i}", title=f"T{i}", text=f"body {i}") for i in range(6)]
     supporting = ["doc2", "doc4"]
 

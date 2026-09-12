@@ -24,6 +24,7 @@ from pathlib import Path
 from ant.agents.base import AgentResult
 from ant.benchmarks.base import TaskExample
 from ant.evaluation.baseline_tiers import _TIER2_MAX_ROUNDS, _TIER2_QUERY_PROMPT
+from ant.evaluation_suite.answer_contract import condense_to_answer_span
 from ant.evaluation_suite.counting_provider import CountingOpenAIProvider
 from ant.evaluation_suite.document_scope import DocumentRecord, EvalDocumentEnvironment
 from ant.evaluation_suite.usage import UsageStats
@@ -80,7 +81,11 @@ class RetrievalDocumentAgent:
                 break
             query = next_query
 
-        answer = provider.synthesize(question=example.question, evidence=evidence)
+        raw_answer = provider.synthesize(question=example.question, evidence=evidence)
+        # Shared short-answer contract (Part A) -- post-hoc only, applied
+        # after synthesize() has already produced its full answer; the
+        # round-refinement search decisions above are completely unaffected.
+        answer = condense_to_answer_span(provider, example.question, raw_answer)
         llm_calls = provider.drain_call_count()
         token_usage = provider.drain_usage()
         elapsed = time.time() - started
@@ -107,6 +112,7 @@ class RetrievalDocumentAgent:
                 "generation_model": self.model,
                 "retrieval_rounds": len(trajectory),
                 "queries_issued": [entry["query"] for entry in trajectory],
+                "raw_answer_before_condensation": raw_answer,
             },
         )
 

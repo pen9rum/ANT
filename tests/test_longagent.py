@@ -86,6 +86,17 @@ class _ScriptedProvider:
         text = self._scripted.pop(0) if self._scripted else fallback
         return ResponseResult(text=text, usage=TokenUsage(), raw={})
 
+    def responses_text(self, prompt: str, max_output_tokens: int = 512) -> ResponseResult:
+        # Only ever reached by the Part A short-answer contract's
+        # condensation call (apply_concise_answer_contract=True) -- every
+        # scripted-order test above leaves that flag at its default False,
+        # so this is never exercised except by the dedicated concise-
+        # contract test below.
+        self._calls += 1
+        from ant.domain import TokenUsage
+
+        return ResponseResult(text="condensed", usage=TokenUsage(), raw={})
+
     def drain_call_count(self) -> int:
         count = self._calls
         self._calls = 0
@@ -400,3 +411,37 @@ def test_member_concurrency_one_is_effectively_sequential(
     _run_four_member_round(monkeypatch, tmp_path, provider, member_concurrency=1)
 
     assert provider.max_concurrent == 1
+
+
+def test_apply_concise_answer_contract_false_by_default_leaves_answer_unchanged(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # Default False preserves this class's existing repository-QA
+    # behavior byte-for-byte -- no caller that doesn't explicitly opt in
+    # (i.e. every existing repository-QA/document-track caller from
+    # before this change) sees any difference at all.
+    result, _ = _run_with_scripted_provider(
+        monkeypatch, tmp_path, ['{"type": "answer", "content": "the leader'"'"'s own answer"}']
+    )
+    assert result.final_answer == "the leader's own answer"
+    assert result.metadata["apply_concise_answer_contract"] is False
+
+
+def test_apply_concise_answer_contract_true_condenses_the_final_answer_only(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    result, provider = _run_with_scripted_provider(
+        monkeypatch,
+        tmp_path,
+        ['{"type": "answer", "content": "the leader\'s own verbose answer"}'],
+        member_concurrency=1,
+        apply_concise_answer_contract=True,
+    )
+    assert result.final_answer == "condensed"
+    assert result.metadata["raw_answer_before_condensation"] == "the leader's own verbose answer"
+    assert result.metadata["apply_concise_answer_contract"] is True
+    # Leader/member protocol itself is untouched: still exactly one leader
+    # call (the immediate "answer"), zero member calls -- condensation adds
+    # ONE extra physical call on top, not a change to round semantics.
+    assert result.metadata["leader_calls"] == 1
+    assert result.metadata["member_calls"] == 0

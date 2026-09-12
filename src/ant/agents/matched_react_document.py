@@ -29,6 +29,7 @@ from pathlib import Path
 from ant.agents.base import AgentResult
 from ant.benchmarks.base import TaskExample
 from ant.domain import Evidence
+from ant.evaluation_suite.answer_contract import condense_to_answer_span
 from ant.evaluation_suite.counting_provider import CountingOpenAIProvider
 from ant.evaluation_suite.document_scope import (
     DocumentRecord,
@@ -162,7 +163,9 @@ class MatchedReActDocumentAgent:
                 )
                 continue
 
-            results = self._execute_tool(tool_name, query, search_tool, all_files, environment, chunks)
+            results = self._execute_tool(
+                tool_name, query, search_tool, all_files, environment, chunks
+            )
             history.append(
                 {
                     "step": step,
@@ -179,6 +182,13 @@ class MatchedReActDocumentAgent:
                 evidence=[Evidence.model_validate(e) for e in all_evidence],
             )
 
+        raw_answer = final_answer
+        # Shared short-answer contract (Part A) -- post-hoc only, applied
+        # after the agent's own tool-use loop has already finished (either
+        # via its own "finish" decision or the budget-exhausted fallback
+        # synthesis above); the tool-selection/reasoning loop itself is
+        # completely unaffected.
+        final_answer = condense_to_answer_span(provider, example.question, final_answer)
         llm_calls = provider.drain_call_count()
         token_usage = provider.drain_usage()
         elapsed = time.time() - started
@@ -210,6 +220,7 @@ class MatchedReActDocumentAgent:
                 "generation_model": self.model,
                 "tool_type_counts": tool_type_counts,
                 "steps_taken": len(history),
+                "raw_answer_before_condensation": raw_answer,
             },
         )
 
