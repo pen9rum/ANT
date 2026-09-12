@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import concurrent.futures
 import time
 from pathlib import Path
 from typing import Any
@@ -8,6 +9,7 @@ import tiktoken
 
 from ant.agents.base import AgentResult
 from ant.benchmarks.base import TaskExample
+from ant.domain import TokenUsage
 from ant.evaluation_suite.counting_provider import CountingOpenAIProvider
 from ant.evaluation_suite.repo_scope import EvalRepoEnvironment
 from ant.evaluation_suite.usage import UsageStats
@@ -62,6 +64,18 @@ DEFAULT_CHUNK_SIZE_TOKENS = 2000
 # the leader chooses NEW_STATE, CONFLICT, or ANSWER), not just NEW_STATE
 # rounds, since an unconverging CONFLICT loop would be just as unbounded.
 DEFAULT_MAX_LEADER_DECISIONS = 8
+
+# The paper's own architecture allows independent members to be processed
+# in parallel within a round (each member reads only its own chunk and
+# responds to the same broadcast instruction with no cross-member
+# dependency) -- see docs/longagent_fidelity_audit.md. This is a pure
+# EXECUTION optimization, chosen once and disclosed, not a value tuned
+# against benchmark score: it bounds concurrent outbound HTTP connections
+# to the model API for stability under real rate limits, nothing else. It
+# never changes member prompt/context/outputs, leader inputs/policy,
+# member count, or round semantics -- see _run_members_concurrently's own
+# docstring for why. Logged every run via metadata["member_concurrency"].
+DEFAULT_MEMBER_CONCURRENCY = 4
 
 _ENCODING_NAME = "cl100k_base"
 
@@ -185,6 +199,75 @@ def chunk_document(serialized_text: str, chunk_size_tokens: int) -> list[str]:
     ]
 
 
+def _parse_or_empty(text: str) -> dict[str, Any]:
+    return _loads_json_object(text) if _safe_is_json(text) else {}
+
+
+def _merge_usage(total: TokenUsage, addition: TokenUsage) -> TokenUsage:
+    return TokenUsage(
+        input_tokens=total.input_tokens + addition.input_tokens,
+        output_tokens=total.output_tokens + addition.output_tokens,
+        total_tokens=total.total_tokens + addition.total_tokens,
+        latency_ms=total.latency_ms + addition.latency_ms,
+        estimated_cost_usd=total.estimated_cost_usd + addition.estimated_cost_usd,
+    )
+
+
+def _run_members_concurrently(
+    tasks: list[tuple[int, str]],
+    model: str,
+    max_output_tokens: int,
+    concurrency: int,
+) -> tuple[dict[int, str], int, TokenUsage, list[dict]]:
+    """Runs a batch of independent (member_id, prompt) member calls under a
+    bounded thread pool -- the paper's own architecture permits parallel
+    member processing within a round (see DEFAULT_MEMBER_CONCURRENCY's own
+    comment); this is the only place that concurrency is actually
+    exercised. One fresh `CountingOpenAIProvider` per call, never a single
+    instance shared across threads: usage/call-count accounting is only
+    ever mutated in the single-threaded submitting code below, after each
+    future resolves, so there is no concurrent-write race on any shared
+    counter (the underlying provider's own usage bookkeeping is NOT
+    thread-safe, and this file does not modify that frozen core code to
+    make it so).
+
+    `responses` is keyed by member_id, exactly as the pre-concurrency
+    sequential version keyed it -- so every downstream consumer
+    (_format_history, the leader's next prompt, conflict resolution) sees
+    an IDENTICAL result regardless of the physical order calls actually
+    completed in. Member prompt/context, leader inputs, leader policy,
+    member count, and round semantics are therefore all unaffected by this
+    function; only wall-clock execution order changes.
+    """
+    responses: dict[int, str] = {}
+    total_calls = 0
+    usage = TokenUsage()
+    retry_logs: list[dict] = []
+
+    def _call(member_id: int, prompt: str) -> tuple[int, str, int, TokenUsage, list[dict]]:
+        member_provider = CountingOpenAIProvider(model=model)
+        result = member_provider.responses_json(prompt, max_output_tokens=max_output_tokens)
+        parsed = _parse_or_empty(result.text)
+        content = str(parsed.get("content") or result.text)
+        return (
+            member_id,
+            content,
+            member_provider.drain_call_count(),
+            member_provider.drain_usage(),
+            member_provider.drain_retry_log(),
+        )
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, concurrency)) as pool:
+        futures = [pool.submit(_call, member_id, prompt) for member_id, prompt in tasks]
+        for future in concurrent.futures.as_completed(futures):
+            member_id, content, calls, member_usage, member_retry_log = future.result()
+            responses[member_id] = content
+            total_calls += calls
+            usage = _merge_usage(usage, member_usage)
+            retry_logs.extend(member_retry_log)
+    return responses, total_calls, usage, retry_logs
+
+
 def _format_history(history: list[dict[str, Any]]) -> str:
     lines = []
     for entry in history:
@@ -219,10 +302,16 @@ class LongAgentAdapter:
         model: str = "gpt-4.1",
         chunk_size_tokens: int = DEFAULT_CHUNK_SIZE_TOKENS,
         max_leader_decisions: int = DEFAULT_MAX_LEADER_DECISIONS,
+        member_concurrency: int = DEFAULT_MEMBER_CONCURRENCY,
     ) -> None:
         self.model = model
         self.chunk_size_tokens = chunk_size_tokens
         self.max_leader_decisions = max_leader_decisions
+        # Execution-only knob -- see DEFAULT_MEMBER_CONCURRENCY's own
+        # comment and _run_members_concurrently's docstring. Never varied
+        # per example within a run; fixed once at construction time and
+        # logged into every result's metadata.
+        self.member_concurrency = member_concurrency
 
     def run(self, example: TaskExample, environment_root: Path) -> AgentResult:
         provider = CountingOpenAIProvider(model=self.model)
@@ -242,24 +331,31 @@ class LongAgentAdapter:
         conflict_used = False
         final_answer = ""
         termination_reason = "unknown"
-
-        def _parse_or_empty(text: str) -> dict[str, Any]:
-            return _loads_json_object(text) if _safe_is_json(text) else {}
+        member_physical_calls = 0
+        member_usage_total = TokenUsage()
+        member_retry_logs: list[dict] = []
 
         def _broadcast(instruction: str) -> dict[int, str]:
-            nonlocal member_calls
-            responses: dict[int, str] = {}
-            for member_id, chunk_text in enumerate(chunks):
-                prompt = _MEMBER_PROMPT.format(
-                    n_members=n_members,
-                    member_id=member_id,
-                    chunk_text=chunk_text,
-                    instruction=instruction,
+            nonlocal member_calls, member_physical_calls, member_usage_total, member_retry_logs
+            tasks = [
+                (
+                    member_id,
+                    _MEMBER_PROMPT.format(
+                        n_members=n_members,
+                        member_id=member_id,
+                        chunk_text=chunk_text,
+                        instruction=instruction,
+                    ),
                 )
-                result = provider.responses_json(prompt, max_output_tokens=400)
-                member_calls += 1
-                parsed = _parse_or_empty(result.text)
-                responses[member_id] = str(parsed.get("content") or result.text)
+                for member_id, chunk_text in enumerate(chunks)
+            ]
+            responses, calls, usage, retry_log = _run_members_concurrently(
+                tasks, self.model, max_output_tokens=400, concurrency=self.member_concurrency
+            )
+            member_calls += len(tasks)
+            member_physical_calls += calls
+            member_usage_total = _merge_usage(member_usage_total, usage)
+            member_retry_logs.extend(retry_log)
             return responses
 
         for decision_index in range(self.max_leader_decisions):
@@ -306,18 +402,30 @@ class LongAgentAdapter:
                     continue
                 last_round = history[-1]
                 shared_text = "\n---\n".join(chunks[i] for i in member_ids)
-                for member_id in member_ids:
-                    prompt = _CONFLICT_MEMBER_PROMPT.format(
-                        member_id=member_id,
-                        n_members=n_members,
-                        instruction=last_round["instruction"],
-                        own_chunk=chunks[member_id],
-                        shared_chunk=shared_text,
+                conflict_tasks = [
+                    (
+                        member_id,
+                        _CONFLICT_MEMBER_PROMPT.format(
+                            member_id=member_id,
+                            n_members=n_members,
+                            instruction=last_round["instruction"],
+                            own_chunk=chunks[member_id],
+                            shared_chunk=shared_text,
+                        ),
                     )
-                    result = provider.responses_json(prompt, max_output_tokens=400)
-                    member_calls += 1
-                    parsed = _parse_or_empty(result.text)
-                    last_round["responses"][member_id] = str(parsed.get("content") or result.text)
+                    for member_id in member_ids
+                ]
+                conflict_responses, calls, usage, retry_log = _run_members_concurrently(
+                    conflict_tasks,
+                    self.model,
+                    max_output_tokens=400,
+                    concurrency=self.member_concurrency,
+                )
+                member_calls += len(conflict_tasks)
+                member_physical_calls += calls
+                member_usage_total = _merge_usage(member_usage_total, usage)
+                member_retry_logs.extend(retry_log)
+                last_round["responses"].update(conflict_responses)
                 trajectory.append(
                     {"step": decision_index, "role": "conflict", "member_ids": member_ids}
                 )
@@ -359,10 +467,15 @@ class LongAgentAdapter:
             )
 
         # `drain_*` calls empty the provider's internal counters, so each
-        # must be captured exactly once into a local before use.
-        physical_llm_calls = provider.drain_call_count()
-        token_usage = provider.drain_usage()
-        retry_logs = provider.drain_retry_log()
+        # must be captured exactly once into a local before use. Leader
+        # calls all go through the single shared `provider` (never
+        # dispatched concurrently -- the leader is a strictly sequential
+        # decision loop); member calls each used their own short-lived
+        # provider instance (see _run_members_concurrently) and are merged
+        # in here.
+        physical_llm_calls = provider.drain_call_count() + member_physical_calls
+        token_usage = _merge_usage(provider.drain_usage(), member_usage_total)
+        retry_logs = provider.drain_retry_log() + member_retry_logs
         elapsed = time.time() - started
 
         return AgentResult(
@@ -388,6 +501,7 @@ class LongAgentAdapter:
                 "upstream_commit": UPSTREAM_COMMIT,
                 "upstream_repo_note": UPSTREAM_REPO_NOTE,
                 "chunk_size_tokens": self.chunk_size_tokens,
+                "member_concurrency": self.member_concurrency,
                 "n_chunks": n_members,
                 "n_members": n_members,
                 "leader_rounds": new_state_rounds,

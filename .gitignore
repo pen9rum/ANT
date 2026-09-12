@@ -10,6 +10,7 @@ __pycache__/
 output/
 repos/
 repos-repoprobe/
+document-envs/
 third_party/checkouts/
 dist/
 build/

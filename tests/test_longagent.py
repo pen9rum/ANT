@@ -6,6 +6,8 @@ same monkeypatch-the-boundary convention used by test_sweqa_pro_native_agent.py
 """
 from __future__ import annotations
 
+import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -104,6 +106,14 @@ def _run_with_scripted_provider(
     root = _make_repo(tmp_path)
     provider = _ScriptedProvider(scripted_texts)
     monkeypatch.setattr(longagent_module, "CountingOpenAIProvider", lambda model: provider)
+    # Sequential dispatch for every scripted-order test below: these tests
+    # rely on `_ScriptedProvider` handing out its texts in exact list
+    # order (`list.pop(0)` per call), which only stays deterministic under
+    # single-threaded dispatch against one shared mock instance. Real
+    # concurrent dispatch (member_concurrency > 1) is exercised separately
+    # by the dedicated concurrency tests below, using a keyed-not-ordered
+    # scripted provider so no test ever depends on thread scheduling order.
+    adapter_kwargs.setdefault("member_concurrency", 1)
     adapter = LongAgentAdapter(**adapter_kwargs)
     example = TaskExample(
         benchmark="test", task_id="t1", question="What does alpha do?", reference=""
@@ -251,3 +261,142 @@ def test_unique_files_inspected_equals_the_full_eligible_file_universe(
         monkeypatch, tmp_path, ['{"type": "answer", "content": "x"}']
     )
     assert result.usage.unique_files_inspected == 2  # src/a.py, src/b.py
+
+
+class _KeyedScriptedProvider:
+    """Deterministic scripted provider keyed by a substring of the PROMPT
+    itself rather than by call order -- required to exercise genuine
+    concurrent member dispatch (member_concurrency > 1): several member
+    calls race against this one shared mock instance at once (matching
+    how CountingOpenAIProvider(model=...) resolves to the same monkeypatched
+    instance regardless of which thread constructs it), so no test built on
+    this mock may depend on which caller happens to arrive first. An
+    optional `delay_seconds` widens the concurrency window enough to
+    observe genuine overlap between calls, and `max_concurrent` (tracked
+    under `_lock`) records the highest number of calls actually in flight
+    at once, to assert the thread pool both parallelizes AND stays within
+    its configured bound.
+    """
+
+    def __init__(self, responses_by_substring: dict[str, str], delay_seconds: float = 0.0) -> None:
+        self._responses_by_substring = responses_by_substring
+        self._delay_seconds = delay_seconds
+        self._calls = 0
+        self._in_flight = 0
+        self.max_concurrent = 0
+        self._lock = threading.Lock()
+
+    def responses_json(self, prompt: str, max_output_tokens: int = 512) -> ResponseResult:
+        from ant.domain import TokenUsage
+
+        with self._lock:
+            self._calls += 1
+            self._in_flight += 1
+            self.max_concurrent = max(self.max_concurrent, self._in_flight)
+        try:
+            if self._delay_seconds:
+                time.sleep(self._delay_seconds)
+            for substring, text in self._responses_by_substring.items():
+                if substring in prompt:
+                    return ResponseResult(text=text, usage=TokenUsage(), raw={})
+            return ResponseResult(
+                text='{"type": "answer", "content": "fallback"}', usage=TokenUsage(), raw={}
+            )
+        finally:
+            with self._lock:
+                self._in_flight -= 1
+
+    def drain_call_count(self) -> int:
+        with self._lock:
+            count = self._calls
+            self._calls = 0
+        return count
+
+    def drain_usage(self):
+        from ant.domain import TokenUsage
+
+        return TokenUsage(input_tokens=1, output_tokens=1, total_tokens=2, estimated_cost_usd=0.0)
+
+    def drain_retry_log(self) -> list[dict]:
+        return []
+
+
+_FOUR_CHUNK_LEADER_SCRIPT = {
+    "FIRST round": '{"type": "new_state", "content": "What does each chunk say?"}',
+    "CHUNK-A": '{"type": "response", "content": "answer-from-A"}',
+    "CHUNK-B": '{"type": "response", "content": "answer-from-B"}',
+    "CHUNK-C": '{"type": "response", "content": "answer-from-C"}',
+    "CHUNK-D": '{"type": "response", "content": "answer-from-D"}',
+    "Discussion history so far": '{"type": "answer", "content": "combined answer"}',
+}
+
+
+def _run_four_member_round(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    provider: _KeyedScriptedProvider,
+    member_concurrency: int,
+):
+    root = _make_repo(tmp_path)
+    monkeypatch.setattr(
+        longagent_module,
+        "chunk_document",
+        lambda text, chunk_size_tokens: ["CHUNK-A", "CHUNK-B", "CHUNK-C", "CHUNK-D"],
+    )
+    monkeypatch.setattr(longagent_module, "CountingOpenAIProvider", lambda model: provider)
+    adapter = LongAgentAdapter(member_concurrency=member_concurrency)
+    example = TaskExample(
+        benchmark="test", task_id="t1", question="What do the chunks say?", reference=""
+    )
+    return adapter.run(example, root)
+
+
+def test_concurrent_member_dispatch_preserves_correct_per_member_mapping(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # Real concurrency (>1) against a shared mock, keyed by prompt content
+    # rather than call order -- directly verifies that bounded concurrent
+    # dispatch does not scramble which member's response lands under which
+    # member_id, even when several member calls are genuinely in flight
+    # together (member_concurrency=4 == n_members, so all four race at once).
+    provider = _KeyedScriptedProvider(dict(_FOUR_CHUNK_LEADER_SCRIPT), delay_seconds=0.01)
+    result = _run_four_member_round(monkeypatch, tmp_path, provider, member_concurrency=4)
+
+    assert result.termination_reason == "leader_answer"
+    assert result.final_answer == "combined answer"
+    assert result.metadata["n_members"] == 4
+    assert result.metadata["member_calls"] == 4
+    assert result.metadata["member_concurrency"] == 4
+
+    members_step = next(step for step in result.trajectory if step.get("role") == "members")
+    assert members_step["responses"] == {
+        0: "answer-from-A",
+        1: "answer-from-B",
+        2: "answer-from-C",
+        3: "answer-from-D",
+    }
+
+
+def test_concurrent_member_dispatch_respects_the_configured_concurrency_bound(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # A small delay per call widens the window in which several calls are
+    # simultaneously in flight; asserting max_concurrent both (a) exceeds 1
+    # (proving calls genuinely overlap in time, i.e. concurrency is real,
+    # not just correctness-preserving under a sequential disguise) and
+    # (b) never exceeds the configured bound (proving the bound is
+    # honored, not just a label with no effect).
+    provider = _KeyedScriptedProvider(dict(_FOUR_CHUNK_LEADER_SCRIPT), delay_seconds=0.05)
+    _run_four_member_round(monkeypatch, tmp_path, provider, member_concurrency=2)
+
+    assert provider.max_concurrent > 1
+    assert provider.max_concurrent <= 2
+
+
+def test_member_concurrency_one_is_effectively_sequential(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    provider = _KeyedScriptedProvider(dict(_FOUR_CHUNK_LEADER_SCRIPT), delay_seconds=0.01)
+    _run_four_member_round(monkeypatch, tmp_path, provider, member_concurrency=1)
+
+    assert provider.max_concurrent == 1

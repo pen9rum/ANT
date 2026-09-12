@@ -1,0 +1,70 @@
+{
+  "benchmarks": {
+    "hotpotqa": [
+      {
+        "task_id": "5a8b57f25542995d1e6f1371",
+        "question": "Were Scott Derrickson and Ed Wood of the same nationality?",
+        "num_documents": 10,
+        "supporting_doc_ids": [
+          "doc1",
+          "doc4"
+        ]
+      },
+      {
+        "task_id": "5a8c7595554299585d9e36b6",
+        "question": "What government position was held by the woman who portrayed Corliss Archer in the film Kiss and Tell?",
+        "num_documents": 10,
+        "supporting_doc_ids": [
+          "doc1",
+          "doc6"
+        ]
+      }
+    ],
+    "2wikimultihopqa": [
+      {
+        "task_id": "8813f87c0bdd11eba7f7acde48001122",
+        "question": "Who is the mother of the director of film Polish-Russian War (Film)?",
+        "num_documents": 10,
+        "supporting_doc_ids": [
+          "doc4",
+          "doc7"
+        ]
+      },
+      {
+        "task_id": "61a46987092f11ebbdaeac1f6bf848b6",
+        "question": "Which film came out first, Blind Shaft or The Mask Of Fu Manchu?",
+        "num_documents": 10,
+        "supporting_doc_ids": [
+          "doc0",
+          "doc2"
+        ]
+      }
+    ],
+    "musique": [
+      {
+        "task_id": "2hop__460946_294723",
+        "question": "Who is the spouse of the Green performer?",
+        "num_documents": 20,
+        "supporting_doc_ids": [
+          "doc10",
+          "doc5"
+        ]
+      },
+      {
+        "task_id": "2hop__252311_366220",
+        "question": "Who founded the company that distributed the film UHF?",
+        "num_documents": 20,
+        "supporting_doc_ids": [
+          "doc10",
+          "doc6"
+        ]
+      }
+    ]
+  },
+  "selection_policy": "first N rows in the HF dataset validation split own row order (deterministic, gold-independent); confirmed non-empty documents and no loader anomalies via a live diagnostic pass before freezing",
+  "total_tasks": 6,
+  "methods_to_run": ["direct_document", "retrieval_document", "matched_react_document", "longagent", "ant_document"],
+  "total_generations": 30,
+  "frozen_final": true,
+  "purpose": "Section 12 behavioral smoke test only -- NOT a statistical evaluation. n=6 supports no performance claims; see docs/long_context_dataset_audit.md and the long-context evaluation final report for scope."
+}

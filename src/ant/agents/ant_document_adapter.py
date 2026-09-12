@@ -1,0 +1,219 @@
+"""ANT-on-documents adapter: the smallest possible bridge between the
+frozen, unmodified ANT coordination core (`LocalCoordinator.ask()`,
+`build_worker_cards`, the Need Graph / runtime revision / recovery
+machinery inside `local.py`) and the long-document/multi-document
+evaluation substrate (`ant.evaluation_suite.document_scope`).
+
+Category classification (per the long-context evaluation spec's explicit
+requirement to classify every change before implementing it):
+
+  A. interface/generalization-only refactor: NONE needed. `LocalCoordinator`,
+     `build_worker_cards`, `AutonomousWorker`, the Need Graph, runtime
+     revision, and recovery logic are all imported and used completely
+     unmodified -- zero lines of `ant/coordinator/local.py`,
+     `ant/indexing/cards.py`, or any other core file are touched by this
+     module or by this evaluation pass.
+  B. repository-specific implementation cleanup: NONE needed.
+  C. actual algorithmic behavior change: NONE needed, and therefore none
+     was implemented. (See docs/long_context_dataset_audit.md's sibling
+     finding: `self.repo_root` appears in exactly two places in all of
+     `local.py` -- constructing `LocalSearchTool` and `AutonomousWorker`,
+     both of which operate on any directory of text files, not
+     specifically Python source -- and `Territory`/`WorkerCard` are plain
+     schema-only Pydantic models with no code-specific required fields.)
+
+The ONE thing this adapter does that `ant_adapter.py` (the repository
+baseline) does not is skip `discover_territories` entirely -- that
+function's own clustering heuristic (`_natural_root`, directory-based
+grouping) is repository-directory-structure-specific and does not apply
+to a flat directory of materialized document files. In its place,
+`_document_territories` builds `Territory` objects directly from document
+boundaries: ONE territory per materialized document, using only the
+document's own doc_id/title/relative filename (never gold/supporting-fact
+annotations, never the question, never any other benchmark metadata) --
+deterministic and task-independent by construction. Everything downstream
+of that (`build_worker_cards`, `IndexStore`, `LocalCoordinator`, `.ask()`)
+is the exact same call sequence `ant_adapter.py` already uses.
+
+Tool-primitive asymmetry, disclosed rather than hidden: `AutonomousWorker`
+(inside frozen `local.py`) always calls `LocalSearchTool.search()`/
+`dense_search()`, and its reasoner-driven tool loop can additionally call
+`navigate`/`references`/`callers`/`callees`/`assignments`/`imports`/
+`subclasses` -- all of which are code-symbol tools that gracefully return
+empty results on prose text (zero AST symbols found) rather than crash.
+Since `AutonomousWorker`'s tool loop lives inside frozen `local.py`, this
+adapter cannot give ANT's own workers the new `view`/`navigate-chunk`
+document primitives (`ant.tools.document_tools`) without a Category-C-
+adjacent core change -- so ANT's real, meaningfully-used information
+primitive on documents is `search` only. This is reported explicitly in
+this evaluation pass's behavioral-validation answer (Section 14.B), not
+smoothed over as if full three-way tool parity with Matched ReAct/
+Retrieval were achieved.
+"""
+from __future__ import annotations
+
+from pathlib import Path
+
+from ant.agents.base import AgentResult
+from ant.benchmarks.base import TaskExample
+from ant.coordinator import LocalCoordinator
+from ant.domain.models import Territory
+from ant.evaluation_suite.counting_provider import CountingOpenAIProvider
+from ant.evaluation_suite.document_scope import DocumentRecord, EvalDocumentEnvironment
+from ant.evaluation_suite.usage import UsageStats
+from ant.indexing import build_worker_cards
+from ant.memory import IndexStore
+
+
+def _document_territories(environment: EvalDocumentEnvironment) -> list[Territory]:
+    """One Territory per materialized document -- the natural, deterministic
+    document boundary already present in the benchmark's own structure.
+    Built ONLY from doc_id/title/relative-filename; never reads supporting-
+    fact annotations, the question, or any other example metadata, so
+    territory construction is identical regardless of which document(s)
+    happen to be gold-relevant for this particular question.
+    """
+    territories: list[Territory] = []
+    for document in environment.ordered_documents():
+        relative = environment.relative_path_for(document.doc_id)
+        territories.append(
+            Territory(
+                id=f"doc-{document.doc_id}",
+                root=document.doc_id,
+                files=[relative],
+                summary=f"Document: {document.title}" if document.title else f"Document {document.doc_id}",
+            )
+        )
+    return territories
+
+
+class AntDocumentAgent:
+    """Thin adapter around the frozen ANT runtime for the document/
+    multi-document evaluation track -- the document-substrate counterpart
+    to `ant.agents.ant_adapter.AntAgent`. Registered under a distinct name
+    (`ant_document`, not `ant`) because it needs an example's own
+    `metadata["documents"]` to construct `EvalDocumentEnvironment`
+    (document text isn't recoverable from `environment_root` alone the way
+    a repository's file tree is) -- keeping `ant_adapter.py`'s existing
+    repository-only `AntAgent.run(example, environment_root)` signature
+    and behavior completely untouched.
+    """
+
+    name = "ant_document"
+
+    def __init__(
+        self, model: str = "gpt-4.1", max_rounds: int = 6, index_root: Path | None = None
+    ) -> None:
+        self.model = model
+        self.max_rounds = max_rounds
+        self.index_root = index_root or Path(".ant/eval-suite-documents")
+
+    def _index_path_for(self, example: TaskExample, environment_root: Path) -> Path:
+        return self.index_root / example.benchmark / environment_root.name
+
+    def _ensure_indexed(
+        self, environment: EvalDocumentEnvironment, index_path: Path
+    ) -> list[Territory]:
+        territories = _document_territories(environment)
+        if (index_path / "workers.json").exists():
+            return territories
+        # build_worker_cards is frozen core, called completely unmodified --
+        # see module docstring's Category A/B/C classification.
+        workers = build_worker_cards(environment.root, territories)
+        IndexStore(index_path).save(territories, workers)
+        return territories
+
+    def run(self, example: TaskExample, environment_root: Path) -> AgentResult:
+        documents = [DocumentRecord(**d) for d in example.metadata["documents"]]
+        environment = EvalDocumentEnvironment(environment_root, documents)
+        index_path = self._index_path_for(example, environment_root)
+        territories = self._ensure_indexed(environment, index_path)
+        workers = IndexStore(index_path).load_workers()
+
+        provider = CountingOpenAIProvider(model=self.model)
+        coordinator = LocalCoordinator(
+            environment_root,
+            workers,
+            reasoner=provider,
+            synthesizer=provider,
+            index_path=index_path,
+            # memory_routes / cross_repo_experience deliberately omitted --
+            # same "ordinary clean runtime" shape as ant_adapter.AntAgent.
+        )
+        state = coordinator.ask(example.question, max_rounds=self.max_rounds)
+        llm_calls = provider.drain_call_count()
+
+        # Behavioral-diagnostic counts for Section 13/14 of the long-context
+        # evaluation spec -- disclosed operationalizations, not invented ad
+        # hoc: see module docstring and each comment below for exactly what
+        # each counts and from which core-owned trajectory field.
+        activated_worker_ids = {
+            worker_id
+            for round_ in state.rounds
+            for ne in round_.node_executions
+            for worker_id in ne.worker_ids
+        }
+        need_nodes_created = {
+            node_id for round_ in state.rounds for node_id in round_.graph_delta.created_nodes
+        }
+        # "Need revision": a round's graph_delta recording either a
+        # dependency change or a new children list for an EXISTING node
+        # (i.e. structural graph rewiring beyond simple initial creation).
+        need_revisions = sum(
+            len(round_.graph_delta.dependency_changes) + len(round_.graph_delta.created_children)
+            for round_ in state.rounds
+        )
+        # "Reroute": a need_id whose recovery-state shows more than one
+        # distinct worker was ever tried against it -- i.e. the coordinator
+        # moved off its first-assigned worker for that need at runtime.
+        reroutes = sum(
+            1
+            for tried in state.final_recovery_state.tried_workers_by_node.values()
+            if len(tried) > 1
+        )
+        recovery_events = len(state.final_recovery_state.stuck_episodes)
+
+        return AgentResult(
+            benchmark=example.benchmark,
+            task_id=example.task_id,
+            method=self.name,
+            final_answer=state.answer,
+            trajectory=[round_.model_dump() for round_ in state.rounds],
+            evidence=[item.model_dump() for item in state.evidence],
+            usage=UsageStats(
+                llm_calls=llm_calls,
+                input_tokens=state.usage.input_tokens,
+                output_tokens=state.usage.output_tokens,
+                total_tokens=state.usage.total_tokens,
+                estimated_cost_usd=state.usage.estimated_cost_usd,
+                wall_clock_seconds=state.usage.latency_ms / 1000.0,
+                tool_calls=sum(
+                    len(obs.actions)
+                    for round_ in state.rounds
+                    for ne in round_.node_executions
+                    for obs in ne.observations
+                ),
+                unique_files_inspected=len({item.path for item in state.evidence}),
+            ),
+            termination_reason=(
+                "unresolved_needs_remain" if state.unresolved_needs else "all_needs_resolved"
+            ),
+            metadata={
+                "generation_model": self.model,
+                "final_need_graph_size": len(state.final_need_graph),
+                "facet_rescue": state.facet_rescue.model_dump() if state.facet_rescue else None,
+                "total_territories": len(territories),
+                "workers_available": len(workers),
+                "workers_activated": len(activated_worker_ids),
+                "need_nodes_created": len(need_nodes_created),
+                "need_revisions": need_revisions,
+                "reroutes": reroutes,
+                "recovery_events": recovery_events,
+                "evidence_count": len(state.evidence),
+            },
+        )
+
+
+from ant.evaluation_suite.registry import register_agent  # noqa: E402
+
+register_agent(AntDocumentAgent())
