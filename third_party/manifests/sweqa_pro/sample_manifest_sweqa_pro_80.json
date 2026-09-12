@@ -1,6 +1,6 @@
 {
   "name": "SWE-QA-Pro-80",
-  "status": "frozen_full",
+  "status": "frozen_final",
   "status_note": "80-task evaluation set: 8 repositories x 10 questions each, the SAME 8 repos as the frozen 20-task pilot (qibo, seaborn, sphinx, yt-dlp, pennylane, sqlfluff, sanic, Pillow) -- web3.py and checkov (the pilot's 2 diversity-extension repos) are excluded from this expansion per explicit instruction. The existing 16 pilot task_ids (2/repo) are preserved verbatim. The 64 new task_ids are the FULL REMAINDER of each repo's own dataset (each of these 8 repos has exactly 10 total examples in the live SWE-QA-Pro dataset, verified live at build time) -- selection therefore required no discretionary choice: every non-pilot example for these repos is included. No score of any kind (pilot method scores, ANT performance, baseline performance, gold/reference answer content) was read or used to choose any task_id; only task_id, repo, cluster, and qa_type metadata were consulted.",
   "benchmark": "sweqa_pro",
   "benchmark_commit": null,
@@ -1150,5 +1150,18 @@
   "total_task_ids": 80,
   "total_repositories": 8,
   "questions_per_repository": 10,
-  "created_at": "2026-09-11T16:35:21.836322+00:00"
+  "created_at": "2026-09-11T16:35:21.836322+00:00",
+  "baseline_results_status": "frozen_final",
+  "baseline_results_note": "All 80 tasks x 5 baseline methods (Direct, Retrieval, Matched ReAct, official SWE-QA-Pro ToolCallingAgent, MR+RepoGraph) generated and scored with zero exceptions; results in output/runs/sweqa-pro-80/ (gitignored). All 5 methods reused the 16 overlapping pilot task outputs verbatim from output/runs/sweqa-pro-pilot/ (confirmed to already be post-RepoGraph-fidelity-fix: 18/20 matched_react_repograph pilot rows show search_repograph_used=True, matching the pilot manifest own addendum) and generated the remaining 64 tasks fresh. One disclosed, purely arithmetic correction on reuse: all 16 reused sweqa_pro_native_agent rows had a stale generation_cost_usd=0.0 (the cost-accounting fix landed in the wrapper code but the already-saved pilot JSON files were never recomputed); this pass recomputed that one field from the same already-frozen token counts using the same pricing table every other baseline uses -- no new generation, no rescoring, no other field touched. ANT was not run.",
+  "baseline_methods": [
+    "direct",
+    "retrieval",
+    "matched_react",
+    "sweqa_pro_native_agent",
+    "matched_react_repograph"
+  ],
+  "baseline_excluded": "ant (not run this pass)",
+  "repograph_efficiency_bookkeeping": "third_party/manifests/sweqa_pro/repograph_efficiency_sweqa_pro_80.json",
+  "task_metadata_reference": "third_party/manifests/sweqa_pro/task_metadata_sweqa_pro_80.json",
+  "frozen_final": true
 }

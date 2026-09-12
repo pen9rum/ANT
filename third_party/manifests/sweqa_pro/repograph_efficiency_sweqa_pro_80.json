@@ -1,0 +1,148 @@
+{
+  "name": "SWE-QA-Pro-80 RepoGraph efficiency bookkeeping",
+  "status": "frozen",
+  "frozen_timeout_seconds": 150,
+  "per_repo": {
+    "qiboteam/qibo": {
+      "task_count": 10,
+      "eligible_py_files": 134,
+      "isolated_applicability_check": {
+        "outcome": "SUCCESS",
+        "wall_clock_seconds": 4.7
+      },
+      "one_time_preprocessing_seconds": 4.7,
+      "preprocessing_measured": true,
+      "cache_present_during_run": true,
+      "failed_preprocessing_overhead_seconds_upper_bound": 0.0,
+      "search_repograph_calls_total": 29,
+      "matched_react_wall_clock_seconds_total": 404.6,
+      "matched_react_repograph_wall_clock_seconds_total": 557.1,
+      "inference_estimate_seconds": 557.1
+    },
+    "mwaskom/seaborn": {
+      "task_count": 10,
+      "eligible_py_files": 151,
+      "isolated_applicability_check": {
+        "outcome": "SUCCESS",
+        "wall_clock_seconds": 10.8
+      },
+      "one_time_preprocessing_seconds": 10.8,
+      "preprocessing_measured": true,
+      "cache_present_during_run": true,
+      "failed_preprocessing_overhead_seconds_upper_bound": 0.0,
+      "search_repograph_calls_total": 22,
+      "matched_react_wall_clock_seconds_total": 383.6,
+      "matched_react_repograph_wall_clock_seconds_total": 546.6,
+      "inference_estimate_seconds": 546.6
+    },
+    "sphinx-doc/sphinx": {
+      "task_count": 10,
+      "eligible_py_files": 668,
+      "isolated_applicability_check": {
+        "outcome": "no_result_or_degraded",
+        "wall_clock_seconds": 65.4
+      },
+      "one_time_preprocessing_seconds": null,
+      "preprocessing_measured": false,
+      "cache_present_during_run": false,
+      "failed_preprocessing_overhead_seconds_upper_bound": 3600,
+      "search_repograph_calls_total": 24,
+      "matched_react_wall_clock_seconds_total": 402.0,
+      "matched_react_repograph_wall_clock_seconds_total": 3133.2,
+      "inference_estimate_seconds": 0
+    },
+    "yt-dlp/yt-dlp": {
+      "task_count": 10,
+      "eligible_py_files": 1151,
+      "isolated_applicability_check": {
+        "outcome": "no_result_or_degraded",
+        "wall_clock_seconds": 150.0
+      },
+      "one_time_preprocessing_seconds": null,
+      "preprocessing_measured": false,
+      "cache_present_during_run": false,
+      "failed_preprocessing_overhead_seconds_upper_bound": 3300,
+      "search_repograph_calls_total": 22,
+      "matched_react_wall_clock_seconds_total": 462.90000000000003,
+      "matched_react_repograph_wall_clock_seconds_total": 3936.0,
+      "inference_estimate_seconds": 636.0
+    },
+    "PennyLaneAI/pennylane": {
+      "task_count": 10,
+      "eligible_py_files": 763,
+      "isolated_applicability_check": {
+        "outcome": "no_result_or_degraded",
+        "wall_clock_seconds": 150.0
+      },
+      "one_time_preprocessing_seconds": null,
+      "preprocessing_measured": false,
+      "cache_present_during_run": false,
+      "failed_preprocessing_overhead_seconds_upper_bound": 5550,
+      "search_repograph_calls_total": 37,
+      "matched_react_wall_clock_seconds_total": 592.1,
+      "matched_react_repograph_wall_clock_seconds_total": 6376.2,
+      "inference_estimate_seconds": 826.1999999999998
+    },
+    "sqlfluff/sqlfluff": {
+      "task_count": 10,
+      "eligible_py_files": 320,
+      "isolated_applicability_check": {
+        "outcome": "SUCCESS",
+        "wall_clock_seconds": 36.7
+      },
+      "one_time_preprocessing_seconds": 36.7,
+      "preprocessing_measured": true,
+      "cache_present_during_run": true,
+      "failed_preprocessing_overhead_seconds_upper_bound": 0.0,
+      "search_repograph_calls_total": 17,
+      "matched_react_wall_clock_seconds_total": 425.2,
+      "matched_react_repograph_wall_clock_seconds_total": 719.3,
+      "inference_estimate_seconds": 719.3
+    },
+    "sanic-org/sanic": {
+      "task_count": 10,
+      "eligible_py_files": 311,
+      "isolated_applicability_check": {
+        "outcome": "SUCCESS",
+        "wall_clock_seconds": 25.8
+      },
+      "one_time_preprocessing_seconds": 25.8,
+      "preprocessing_measured": true,
+      "cache_present_during_run": true,
+      "failed_preprocessing_overhead_seconds_upper_bound": 0.0,
+      "search_repograph_calls_total": 28,
+      "matched_react_wall_clock_seconds_total": 460.8,
+      "matched_react_repograph_wall_clock_seconds_total": 546.4,
+      "inference_estimate_seconds": 546.4
+    },
+    "python-pillow/Pillow": {
+      "task_count": 10,
+      "eligible_py_files": 279,
+      "isolated_applicability_check": {
+        "outcome": "SUCCESS",
+        "wall_clock_seconds": 24.3
+      },
+      "one_time_preprocessing_seconds": 24.3,
+      "preprocessing_measured": true,
+      "cache_present_during_run": true,
+      "failed_preprocessing_overhead_seconds_upper_bound": 0.0,
+      "search_repograph_calls_total": 13,
+      "matched_react_wall_clock_seconds_total": 265.6,
+      "matched_react_repograph_wall_clock_seconds_total": 477.5,
+      "inference_estimate_seconds": 477.5
+    }
+  },
+  "totals": {
+    "raw_mr_repograph_wall_clock_hours": 4.526,
+    "timeout_overhead_upper_bound_hours": 3.458,
+    "timeout_overhead_upper_bound_fraction": 0.7642,
+    "inference_estimate_hours": 1.197,
+    "inference_estimate_fraction": 0.2645
+  },
+  "caveats": [
+    "No per-tool-call timestamp is recorded in the frozen trajectories, so overhead figures for repos where construction never succeeded are an UPPER BOUND (failed_calls x 150s ceiling), not a measured duration.",
+    "For repos that succeeded live despite an inconclusive/degraded isolated check, exact one-time construction duration is not separately instrumented; bounded above by the same 150s per-call ceiling.",
+    "'inference (est.)' = raw MR+RepoGraph wall-clock minus the overhead upper bound; an estimate, not an exact measurement.",
+    "sphinx-doc/sphinx: the failed-call overhead upper bound (3600s = 24 calls x 150s) exceeds the raw MR+RepoGraph wall-clock for this repo (3133.2s), so the naive subtraction clamps to 0.0s estimated inference -- a sign that the uniform 150s-per-call assumption is not tight for this repo specifically; real failed construction attempts on sphinx likely completed somewhat faster than the full ceiling on average. Disclosed rather than silently clamped: treat sphinx inference estimate as unreliable/a floor of 0, not a measured value, and treat its overhead figure as a looser upper bound than for other repos."
+  ]
+}

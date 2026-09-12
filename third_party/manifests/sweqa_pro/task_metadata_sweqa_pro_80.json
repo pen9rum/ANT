@@ -1,0 +1,882 @@
+{
+  "355a4aa23fedfe23": {
+    "repo": "qiboteam/qibo",
+    "cluster": {
+      "id": "2.3",
+      "name": "type and attribute errors / initialization / CLI workflow"
+    },
+    "qa_type": {
+      "class_name": "What (Factual Queries)",
+      "sub_class_name": "Dependency & Inheritance"
+    }
+  },
+  "9c20dc43873e8470": {
+    "repo": "qiboteam/qibo",
+    "cluster": {
+      "id": "8.3",
+      "name": "data parallel / compression / ML plugin / indexing"
+    },
+    "qa_type": {
+      "class_name": "Where (Localization Queries)",
+      "sub_class_name": "Data & Control Flow"
+    }
+  },
+  "5cb320d719566e23": {
+    "repo": "qiboteam/qibo",
+    "cluster": {
+      "id": "8.5",
+      "name": "ML APIs / decorators / metrics / optimization strategies"
+    },
+    "qa_type": {
+      "class_name": "How (Procedural Queries)",
+      "sub_class_name": "Algorithm Implementation"
+    }
+  },
+  "b93c31147ace128d": {
+    "repo": "qiboteam/qibo",
+    "cluster": {
+      "id": "9.3",
+      "name": "3D rendering / legends / color mapping / visualization formatting"
+    },
+    "qa_type": {
+      "class_name": "Where (Localization Queries)",
+      "sub_class_name": "Identifier Location"
+    }
+  },
+  "9472b73920d049d9": {
+    "repo": "qiboteam/qibo",
+    "cluster": {
+      "id": "8.1",
+      "name": "ML analytical visualization / Fourier / ML animation / calibration"
+    },
+    "qa_type": {
+      "class_name": "How (Procedural Queries)",
+      "sub_class_name": "System Design & Patterns"
+    }
+  },
+  "a6137d3b8c71c61f": {
+    "repo": "qiboteam/qibo",
+    "cluster": {
+      "id": "8.1",
+      "name": "ML analytical visualization / Fourier / ML animation / calibration"
+    },
+    "qa_type": {
+      "class_name": "What (Factual Queries)",
+      "sub_class_name": "Architecture & Components"
+    }
+  },
+  "dc7063c430604eac": {
+    "repo": "qiboteam/qibo",
+    "cluster": {
+      "id": "5.5",
+      "name": "parallel execution / distributed frameworks / task graphs"
+    },
+    "qa_type": {
+      "class_name": "Why (Causal Queries)",
+      "sub_class_name": "Design Rationale"
+    }
+  },
+  "91f6683f1816424a": {
+    "repo": "qiboteam/qibo",
+    "cluster": {
+      "id": "8.4",
+      "name": "bayesian models / MCMC / statistics / reproducibility"
+    },
+    "qa_type": {
+      "class_name": "What (Factual Queries)",
+      "sub_class_name": "Architecture & Components"
+    }
+  },
+  "6656a3f809e31c27": {
+    "repo": "qiboteam/qibo",
+    "cluster": {
+      "id": "9.1",
+      "name": "plotting systems / widgets / maps / UI animation / usability"
+    },
+    "qa_type": {
+      "class_name": "Where (Localization Queries)",
+      "sub_class_name": "Feature Location"
+    }
+  },
+  "3f0918f490f79681": {
+    "repo": "qiboteam/qibo",
+    "cluster": {
+      "id": "8.0",
+      "name": "tensors / training / GPU / ML experiment logging / tuning"
+    },
+    "qa_type": {
+      "class_name": "How (Procedural Queries)",
+      "sub_class_name": "Algorithm Implementation"
+    }
+  },
+  "5e37af2e50a35d6f": {
+    "repo": "sanic-org/sanic",
+    "cluster": {
+      "id": "5.0",
+      "name": "asyncio / async context / resource cleanup"
+    },
+    "qa_type": {
+      "class_name": "What (Factual Queries)",
+      "sub_class_name": "Dependency & Inheritance"
+    }
+  },
+  "3f9e378b6e580e8f": {
+    "repo": "sanic-org/sanic",
+    "cluster": {
+      "id": "5.0",
+      "name": "asyncio / async context / resource cleanup"
+    },
+    "qa_type": {
+      "class_name": "Why (Causal Queries)",
+      "sub_class_name": "Design Rationale"
+    }
+  },
+  "3095fffab0d6ac06": {
+    "repo": "sanic-org/sanic",
+    "cluster": {
+      "id": "5.1",
+      "name": "multiprocessing / advanced runtime / concurrency / heterogeneous compute"
+    },
+    "qa_type": {
+      "class_name": "Why (Causal Queries)",
+      "sub_class_name": "Purpose & Role"
+    }
+  },
+  "0b6be6237e54890e": {
+    "repo": "sanic-org/sanic",
+    "cluster": {
+      "id": "5.4",
+      "name": "connection lifecycle / protocol handling / low-level failures"
+    },
+    "qa_type": {
+      "class_name": "Where (Localization Queries)",
+      "sub_class_name": "Feature Location"
+    }
+  },
+  "5f1272f5eb849bdc": {
+    "repo": "sanic-org/sanic",
+    "cluster": {
+      "id": "7.5",
+      "name": "OAuth / JWT / SSL / access control / user sessions/ token lifecycle"
+    },
+    "qa_type": {
+      "class_name": "How (Procedural Queries)",
+      "sub_class_name": "System Design & Patterns"
+    }
+  },
+  "271fa47a0fbfb2df": {
+    "repo": "sanic-org/sanic",
+    "cluster": {
+      "id": "5.4",
+      "name": "connection lifecycle / protocol handling / low-level failures"
+    },
+    "qa_type": {
+      "class_name": "How (Procedural Queries)",
+      "sub_class_name": "Algorithm Implementation"
+    }
+  },
+  "90aaeda9da28f687": {
+    "repo": "sanic-org/sanic",
+    "cluster": {
+      "id": "3.1",
+      "name": "install / virtual env / OS / hardware requirements / cloud deploy"
+    },
+    "qa_type": {
+      "class_name": "Why (Causal Queries)",
+      "sub_class_name": "Design Rationale"
+    }
+  },
+  "9e6f96f277f0f971": {
+    "repo": "sanic-org/sanic",
+    "cluster": {
+      "id": "5.1",
+      "name": "multiprocessing / advanced runtime / concurrency / heterogeneous compute"
+    },
+    "qa_type": {
+      "class_name": "Why (Causal Queries)",
+      "sub_class_name": "Performance & Scalability"
+    }
+  },
+  "a4f9ee492dec47b1": {
+    "repo": "sanic-org/sanic",
+    "cluster": {
+      "id": "9.0",
+      "name": "UI layout / CSS / markdown / table extraction / frontend security"
+    },
+    "qa_type": {
+      "class_name": "Where (Localization Queries)",
+      "sub_class_name": "Feature Location"
+    }
+  },
+  "d9b86a6c98603d5b": {
+    "repo": "sanic-org/sanic",
+    "cluster": {
+      "id": "2.3",
+      "name": "type and attribute errors / initialization / CLI workflow"
+    },
+    "qa_type": {
+      "class_name": "What (Factual Queries)",
+      "sub_class_name": "Architecture & Components"
+    }
+  },
+  "849c94676310c3f6": {
+    "repo": "sqlfluff/sqlfluff",
+    "cluster": {
+      "id": "0.1",
+      "name": "SQL / structured grammar / templating Engine"
+    },
+    "qa_type": {
+      "class_name": "What (Factual Queries)",
+      "sub_class_name": "Dependency & Inheritance"
+    }
+  },
+  "bcf09b0201e4d2f4": {
+    "repo": "sqlfluff/sqlfluff",
+    "cluster": {
+      "id": "0.1",
+      "name": "SQL / structured grammar / templating Engine"
+    },
+    "qa_type": {
+      "class_name": "How (Procedural Queries)",
+      "sub_class_name": "Algorithm Implementation"
+    }
+  },
+  "6610d8971a34ae08": {
+    "repo": "sqlfluff/sqlfluff",
+    "cluster": {
+      "id": "0.3",
+      "name": "file import/export / metadata / sorting / recurrence"
+    },
+    "qa_type": {
+      "class_name": "Why (Causal Queries)",
+      "sub_class_name": "Performance & Scalability"
+    }
+  },
+  "79b4bc87011da84b": {
+    "repo": "sqlfluff/sqlfluff",
+    "cluster": {
+      "id": "2.3",
+      "name": "type and attribute errors / initialization / CLI workflow"
+    },
+    "qa_type": {
+      "class_name": "Where (Localization Queries)",
+      "sub_class_name": "Feature Location"
+    }
+  },
+  "bbf83e5b28e7b1ae": {
+    "repo": "sqlfluff/sqlfluff",
+    "cluster": {
+      "id": "6.1",
+      "name": "unit testing / mocking / test automation"
+    },
+    "qa_type": {
+      "class_name": "Where (Localization Queries)",
+      "sub_class_name": "Identifier Location"
+    }
+  },
+  "5bf8a9864321440e": {
+    "repo": "sqlfluff/sqlfluff",
+    "cluster": {
+      "id": "0.1",
+      "name": "SQL / structured grammar / templating Engine"
+    },
+    "qa_type": {
+      "class_name": "Where (Localization Queries)",
+      "sub_class_name": "Feature Location"
+    }
+  },
+  "329382a86e7a279f": {
+    "repo": "sqlfluff/sqlfluff",
+    "cluster": {
+      "id": "0.1",
+      "name": "SQL / structured grammar / templating Engine"
+    },
+    "qa_type": {
+      "class_name": "How (Procedural Queries)",
+      "sub_class_name": "Algorithm Implementation"
+    }
+  },
+  "cb33e27df8c22e0c": {
+    "repo": "sqlfluff/sqlfluff",
+    "cluster": {
+      "id": "5.2",
+      "name": "runtime error handling / DB transactions / retry / logging system"
+    },
+    "qa_type": {
+      "class_name": "What (Factual Queries)",
+      "sub_class_name": "Architecture & Components"
+    }
+  },
+  "8c32272010caad03": {
+    "repo": "sqlfluff/sqlfluff",
+    "cluster": {
+      "id": "2.3",
+      "name": "type and attribute errors / initialization / CLI workflow"
+    },
+    "qa_type": {
+      "class_name": "Where (Localization Queries)",
+      "sub_class_name": "Identifier Location"
+    }
+  },
+  "b28ce492fa40f85c": {
+    "repo": "sqlfluff/sqlfluff",
+    "cluster": {
+      "id": "5.1",
+      "name": "multiprocessing / advanced runtime / concurrency / heterogeneous compute"
+    },
+    "qa_type": {
+      "class_name": "Why (Causal Queries)",
+      "sub_class_name": "Design Rationale"
+    }
+  },
+  "daeaf1aacc1da4e8": {
+    "repo": "PennyLaneAI/pennylane",
+    "cluster": {
+      "id": "5.5",
+      "name": "parallel execution / distributed frameworks / task graphs"
+    },
+    "qa_type": {
+      "class_name": "Where (Localization Queries)",
+      "sub_class_name": "Data & Control Flow"
+    }
+  },
+  "801a55b555cd09d9": {
+    "repo": "PennyLaneAI/pennylane",
+    "cluster": {
+      "id": "8.0",
+      "name": "tensors / training / GPU / ML experiment logging / tuning"
+    },
+    "qa_type": {
+      "class_name": "Where (Localization Queries)",
+      "sub_class_name": "Data & Control Flow"
+    }
+  },
+  "5208c28996a3ee18": {
+    "repo": "PennyLaneAI/pennylane",
+    "cluster": {
+      "id": "8.0",
+      "name": "tensors / training / GPU / ML experiment logging / tuning"
+    },
+    "qa_type": {
+      "class_name": "What (Factual Queries)",
+      "sub_class_name": "Dependency & Inheritance"
+    }
+  },
+  "47af69971c1baaaa": {
+    "repo": "PennyLaneAI/pennylane",
+    "cluster": {
+      "id": "8.1",
+      "name": "ML analytical visualization / Fourier / ML animation / calibration"
+    },
+    "qa_type": {
+      "class_name": "Where (Localization Queries)",
+      "sub_class_name": "Feature Location"
+    }
+  },
+  "5a28cbff8aa562af": {
+    "repo": "PennyLaneAI/pennylane",
+    "cluster": {
+      "id": "8.1",
+      "name": "ML analytical visualization / Fourier / ML animation / calibration"
+    },
+    "qa_type": {
+      "class_name": "What (Factual Queries)",
+      "sub_class_name": "Concepts & Definitions"
+    }
+  },
+  "83e365be1fecc6c0": {
+    "repo": "PennyLaneAI/pennylane",
+    "cluster": {
+      "id": "5.2",
+      "name": "runtime error handling / DB transactions / retry / logging system"
+    },
+    "qa_type": {
+      "class_name": "Where (Localization Queries)",
+      "sub_class_name": "Identifier Location"
+    }
+  },
+  "247e8f0767c3070f": {
+    "repo": "PennyLaneAI/pennylane",
+    "cluster": {
+      "id": "6.3",
+      "name": "compiler toolchain / cross-compile / env vars / code quality analysis"
+    },
+    "qa_type": {
+      "class_name": "Where (Localization Queries)",
+      "sub_class_name": "Identifier Location"
+    }
+  },
+  "c905d378bea35eeb": {
+    "repo": "PennyLaneAI/pennylane",
+    "cluster": {
+      "id": "2.0",
+      "name": "protocol serialization / encoding / headers / API compatibility"
+    },
+    "qa_type": {
+      "class_name": "How (Procedural Queries)",
+      "sub_class_name": "System Design & Patterns"
+    }
+  },
+  "63a469b2235e6947": {
+    "repo": "PennyLaneAI/pennylane",
+    "cluster": {
+      "id": "2.1",
+      "name": "dependency injection / config / attrs / API design"
+    },
+    "qa_type": {
+      "class_name": "What (Factual Queries)",
+      "sub_class_name": "Dependency & Inheritance"
+    }
+  },
+  "f85cae6b4fe06bcb": {
+    "repo": "PennyLaneAI/pennylane",
+    "cluster": {
+      "id": "0.3",
+      "name": "file import/export / metadata / sorting / recurrence"
+    },
+    "qa_type": {
+      "class_name": "Where (Localization Queries)",
+      "sub_class_name": "Data & Control Flow"
+    }
+  },
+  "fccb59e36e13b4b7": {
+    "repo": "mwaskom/seaborn",
+    "cluster": {
+      "id": "1.1",
+      "name": "pandas / parquet / datetime / Dask / table schema"
+    },
+    "qa_type": {
+      "class_name": "Why (Causal Queries)",
+      "sub_class_name": "Performance & Scalability"
+    }
+  },
+  "28d9b344cb4c13fc": {
+    "repo": "mwaskom/seaborn",
+    "cluster": {
+      "id": "8.2",
+      "name": "time series / feature engineering / explainability methods / behavioral analysis / computational semantics"
+    },
+    "qa_type": {
+      "class_name": "What (Factual Queries)",
+      "sub_class_name": "Dependency & Inheritance"
+    }
+  },
+  "6ac2f0f051a755da": {
+    "repo": "mwaskom/seaborn",
+    "cluster": {
+      "id": "8.2",
+      "name": "time series / feature engineering / explainability methods / behavioral analysis / computational semantics"
+    },
+    "qa_type": {
+      "class_name": "Where (Localization Queries)",
+      "sub_class_name": "Feature Location"
+    }
+  },
+  "e7d70302d958409d": {
+    "repo": "mwaskom/seaborn",
+    "cluster": {
+      "id": "8.4",
+      "name": "bayesian models / MCMC / statistics / reproducibility"
+    },
+    "qa_type": {
+      "class_name": "Where (Localization Queries)",
+      "sub_class_name": "Identifier Location"
+    }
+  },
+  "7094a83feebd84a6": {
+    "repo": "mwaskom/seaborn",
+    "cluster": {
+      "id": "8.4",
+      "name": "bayesian models / MCMC / statistics / reproducibility"
+    },
+    "qa_type": {
+      "class_name": "Where (Localization Queries)",
+      "sub_class_name": "Data & Control Flow"
+    }
+  },
+  "af28a26347def680": {
+    "repo": "mwaskom/seaborn",
+    "cluster": {
+      "id": "4.1",
+      "name": "release management / changelog / license / community"
+    },
+    "qa_type": {
+      "class_name": "Where (Localization Queries)",
+      "sub_class_name": "Feature Location"
+    }
+  },
+  "d7bda034a4d52b9b": {
+    "repo": "mwaskom/seaborn",
+    "cluster": {
+      "id": "6.2",
+      "name": "build pipeline / doc building / Sphinx / cloud provisioning"
+    },
+    "qa_type": {
+      "class_name": "Why (Causal Queries)",
+      "sub_class_name": "Performance & Scalability"
+    }
+  },
+  "1347185dd7392829": {
+    "repo": "mwaskom/seaborn",
+    "cluster": {
+      "id": "8.2",
+      "name": "time series / feature engineering / explainability methods / behavioral analysis / computational semantics"
+    },
+    "qa_type": {
+      "class_name": "Where (Localization Queries)",
+      "sub_class_name": "Data & Control Flow"
+    }
+  },
+  "ad60de6c0d6748a0": {
+    "repo": "mwaskom/seaborn",
+    "cluster": {
+      "id": "8.4",
+      "name": "bayesian models / MCMC / statistics / reproducibility"
+    },
+    "qa_type": {
+      "class_name": "Why (Causal Queries)",
+      "sub_class_name": "Performance & Scalability"
+    }
+  },
+  "9c364a4a784e153a": {
+    "repo": "mwaskom/seaborn",
+    "cluster": {
+      "id": "6.2",
+      "name": "build pipeline / doc building / Sphinx / cloud provisioning"
+    },
+    "qa_type": {
+      "class_name": "Where (Localization Queries)",
+      "sub_class_name": "Identifier Location"
+    }
+  },
+  "7fdcdb38110cc7a4": {
+    "repo": "yt-dlp/yt-dlp",
+    "cluster": {
+      "id": "7.1",
+      "name": "media download / playlist / metadata / client-side proxy config"
+    },
+    "qa_type": {
+      "class_name": "How (Procedural Queries)",
+      "sub_class_name": "Algorithm Implementation"
+    }
+  },
+  "05533ae903375e6b": {
+    "repo": "yt-dlp/yt-dlp",
+    "cluster": {
+      "id": "7.1",
+      "name": "media download / playlist / metadata / client-side proxy config"
+    },
+    "qa_type": {
+      "class_name": "How (Procedural Queries)",
+      "sub_class_name": "Algorithm Implementation"
+    }
+  },
+  "260cf927c611b25a": {
+    "repo": "yt-dlp/yt-dlp",
+    "cluster": {
+      "id": "9.2",
+      "name": "runtime UI config / UI permission management / upload handling / customization / user-facing runtime extensibility"
+    },
+    "qa_type": {
+      "class_name": "Where (Localization Queries)",
+      "sub_class_name": "Feature Location"
+    }
+  },
+  "64be8a3702a1b025": {
+    "repo": "yt-dlp/yt-dlp",
+    "cluster": {
+      "id": "5.2",
+      "name": "runtime error handling / DB transactions / retry / logging system"
+    },
+    "qa_type": {
+      "class_name": "Where (Localization Queries)",
+      "sub_class_name": "Identifier Location"
+    }
+  },
+  "72ff3fbf2a9985c5": {
+    "repo": "yt-dlp/yt-dlp",
+    "cluster": {
+      "id": "2.1",
+      "name": "dependency injection / config / attrs / API design"
+    },
+    "qa_type": {
+      "class_name": "How (Procedural Queries)",
+      "sub_class_name": "System Design & Patterns"
+    }
+  },
+  "e3f6857934e88658": {
+    "repo": "yt-dlp/yt-dlp",
+    "cluster": {
+      "id": "3.3",
+      "name": "extensibility / configuration framework / plugin architecture"
+    },
+    "qa_type": {
+      "class_name": "How (Procedural Queries)",
+      "sub_class_name": "System Design & Patterns"
+    }
+  },
+  "d365d1dbf8341d7b": {
+    "repo": "yt-dlp/yt-dlp",
+    "cluster": {
+      "id": "3.3",
+      "name": "extensibility / configuration framework / plugin architecture"
+    },
+    "qa_type": {
+      "class_name": "Why (Causal Queries)",
+      "sub_class_name": "Purpose & Role"
+    }
+  },
+  "a26040b6b0b37378": {
+    "repo": "yt-dlp/yt-dlp",
+    "cluster": {
+      "id": "0.3",
+      "name": "file import/export / metadata / sorting / recurrence"
+    },
+    "qa_type": {
+      "class_name": "Where (Localization Queries)",
+      "sub_class_name": "Identifier Location"
+    }
+  },
+  "2c098d175a4e1d21": {
+    "repo": "yt-dlp/yt-dlp",
+    "cluster": {
+      "id": "7.1",
+      "name": "media download / playlist / metadata / client-side proxy config"
+    },
+    "qa_type": {
+      "class_name": "What (Factual Queries)",
+      "sub_class_name": "Concepts & Definitions"
+    }
+  },
+  "075628f5cefca956": {
+    "repo": "yt-dlp/yt-dlp",
+    "cluster": {
+      "id": "5.2",
+      "name": "runtime error handling / DB transactions / retry / logging system"
+    },
+    "qa_type": {
+      "class_name": "Where (Localization Queries)",
+      "sub_class_name": "Feature Location"
+    }
+  },
+  "9bf2cf5fdecc36bf": {
+    "repo": "sphinx-doc/sphinx",
+    "cluster": {
+      "id": "4.0",
+      "name": "version control / Docker / build cache"
+    },
+    "qa_type": {
+      "class_name": "Why (Causal Queries)",
+      "sub_class_name": "Performance & Scalability"
+    }
+  },
+  "90b80dc51b5a8a4a": {
+    "repo": "sphinx-doc/sphinx",
+    "cluster": {
+      "id": "4.0",
+      "name": "version control / Docker / build cache"
+    },
+    "qa_type": {
+      "class_name": "What (Factual Queries)",
+      "sub_class_name": "Dependency & Inheritance"
+    }
+  },
+  "95e60f2cabd48e5e": {
+    "repo": "sphinx-doc/sphinx",
+    "cluster": {
+      "id": "4.1",
+      "name": "release management / changelog / license / community"
+    },
+    "qa_type": {
+      "class_name": "How (Procedural Queries)",
+      "sub_class_name": "System Design & Patterns"
+    }
+  },
+  "812a9dc1bcb3c13d": {
+    "repo": "sphinx-doc/sphinx",
+    "cluster": {
+      "id": "4.3",
+      "name": "async refactor / migration / logging infra / i18n"
+    },
+    "qa_type": {
+      "class_name": "How (Procedural Queries)",
+      "sub_class_name": "System Design & Patterns"
+    }
+  },
+  "9f4acafcaa2cc210": {
+    "repo": "sphinx-doc/sphinx",
+    "cluster": {
+      "id": "6.2",
+      "name": "build pipeline / doc building / Sphinx / cloud provisioning"
+    },
+    "qa_type": {
+      "class_name": "Where (Localization Queries)",
+      "sub_class_name": "Identifier Location"
+    }
+  },
+  "d5d4fa1f763d1fb9": {
+    "repo": "sphinx-doc/sphinx",
+    "cluster": {
+      "id": "4.1",
+      "name": "release management / changelog / license / community"
+    },
+    "qa_type": {
+      "class_name": "What (Factual Queries)",
+      "sub_class_name": "Architecture & Components"
+    }
+  },
+  "f94c102bd15661ac": {
+    "repo": "sphinx-doc/sphinx",
+    "cluster": {
+      "id": "5.3",
+      "name": "threading / execution limits / scheduling / memory / timeout"
+    },
+    "qa_type": {
+      "class_name": "What (Factual Queries)",
+      "sub_class_name": "Dependency & Inheritance"
+    }
+  },
+  "f42a5cb34a0c080c": {
+    "repo": "sphinx-doc/sphinx",
+    "cluster": {
+      "id": "7.5",
+      "name": "OAuth / JWT / SSL / access control / user sessions/ token lifecycle"
+    },
+    "qa_type": {
+      "class_name": "What (Factual Queries)",
+      "sub_class_name": "Dependency & Inheritance"
+    }
+  },
+  "48deec23c86a40d8": {
+    "repo": "sphinx-doc/sphinx",
+    "cluster": {
+      "id": "9.1",
+      "name": "plotting systems / widgets / maps / UI animation / usability"
+    },
+    "qa_type": {
+      "class_name": "What (Factual Queries)",
+      "sub_class_name": "Concepts & Definitions"
+    }
+  },
+  "39de7debd3fdb4c2": {
+    "repo": "sphinx-doc/sphinx",
+    "cluster": {
+      "id": "4.0",
+      "name": "version control / Docker / build cache"
+    },
+    "qa_type": {
+      "class_name": "Where (Localization Queries)",
+      "sub_class_name": "Feature Location"
+    }
+  },
+  "bc2529a9b2fc8ffc": {
+    "repo": "python-pillow/Pillow",
+    "cluster": {
+      "id": "1.2",
+      "name": "numpy / dask arrays / dtype / array serialization / parallel"
+    },
+    "qa_type": {
+      "class_name": "Why (Causal Queries)",
+      "sub_class_name": "Design Rationale"
+    }
+  },
+  "ed64f29ea4a556f5": {
+    "repo": "python-pillow/Pillow",
+    "cluster": {
+      "id": "3.3",
+      "name": "extensibility / configuration framework / plugin architecture"
+    },
+    "qa_type": {
+      "class_name": "Why (Causal Queries)",
+      "sub_class_name": "Design Rationale"
+    }
+  },
+  "b25530160e601835": {
+    "repo": "python-pillow/Pillow",
+    "cluster": {
+      "id": "4.4",
+      "name": "CI pipelines / coverage / lint / GitHub Actions / security checks"
+    },
+    "qa_type": {
+      "class_name": "Where (Localization Queries)",
+      "sub_class_name": "Identifier Location"
+    }
+  },
+  "d298a1fd5ee5c00b": {
+    "repo": "python-pillow/Pillow",
+    "cluster": {
+      "id": "5.2",
+      "name": "runtime error handling / DB transactions / retry / logging system"
+    },
+    "qa_type": {
+      "class_name": "Why (Causal Queries)",
+      "sub_class_name": "Performance & Scalability"
+    }
+  },
+  "6b736c354c51b8ec": {
+    "repo": "python-pillow/Pillow",
+    "cluster": {
+      "id": "3.3",
+      "name": "extensibility / configuration framework / plugin architecture"
+    },
+    "qa_type": {
+      "class_name": "How (Procedural Queries)",
+      "sub_class_name": "System Design & Patterns"
+    }
+  },
+  "ad0cbdd80b535439": {
+    "repo": "python-pillow/Pillow",
+    "cluster": {
+      "id": "4.3",
+      "name": "async refactor / migration / logging infra / i18n"
+    },
+    "qa_type": {
+      "class_name": "How (Procedural Queries)",
+      "sub_class_name": "API & Framework Support"
+    }
+  },
+  "ea992eaecbd8e4d9": {
+    "repo": "python-pillow/Pillow",
+    "cluster": {
+      "id": "8.3",
+      "name": "data parallel / compression / ML plugin / indexing"
+    },
+    "qa_type": {
+      "class_name": "Where (Localization Queries)",
+      "sub_class_name": "Feature Location"
+    }
+  },
+  "9219e15094c9fa5d": {
+    "repo": "python-pillow/Pillow",
+    "cluster": {
+      "id": "1.0",
+      "name": "data formats / FITS / Astropy / units / WCS"
+    },
+    "qa_type": {
+      "class_name": "Where (Localization Queries)",
+      "sub_class_name": "Identifier Location"
+    }
+  },
+  "6ce28ca3a6a06cc2": {
+    "repo": "python-pillow/Pillow",
+    "cluster": {
+      "id": "3.3",
+      "name": "extensibility / configuration framework / plugin architecture"
+    },
+    "qa_type": {
+      "class_name": "How (Procedural Queries)",
+      "sub_class_name": "System Design & Patterns"
+    }
+  },
+  "ea4dc7cad46d18c5": {
+    "repo": "python-pillow/Pillow",
+    "cluster": {
+      "id": "3.3",
+      "name": "extensibility / configuration framework / plugin architecture"
+    },
+    "qa_type": {
+      "class_name": "Why (Causal Queries)",
+      "sub_class_name": "Design Rationale"
+    }
+  }
+}
