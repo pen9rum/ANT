@@ -1,0 +1,162 @@
+{
+  "benchmarks": {
+    "hotpotqa": [
+      {
+        "task_id": "5abd94525542992ac4f382d2",
+        "question": "2014 S/S is the debut album of a South Korean boy group that was formed by who?",
+        "num_documents": 10
+      },
+      {
+        "task_id": "5a85b2d95542997b5ce40028",
+        "question": "Who was known by his stage name Aladin and helped organizations improve their performance as a consultant?",
+        "num_documents": 10
+      },
+      {
+        "task_id": "5a87ab905542996e4f3088c1",
+        "question": "The arena where the Lewiston Maineiacs played their home games can seat how many people?",
+        "num_documents": 10
+      },
+      {
+        "task_id": "5a7bbb64554299042af8f7cc",
+        "question": "Who is older, Annie Morton or Terry Richardson?",
+        "num_documents": 10
+      },
+      {
+        "task_id": "5a8db19d5542994ba4e3dd00",
+        "question": "Are Local H and For Against both from the United States?",
+        "num_documents": 10
+      },
+      {
+        "task_id": "5a7166395542994082a3e814",
+        "question": "What is the name of the fight song of the university whose main campus is in Lawrence, Kansas and whose branch campuses are in the Kansas City metropolitan area?",
+        "num_documents": 10
+      },
+      {
+        "task_id": "5a877e5d5542993e715abf7d",
+        "question": "What screenwriter with credits for \"Evolution\" co-wrote a film starring Nicolas Cage and Téa Leoni?",
+        "num_documents": 10
+      },
+      {
+        "task_id": "5ab3b0bf5542992ade7c6e39",
+        "question": "What year did Guns N Roses perform a promo for a movie starring Arnold Schwarzenegger as a former New York Police detective?",
+        "num_documents": 10
+      },
+      {
+        "task_id": "5ab56e32554299637185c594",
+        "question": "Are Random House Tower and 888 7th Avenue both used for real estate?",
+        "num_documents": 10
+      },
+      {
+        "task_id": "5ab6d09255429954757d337d",
+        "question": "The football manager who recruited David Beckham managed Manchester United during what timeframe?",
+        "num_documents": 10
+      }
+    ],
+    "2wikimultihopqa": [
+      {
+        "task_id": "8981e1ce0bb011ebab90acde48001122",
+        "question": "Who is Charles Bretagne Marie De La Trémoille's paternal grandfather?",
+        "num_documents": 10
+      },
+      {
+        "task_id": "019bed300bde11eba7f7acde48001122",
+        "question": "Where was the father of Ștefan I. Nenițescu born?",
+        "num_documents": 10
+      },
+      {
+        "task_id": "a7b9672009c311ebbdb0ac1f6bf848b6",
+        "question": "Are North Marion High School (Oregon) and Seoul High School both located in the same country?",
+        "num_documents": 10
+      },
+      {
+        "task_id": "298f23b8088a11ebbd6eac1f6bf848b6",
+        "question": "Which film has the director who was born later, El Extraño Viaje or Love In Pawn?",
+        "num_documents": 10
+      },
+      {
+        "task_id": "2ec440560bb011ebab90acde48001122",
+        "question": "Who is the maternal grandfather of Antiochus X Eusebes?",
+        "num_documents": 10
+      },
+      {
+        "task_id": "05f8a691087b11ebbd67ac1f6bf848b6",
+        "question": "Which film has the director died first, Crimen A Las Tres or The Working Class Goes To Heaven?",
+        "num_documents": 10
+      },
+      {
+        "task_id": "645c9a5a08c311ebbd8dac1f6bf848b6",
+        "question": "Which film has the director born first, Once A Gentleman or The Girl In White?",
+        "num_documents": 10
+      },
+      {
+        "task_id": "5bec3cd408a711ebbd7fac1f6bf848b6",
+        "question": "Which film has the director who died earlier, Il Seduttore or The Trial Of Joan Of Arc?",
+        "num_documents": 10
+      },
+      {
+        "task_id": "464cfa460bd911eba7f7acde48001122",
+        "question": "Where was the director of film Thomas Jefferson (Film) born?",
+        "num_documents": 10
+      },
+      {
+        "task_id": "c05e16a40bdd11eba7f7acde48001122",
+        "question": "Why did Grand Duke Kirill Vladimirovich Of Russia's wife die?",
+        "num_documents": 10
+      }
+    ],
+    "musique": [
+      {
+        "task_id": "2hop__697790_864352",
+        "question": "Who is the child of Caroline LeRoy's spouse?",
+        "num_documents": 20
+      },
+      {
+        "task_id": "2hop__207476_625987",
+        "question": "Who is the grandmother of Philippe, Duke of Orléans?",
+        "num_documents": 20
+      },
+      {
+        "task_id": "2hop__390947_232243",
+        "question": "What is the goal of the group that European Movement Germany is a member of?",
+        "num_documents": 20
+      },
+      {
+        "task_id": "2hop__354635_174222",
+        "question": "What company succeeded the owner of Empire Sports Network?",
+        "num_documents": 20
+      },
+      {
+        "task_id": "2hop__635187_861533",
+        "question": "What province shares a border with the province where Lago District is located?",
+        "num_documents": 20
+      },
+      {
+        "task_id": "2hop__166824_185403",
+        "question": "What league does the team that plays in Stadio Ciro Vigorito play for?",
+        "num_documents": 20
+      },
+      {
+        "task_id": "2hop__698577_851686",
+        "question": "What is a notable work written by the author of The Timothy files?",
+        "num_documents": 20
+      },
+      {
+        "task_id": "2hop__362107_652514",
+        "question": "In which borough was Callum McManaman born?",
+        "num_documents": 20
+      },
+      {
+        "task_id": "2hop__402530_774333",
+        "question": "What other county does the county where Imperial is located share a border with?",
+        "num_documents": 20
+      },
+      {
+        "task_id": "2hop__195917_575657",
+        "question": "In what county is William W. Blair's birthplace located?",
+        "num_documents": 20
+      }
+    ]
+  },
+  "selection_policy": "rows 6-15 (0-indexed 5-14) of each benchmark own validation-split row order -- the NEXT 10 deterministic rows immediately following the already-used first 5, same policy, never inspected for score/difficulty/gold content before freezing",
+  "frozen_final": true
+}
