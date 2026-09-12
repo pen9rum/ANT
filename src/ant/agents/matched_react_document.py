@@ -29,7 +29,10 @@ from pathlib import Path
 from ant.agents.base import AgentResult
 from ant.benchmarks.base import TaskExample
 from ant.domain import Evidence
-from ant.evaluation_suite.answer_contract import condense_to_answer_span
+from ant.evaluation_suite.answer_contract import (
+    apply_context_authoritative_regrounding,
+    condense_to_answer_span,
+)
 from ant.evaluation_suite.counting_provider import CountingOpenAIProvider
 from ant.evaluation_suite.document_scope import (
     DocumentRecord,
@@ -183,16 +186,28 @@ class MatchedReActDocumentAgent:
             )
 
         raw_answer = final_answer
+        all_evidence = [item for entry in history for item in entry["results"]]
+        # Single-Needle Contamination Study Condition B -- post-hoc,
+        # against the evidence this agent's OWN tool-use loop already
+        # gathered (never re-injected into the tool-selection prompts above).
+        grounded_answer = raw_answer
+        if example.metadata.get("answer_contract_condition") == "B":
+            evidence_block = "\n".join(
+                f"[{item['path']}:{item['line_start']}-{item['line_end']}] {item['quote']}"
+                for item in all_evidence
+            )
+            grounded_answer = apply_context_authoritative_regrounding(
+                provider, example.question, raw_answer, evidence_block
+            )
         # Shared short-answer contract (Part A) -- post-hoc only, applied
         # after the agent's own tool-use loop has already finished (either
         # via its own "finish" decision or the budget-exhausted fallback
         # synthesis above); the tool-selection/reasoning loop itself is
         # completely unaffected.
-        final_answer = condense_to_answer_span(provider, example.question, final_answer)
+        final_answer = condense_to_answer_span(provider, example.question, grounded_answer)
         llm_calls = provider.drain_call_count()
         token_usage = provider.drain_usage()
         elapsed = time.time() - started
-        all_evidence = [item for entry in history for item in entry["results"]]
         tool_type_counts: dict[str, int] = {}
         for entry in history:
             tool_type_counts[entry["tool"]] = tool_type_counts.get(entry["tool"], 0) + 1
@@ -221,6 +236,7 @@ class MatchedReActDocumentAgent:
                 "tool_type_counts": tool_type_counts,
                 "steps_taken": len(history),
                 "raw_answer_before_condensation": raw_answer,
+                "answer_contract_condition": example.metadata.get("answer_contract_condition"),
             },
         )
 

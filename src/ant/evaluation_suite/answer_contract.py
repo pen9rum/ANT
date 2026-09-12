@@ -77,6 +77,73 @@ as briefly as possible (e.g. "not stated in the provided documents")."""
 CONDENSE_MAX_OUTPUT_TOKENS = 64
 
 
+CONTEXT_AUTHORITATIVE_INSTRUCTION = (
+    "Answer strictly according to the provided context. Treat the provided context as "
+    "authoritative even if it conflicts with your prior knowledge. Do not rely on memorized "
+    "world knowledge when it conflicts with the supplied context."
+)
+
+_REGROUND_PROMPT = """Question: {question}
+
+Context/evidence already gathered for this question:
+{context_text}
+
+An answer was already produced for this question: {raw_answer}
+
+{instruction}
+
+Re-state the answer, strictly grounded in the context/evidence above. If the context/evidence \
+above directly states an answer that differs from what was previously produced, use the answer \
+the context/evidence actually states instead."""
+
+# Same fixed-budget philosophy as CONDENSE_MAX_OUTPUT_TOKENS -- not tuned
+# per method/condition.
+REGROUND_MAX_OUTPUT_TOKENS = 200
+
+# A single-needle/multi-document context/evidence block can be very large
+# (Direct's own full document context, in particular). Regrounding is meant
+# to re-check the answer against material the method ALREADY saw, not to
+# re-run a second full-context pass at unbounded cost -- so this caps how
+# much of `context_text` the regrounding prompt actually includes. This is
+# an engineering cost-control cap, not a relevance filter: it always takes
+# a PREFIX (arbitrary, not chosen by relevance) of already-gathered
+# material, never re-selects or re-ranks it.
+MAX_REGROUND_CONTEXT_CHARS = 20_000
+
+
+def apply_context_authoritative_regrounding(
+    provider: _TextResponder, question: str, raw_answer: str, context_text: str
+) -> str:
+    """Single-Needle Contamination Study Condition B (see docs/niah_plus_
+    fidelity_audit.md's sibling contamination-study note): a generic,
+    method-neutral instruction telling the model to prefer the supplied
+    context over memorized world knowledge -- applied the SAME way
+    `condense_to_answer_span` is: strictly POST-HOC, after the calling
+    method's own reasoning/search/coordination has already fully finished
+    and already produced `raw_answer` and `context_text` (whatever
+    evidence/context that method already gathered on its own). This is
+    NOT injected into any question string used for routing/search/term
+    extraction -- for ANT in particular, this must only ever be called
+    after `LocalCoordinator.ask()` has already returned, exactly like
+    `condense_to_answer_span`'s own module-docstring rationale.
+
+    Applied BEFORE `condense_to_answer_span` when both are used together
+    (a Condition-B run must reground first, then condense to the short
+    final-answer format).
+    """
+    if not raw_answer.strip():
+        return raw_answer
+    prompt = _REGROUND_PROMPT.format(
+        question=question,
+        context_text=context_text[:MAX_REGROUND_CONTEXT_CHARS],
+        raw_answer=raw_answer,
+        instruction=CONTEXT_AUTHORITATIVE_INSTRUCTION,
+    )
+    result = provider.responses_text(prompt, max_output_tokens=REGROUND_MAX_OUTPUT_TOKENS)
+    regrounded = result.text.strip()
+    return regrounded or raw_answer
+
+
 def condense_to_answer_span(provider: _TextResponder, question: str, raw_answer: str) -> str:
     """Applied identically, as the LAST step, by all five methods' own
     `run()` -- see module docstring for why this is a post-hoc wrapper

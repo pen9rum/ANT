@@ -27,6 +27,7 @@ from ant.providers.openai_provider import ResponseResult
 
 RAW_ANSWER = "A long discursive paragraph that eventually concludes: yes."
 CONDENSED_ANSWER = "yes"
+REGROUNDED_ANSWER = "the context-grounded answer"
 
 
 class _FakeProvider:
@@ -38,9 +39,11 @@ class _FakeProvider:
     single fake works for all three without per-agent branching logic.
     """
 
-    def __init__(self, decisions: list[str] | None = None) -> None:
+    def __init__(self, decisions: list[str] | None = None, regrounded_answer: str = "") -> None:
         self._decisions = list(decisions or [])
         self.condense_calls: list[str] = []
+        self.reground_calls: list[str] = []
+        self._regrounded_answer = regrounded_answer or REGROUNDED_ANSWER
         self._calls = 0
 
     def responses_text(self, prompt: str, max_output_tokens: int = 512) -> ResponseResult:
@@ -48,6 +51,9 @@ class _FakeProvider:
         if "to be condensed, not replaced" in prompt:
             self.condense_calls.append(prompt)
             return ResponseResult(text=CONDENSED_ANSWER, usage=TokenUsage(), raw={})
+        if "strictly grounded in the context/evidence above" in prompt:
+            self.reground_calls.append(prompt)
+            return ResponseResult(text=self._regrounded_answer, usage=TokenUsage(), raw={})
         return ResponseResult(text=RAW_ANSWER, usage=TokenUsage(), raw={})
 
     def responses_json(self, prompt: str, max_output_tokens: int = 512) -> ResponseResult:
@@ -71,15 +77,18 @@ class _FakeProvider:
         return []
 
 
-def _example_with_documents(tmp_path: Path) -> TaskExample:
+def _example_with_documents(tmp_path: Path, condition: str | None = None) -> TaskExample:
     documents = [DocumentRecord(doc_id="doc0", title="T", text="alpha beta gamma")]
     materialize_documents(documents, tmp_path)
+    metadata: dict = {"documents": [d.model_dump() for d in documents]}
+    if condition is not None:
+        metadata["answer_contract_condition"] = condition
     return TaskExample(
         benchmark="test",
         task_id="t1",
         question="Is this a question?",
         reference="[]",
-        metadata={"documents": [d.model_dump() for d in documents]},
+        metadata=metadata,
     )
 
 
@@ -194,3 +203,117 @@ def test_ant_document_adapter_calls_the_shared_condensation_function_after_ask_r
     assert question == example.question
     assert raw_answer == RAW_ANSWER
     assert result.metadata["raw_answer_before_condensation"] == raw_answer
+
+
+# ---------------------------------------------------------------------------
+# Single-Needle Contamination Study Condition B: apply_context_authoritative_
+# regrounding must run BEFORE condensation, and ONLY when
+# example.metadata["answer_contract_condition"] == "B" -- a no-op for every
+# other condition/track, since that key is absent everywhere else.
+# ---------------------------------------------------------------------------
+
+
+def test_direct_document_condition_b_regrounds_before_condensing(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    fake = _FakeProvider()
+    monkeypatch.setattr(direct_document_module, "CountingOpenAIProvider", lambda model: fake)
+    example = _example_with_documents(tmp_path, condition="B")
+
+    result = direct_document_module.DirectDocumentAgent().run(example, tmp_path)
+
+    assert len(fake.reground_calls) == 1
+    assert len(fake.condense_calls) == 1
+    assert result.final_answer == CONDENSED_ANSWER
+    assert result.metadata["answer_contract_condition"] == "B"
+    assert result.metadata["grounded_answer_after_regrounding"] == REGROUNDED_ANSWER
+
+
+def test_direct_document_condition_none_never_regrounds(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    fake = _FakeProvider()
+    monkeypatch.setattr(direct_document_module, "CountingOpenAIProvider", lambda model: fake)
+    example = _example_with_documents(tmp_path)  # no condition set
+
+    result = direct_document_module.DirectDocumentAgent().run(example, tmp_path)
+
+    assert len(fake.reground_calls) == 0
+    assert result.metadata["answer_contract_condition"] is None
+    assert result.metadata["grounded_answer_after_regrounding"] is None
+
+
+def test_retrieval_document_condition_b_regrounds_before_condensing(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    fake = _FakeProvider()
+    monkeypatch.setattr(retrieval_document_module, "CountingOpenAIProvider", lambda model: fake)
+    example = _example_with_documents(tmp_path, condition="B")
+
+    result = retrieval_document_module.RetrievalDocumentAgent().run(example, tmp_path)
+
+    assert len(fake.reground_calls) == 1
+    assert len(fake.condense_calls) == 1
+    assert result.final_answer == CONDENSED_ANSWER
+
+
+def test_matched_react_document_condition_b_regrounds_before_condensing(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    fake = _FakeProvider(decisions=[f'{{"finish": "{RAW_ANSWER}"}}'])
+    monkeypatch.setattr(matched_react_document_module, "CountingOpenAIProvider", lambda model: fake)
+    example = _example_with_documents(tmp_path, condition="B")
+
+    result = matched_react_document_module.MatchedReActDocumentAgent().run(example, tmp_path)
+
+    assert len(fake.reground_calls) == 1
+    assert len(fake.condense_calls) == 1
+    assert result.final_answer == CONDENSED_ANSWER
+
+
+def test_ant_document_adapter_condition_b_regrounds_before_condensing(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from ant.domain import Evidence, EvidenceState
+
+    reground_calls: list[tuple[str, str]] = []
+    condense_calls: list[str] = []
+
+    def _fake_reground(provider: object, question: str, raw_answer: str, context_text: str) -> str:
+        del provider
+        reground_calls.append((raw_answer, context_text))
+        return REGROUNDED_ANSWER
+
+    def _fake_condense(provider: object, question: str, raw_answer: str) -> str:
+        del provider, question
+        condense_calls.append(raw_answer)
+        return CONDENSED_ANSWER
+
+    class _StubCoordinator:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            pass
+
+        def ask(self, question: str, max_rounds: int = 6) -> EvidenceState:
+            return EvidenceState(
+                question=question,
+                answer=RAW_ANSWER,
+                evidence=[
+                    Evidence(path="doc0.txt", line_start=1, line_end=1, quote="fact", reason="r")
+                ],
+            )
+
+    monkeypatch.setattr(
+        ant_document_adapter_module, "apply_context_authoritative_regrounding", _fake_reground
+    )
+    monkeypatch.setattr(ant_document_adapter_module, "condense_to_answer_span", _fake_condense)
+    monkeypatch.setattr(ant_document_adapter_module, "LocalCoordinator", _StubCoordinator)
+    example = _example_with_documents(tmp_path, condition="B")
+
+    result = ant_document_adapter_module.AntDocumentAgent().run(example, tmp_path)
+
+    assert len(reground_calls) == 1
+    assert reground_calls[0][0] == RAW_ANSWER
+    assert "fact" in reground_calls[0][1]  # built from state.evidence
+    assert condense_calls == [REGROUNDED_ANSWER]  # condensation sees the REGROUNDED answer
+    assert result.final_answer == CONDENSED_ANSWER
+    assert result.metadata["answer_contract_condition"] == "B"

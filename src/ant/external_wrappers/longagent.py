@@ -10,7 +10,10 @@ import tiktoken
 from ant.agents.base import AgentResult
 from ant.benchmarks.base import TaskExample
 from ant.domain import TokenUsage
-from ant.evaluation_suite.answer_contract import condense_to_answer_span
+from ant.evaluation_suite.answer_contract import (
+    apply_context_authoritative_regrounding,
+    condense_to_answer_span,
+)
 from ant.evaluation_suite.counting_provider import CountingOpenAIProvider
 from ant.evaluation_suite.repo_scope import EvalRepoEnvironment
 from ant.evaluation_suite.usage import UsageStats
@@ -482,8 +485,20 @@ class LongAgentAdapter:
             )
 
         raw_answer = final_answer
+        # Single-Needle Contamination Study Condition B -- post-hoc,
+        # against the SAME leader/member discussion history the leader's
+        # own final decision already had access to (never re-injected into
+        # any member/leader prompt above -- those are all already complete
+        # by this point in the function).
+        grounded_answer = final_answer
+        if example.metadata.get("answer_contract_condition") == "B":
+            grounded_answer = apply_context_authoritative_regrounding(
+                provider, example.question, final_answer, _format_history(history)
+            )
         if self.apply_concise_answer_contract:
-            final_answer = condense_to_answer_span(provider, example.question, final_answer)
+            final_answer = condense_to_answer_span(provider, example.question, grounded_answer)
+        else:
+            final_answer = grounded_answer
 
         # `drain_*` calls empty the provider's internal counters, so each
         # must be captured exactly once into a local before use. Leader
@@ -523,6 +538,10 @@ class LongAgentAdapter:
                 "member_concurrency": self.member_concurrency,
                 "apply_concise_answer_contract": self.apply_concise_answer_contract,
                 "raw_answer_before_condensation": raw_answer,
+                "answer_contract_condition": example.metadata.get("answer_contract_condition"),
+                "grounded_answer_after_regrounding": grounded_answer
+                if grounded_answer != raw_answer
+                else None,
                 "n_chunks": n_members,
                 "n_members": n_members,
                 "leader_rounds": new_state_rounds,

@@ -88,13 +88,16 @@ class _ScriptedProvider:
 
     def responses_text(self, prompt: str, max_output_tokens: int = 512) -> ResponseResult:
         # Only ever reached by the Part A short-answer contract's
-        # condensation call (apply_concise_answer_contract=True) -- every
-        # scripted-order test above leaves that flag at its default False,
-        # so this is never exercised except by the dedicated concise-
-        # contract test below.
+        # condensation call (apply_concise_answer_contract=True) or the
+        # Contamination Study Condition B regrounding call
+        # (answer_contract_condition="B") -- every scripted-order test
+        # above leaves both off, so this is never exercised except by the
+        # dedicated tests for each.
         self._calls += 1
         from ant.domain import TokenUsage
 
+        if "strictly grounded in the context/evidence above" in prompt:
+            return ResponseResult(text="regrounded", usage=TokenUsage(), raw={})
         return ResponseResult(text="condensed", usage=TokenUsage(), raw={})
 
     def drain_call_count(self) -> int:
@@ -445,6 +448,28 @@ def test_apply_concise_answer_contract_true_condenses_the_final_answer_only(
     # ONE extra physical call on top, not a change to round semantics.
     assert result.metadata["leader_calls"] == 1
     assert result.metadata["member_calls"] == 0
+
+
+def test_condition_b_regrounds_before_condensing(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    root = _make_repo(tmp_path)
+    provider = _ScriptedProvider(['{"type": "answer", "content": "the leader\'s own answer"}'])
+    monkeypatch.setattr(longagent_module, "CountingOpenAIProvider", lambda model: provider)
+    adapter = LongAgentAdapter(member_concurrency=1, apply_concise_answer_contract=True)
+    example = TaskExample(
+        benchmark="test",
+        task_id="t1",
+        question="What does alpha do?",
+        reference="",
+        metadata={"answer_contract_condition": "B"},
+    )
+
+    result = adapter.run(example, root)
+
+    assert result.final_answer == "condensed"
+    assert result.metadata["grounded_answer_after_regrounding"] == "regrounded"
+    assert result.metadata["answer_contract_condition"] == "B"
 
 
 def _make_repo_with_content_size(tmp_path: Path, word_count: int) -> Path:

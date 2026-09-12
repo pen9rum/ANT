@@ -19,7 +19,10 @@ import tiktoken
 
 from ant.agents.base import AgentResult
 from ant.benchmarks.base import TaskExample
-from ant.evaluation_suite.answer_contract import condense_to_answer_span
+from ant.evaluation_suite.answer_contract import (
+    apply_context_authoritative_regrounding,
+    condense_to_answer_span,
+)
 from ant.evaluation_suite.counting_provider import CountingOpenAIProvider
 from ant.evaluation_suite.document_scope import DocumentRecord
 from ant.evaluation_suite.usage import UsageStats
@@ -102,7 +105,18 @@ class DirectDocumentAgent:
         # why this is a post-hoc wrapper, never a prompt-injection change,
         # and identical across all five methods.
         raw_answer = result.text.strip()
-        final_answer = condense_to_answer_span(provider, example.question, raw_answer)
+        # Single-Needle Contamination Study Condition B (opt-in via
+        # metadata, no-op for every other track/condition): a generic
+        # context-authoritative instruction, applied post-hoc to the
+        # already-produced answer against the SAME full context this
+        # method already saw -- never re-injected into the original
+        # answer-generation prompt itself.
+        grounded_answer = raw_answer
+        if example.metadata.get("answer_contract_condition") == "B":
+            grounded_answer = apply_context_authoritative_regrounding(
+                provider, example.question, raw_answer, context
+            )
+        final_answer = condense_to_answer_span(provider, example.question, grounded_answer)
         token_usage = provider.drain_usage()
         llm_calls = provider.drain_call_count()
         elapsed = time.time() - started
@@ -127,6 +141,10 @@ class DirectDocumentAgent:
                 "generation_model": self.model,
                 "prompt_tokens_estimate": prompt_tokens,
                 "raw_answer_before_condensation": raw_answer,
+                "answer_contract_condition": example.metadata.get("answer_contract_condition"),
+                "grounded_answer_after_regrounding": grounded_answer
+                if grounded_answer != raw_answer
+                else None,
             },
         )
 

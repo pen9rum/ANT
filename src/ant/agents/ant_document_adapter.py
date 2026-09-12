@@ -58,7 +58,10 @@ from ant.agents.base import AgentResult
 from ant.benchmarks.base import TaskExample
 from ant.coordinator import LocalCoordinator
 from ant.domain.models import Territory
-from ant.evaluation_suite.answer_contract import condense_to_answer_span
+from ant.evaluation_suite.answer_contract import (
+    apply_context_authoritative_regrounding,
+    condense_to_answer_span,
+)
 from ant.evaluation_suite.counting_provider import CountingOpenAIProvider
 from ant.evaluation_suite.document_scope import DocumentRecord, EvalDocumentEnvironment
 from ant.evaluation_suite.usage import UsageStats
@@ -161,7 +164,22 @@ class AntDocumentAgent:
         # byte-identical to a run with this call deleted; only the string
         # returned to the harness changes.
         raw_answer = state.answer
-        final_answer = condense_to_answer_span(provider, example.question, raw_answer)
+        # Single-Needle Contamination Study Condition B -- post-hoc, against
+        # the SAME evidence state.evidence the frozen coordinator already
+        # gathered on its own. Same non-negotiable property as condensation
+        # above: this runs strictly after coordinator.ask() returns, so
+        # routing/Need-Graph/recovery are provably unaffected -- the
+        # question string ANT's own internals saw is never touched.
+        grounded_answer = raw_answer
+        if example.metadata.get("answer_contract_condition") == "B":
+            evidence_block = "\n".join(
+                f"[{item.path}:{item.line_start}-{item.line_end}] {item.quote}"
+                for item in state.evidence
+            )
+            grounded_answer = apply_context_authoritative_regrounding(
+                provider, example.question, raw_answer, evidence_block
+            )
+        final_answer = condense_to_answer_span(provider, example.question, grounded_answer)
         llm_calls = provider.drain_call_count()
 
         # Behavioral-diagnostic counts for Section 13/14 of the long-context
@@ -232,6 +250,10 @@ class AntDocumentAgent:
                 "recovery_events": recovery_events,
                 "evidence_count": len(state.evidence),
                 "raw_answer_before_condensation": raw_answer,
+                "answer_contract_condition": example.metadata.get("answer_contract_condition"),
+                "grounded_answer_after_regrounding": grounded_answer
+                if grounded_answer != raw_answer
+                else None,
             },
         )
 
