@@ -1,5 +1,20 @@
 # Long-context evaluation: decision memo (analysis-only pass over the existing 420 generations)
 
+> **CANONICALITY NOTICE (added by the evaluation-fix pass, see
+> `docs/long_context_evaluation_fix_report.md` for the full audit):** the
+> `multineedle-scaling` and `single-needle-scaling` tables below (and any
+> Early/Middle/Late positional analysis built on them) used a filler pool
+> that could leak passages from a needle's own source article/document --
+> now fixed (`_exclude_leaking_fillers`). Those tables are
+> **PRE-FIX / NON-CANONICAL** for needle retrieval/position/scaling claims
+> and must be regenerated before being cited for that purpose; the
+> `contamination-study` numbers are affected the same way. The natural
+> multi-document pilot tables (HotpotQA/2Wiki/MuSiQue) are NOT
+> NIAH+-constructed and remain canonical as documents, but their reported
+> EM/F1 is superseded by the new extracted-EM/F1 metric (see the fix
+> report's rescored table) -- raw EM/F1 undercounted verbose-but-correct
+> answers. Nothing below has been altered.
+
 No new API calls, code, prompts, manifests, or outputs were modified to
 produce this memo -- every table below is computed directly from the
 already-committed raw data (`output/runs/{contamination-study,

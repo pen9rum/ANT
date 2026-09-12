@@ -1,5 +1,18 @@
 # HotpotQA failure audit, 15-task natural pilot expansion, and 128K position trace audit
 
+> **CANONICALITY NOTICE (added by the evaluation-fix pass, see
+> `docs/long_context_evaluation_fix_report.md` for the full audit):**
+> Section C's "128K position trace audit" analyzes `multineedle-scaling`
+> traces, whose filler pool could leak passages from a needle's own
+> source article -- now fixed. That section's positional interpretation
+> is **PRE-FIX / NON-CANONICAL** and must be re-examined against the
+> fixed construction. Sections A/B's 15-task natural pilot (HotpotQA/
+> 2Wiki/MuSiQue) documents remain canonical (not NIAH+-constructed), but
+> the reported EM/F1 is superseded by the new extracted-EM/F1 metric --
+> raw EM/F1 undercounted verbose-but-correct answers (e.g. this report's
+> own "Yes, both were American." example, Section A). Nothing below has
+> been altered.
+
 Three goals, diagnosis + replication only: (1) diagnose ANT's apparent
 HotpotQA weakness from existing traces, (2) expand the natural pilot from
 5 to 15 tasks/benchmark without changing any method, (3) audit the

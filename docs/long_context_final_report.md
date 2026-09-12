@@ -1,5 +1,25 @@
 # Long-context evaluation: final report (contamination study + natural pilot + controlled scaling)
 
+> **CANONICALITY NOTICE (added by the evaluation-fix pass, see
+> `docs/long_context_evaluation_fix_report.md` for the full audit):**
+> Two evaluation-side bugs were found and fixed after this report was
+> written. (1) Short-answer EM/F1 scoring is superseded by a new,
+> method-agnostic extracted-EM/F1 metric -- the raw numbers in this report
+> undercount verbose-but-correct answers; extracted numbers are now the
+> primary metric (already-saved outputs were rescored, no rerun needed).
+> (2) The **contamination study** and **controlled multi-needle scaling**
+> sections below used a filler pool that could include other passages
+> from the SAME source article/document as a needle, letting a method
+> answer correctly without finding the needle -- this invalidates
+> needle-retrieval/position/scaling interpretation for those two sections
+> specifically. Their document construction is now fixed
+> (`ant.evaluation_suite.niah_plus._exclude_leaking_fillers`), but the
+> numbers below were generated BEFORE that fix and are marked
+> **PRE-FIX / NON-CANONICAL** for any claim about needle
+> retrieval/position/scaling; they must be regenerated against the fixed
+> construction before being cited for that purpose. Nothing below has
+> been deleted or altered -- this notice only flags what changed.
+
 Governing spec: combine (1) diagnosing/fixing the NIAH+ single-needle
 contamination problem, (2) a natural multi-document pilot, (3) a
 controlled multi-needle scaling pilot, under a hard $70 budget ceiling.

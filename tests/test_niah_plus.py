@@ -10,11 +10,13 @@ from __future__ import annotations
 
 import pytest
 
-from ant.evaluation_suite.document_scope import DocumentRecord
+from ant.evaluation_suite.document_scope import DocumentRecord, materialize_documents
 from ant.evaluation_suite.niah_plus import (
     MAX_OTHER_ENTITIES_PER_INSTANCE,
     MULTI_NEEDLE_DEPTHS,
     SINGLE_NEEDLE_DEPTHS,
+    _contains_forbidden_string,
+    _exclude_leaking_fillers,
     _fill_to_target_length,
     _insert_needles_by_token_depth,
     _salient_shared_entities,
@@ -203,22 +205,53 @@ def test_build_single_needle_instance_is_deterministic(monkeypatch: pytest.Monke
     assert first.model_dump() == second.model_dump()
 
 
+# Distinct per-row multi-word entity names (10 x 5 = 50 combinations,
+# cycled by index) -- deliberately NOT a shared prefix + digit (e.g. NOT
+# "Central Subject {i}"), since _PROPER_PHRASE_RE only matches
+# consecutive CAPITALIZED words and stops before a trailing digit, which
+# would make every row's "salient entity" collapse to the SAME generic
+# phrase ("Central Subject") and falsely appear to leak across every
+# other row. Real SQuAD entities are genuinely distinct multi-word
+# proper nouns (e.g. "Scott Derrickson", not "Subject 1"), so this
+# fixture matches that shape instead of an artificially self-colliding one.
+_ENTITY_PREFIXES = [
+    "Ashford",
+    "Bellwood",
+    "Camden",
+    "Dunmore",
+    "Elmsworth",
+    "Fenwick",
+    "Grantley",
+    "Harrow",
+    "Ivywood",
+    "Juniper",
+]
+_ENTITY_SUFFIXES = ["Hall", "Manor", "Heights", "Glen", "Ridge"]
+
+
+def _distinct_entity_name(i: int) -> str:
+    prefix = _ENTITY_PREFIXES[i % len(_ENTITY_PREFIXES)]
+    suffix = _ENTITY_SUFFIXES[(i // len(_ENTITY_PREFIXES)) % len(_ENTITY_SUFFIXES)]
+    return f"{prefix} {suffix}"
+
+
 def _fake_squad_rows_with_shared_entity(n: int = 30) -> list[dict]:
     """Like _fake_squad_rows, but the QUESTION also repeats a capitalized
-    entity ("Central Subject N") that appears in the context -- needed to
-    exercise Condition C's "replace additional entities shared between
-    question and context" behavior, which _fake_squad_rows' own bland
-    question ("Who is mentioned in passage N?") never triggers.
+    entity (a distinct multi-word name per row) that appears in the
+    context -- needed to exercise Condition C's "replace additional
+    entities shared between question and context" behavior, which
+    _fake_squad_rows' own bland question ("Who is mentioned in passage
+    N?") never triggers.
     """
     rows = []
     for i in range(n):
+        name = _distinct_entity_name(i)
         rows.append(
             {
                 "id": f"squad{i}",
                 "title": f"Topic{i}",
-                "context": f"Central Subject {i} visited the town. " * 10
-                + f"The answer entity is Person{i}.",
-                "question": f"Who did Central Subject {i} visit?",
+                "context": f"{name} visited the town. " * 10 + f"The answer entity is Person{i}.",
+                "question": f"Who did {name} visit?",
                 "answers": {"text": [f"Person{i}"], "answer_start": [0]},
             }
         )
@@ -227,11 +260,11 @@ def _fake_squad_rows_with_shared_entity(n: int = 30) -> list[dict]:
 
 def test_salient_shared_entities_finds_phrases_in_both_question_and_context() -> None:
     entities = _salient_shared_entities(
-        question="Who did Central Subject 0 visit?",
-        context="Central Subject 0 visited the town.",
+        question="Who did Ashford Hall visit?",
+        context="Ashford Hall visited the town.",
         exclude=set(),
     )
-    assert "Central Subject" in entities or "Central" in entities
+    assert "Ashford Hall" in entities
 
 
 def test_salient_shared_entities_excludes_the_answer_and_drops_overlapping_shorter_matches() -> (
@@ -468,3 +501,238 @@ def test_depth_mappings_use_only_paper_disclosed_values() -> None:
         "middle": (0.33, 0.66),
         "late": (0.66, 1.0),
     }
+
+
+# ===========================================================================
+# Part B filler-leakage-fix validation (A-G), per the governing spec.
+# ===========================================================================
+
+
+def test_exclude_leaking_fillers_source_overlap() -> None:
+    a = DocumentRecord(doc_id="a", title="SharedArticle", text="alpha")
+    b = DocumentRecord(doc_id="b", title="OtherArticle", text="beta")
+    cleaned, audit = _exclude_leaking_fillers(
+        [(a, "SharedArticle"), (b, "OtherArticle")],
+        needle_source_ids={"SharedArticle"},
+        forbidden_strings=[],
+    )
+    assert cleaned == [b]
+    assert audit["excluded_source_overlap_count"] == 1
+    assert audit["excluded_source_overlap_doc_ids"] == ["a"]
+    assert audit["excluded_answer_leakage_count"] == 0
+    assert audit["final_filler_pool_size"] == 1
+
+
+def test_exclude_leaking_fillers_answer_leakage() -> None:
+    clean = DocumentRecord(doc_id="clean", title="X", text="unrelated content")
+    leaking = DocumentRecord(doc_id="leaks", title="Y", text="mentions Zorvath Quennelin here")
+    cleaned, audit = _exclude_leaking_fillers(
+        [(clean, "X"), (leaking, "Y")],
+        needle_source_ids=set(),
+        forbidden_strings=["Zorvath Quennelin"],
+    )
+    assert cleaned == [clean]
+    assert audit["excluded_answer_leakage_count"] == 1
+    assert audit["excluded_answer_leakage_doc_ids"] == ["leaks"]
+
+
+def test_contains_forbidden_string_is_word_boundary_not_raw_substring() -> None:
+    # A raw substring check on "no" would false-positive on "known"/"into" --
+    # the word-boundary check must not.
+    assert not _contains_forbidden_string("This is well known and understood.", "no")
+    assert _contains_forbidden_string("The answer is no, definitely.", "no")
+
+
+def _fake_squad_rows_with_shared_source_article(n: int = 30) -> list[dict]:
+    """Row 0 (the needle candidate for question_index=0) and row 1 share
+    the SAME source title but are otherwise distinct SQuAD rows (different
+    id/question/context) -- reproduces the real, confirmed leak this fix
+    targets: SQuAD packs many distinct questions per article, so a naive
+    `row["id"] != needle_row["id"]` filter alone lets a different row from
+    the needle's own source article survive as filler.
+    """
+    rows = _fake_squad_rows(n)
+    rows[1] = {
+        **rows[1],
+        "title": rows[0]["title"],
+        "context": "A different passage from the very same source article. " * 20
+        + "The answer entity is SomeoneElse.",
+        "question": "Who is mentioned in this other passage?",
+        "answers": {"text": ["SomeoneElse"], "answer_start": [0]},
+    }
+    return rows
+
+
+def test_a_no_filler_shares_the_needles_source_article(monkeypatch: pytest.MonkeyPatch) -> None:
+    import datasets
+
+    rows = _fake_squad_rows_with_shared_source_article()
+    monkeypatch.setattr(datasets, "load_dataset", lambda path, split: rows)
+
+    instance = build_single_needle_instance(
+        context_length_tokens=2000, position="early", question_index=0
+    )
+    assert instance.metadata["excluded_source_overlap_count"] >= 1
+    all_text = " ".join(d.text for d in instance.documents)
+    assert "different passage from the very same source article" not in all_text
+
+
+def test_b_no_filler_contains_the_gold_answer_string_after_construction(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import datasets
+
+    rows = _fake_squad_rows()
+    # A filler row from a DIFFERENT, unrelated article that happens to
+    # lexically contain the fictional substitute answer used for
+    # question_index=0 ("Zorvath Quennelin") -- must still be excluded,
+    # even though its source article has nothing to do with the needle.
+    rows[5] = {
+        **rows[5],
+        "context": ("An unrelated passage that happens to mention Zorvath Quennelin by name. ") * 5,
+    }
+    monkeypatch.setattr(datasets, "load_dataset", lambda path, split: rows)
+
+    instance = build_single_needle_instance(
+        context_length_tokens=2000, position="early", question_index=0
+    )
+    assert instance.metadata["excluded_answer_leakage_count"] >= 1
+    needle_ids = set(instance.metadata["needle_doc_ids"])
+    for doc in instance.documents:
+        if doc.doc_id in needle_ids:
+            continue
+        assert "Zorvath Quennelin" not in doc.text
+
+
+def _fake_hotpot_examples_with_second_needle_source_shared(n: int = 10):
+    """Example 5's own filler document `doc7` is given the SAME title as
+    example 0's SECOND needle document (`doc4`, title "T0_4") -- exercises
+    that the exclusion is keyed on the UNION of both needles' source
+    titles, not only the first needle's.
+    """
+    examples = _fake_hotpot_examples(n)
+    docs = list(examples[5].metadata["documents"])
+    docs[7] = {
+        **docs[7],
+        "title": "T0_4",
+        "text": "A different document from the same source as needle 2.",
+    }
+    examples[5] = examples[5].model_copy(
+        update={"metadata": {**examples[5].metadata, "documents": docs}}
+    )
+    return examples
+
+
+def test_c_multi_needle_excludes_fillers_from_both_needle_sources(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from ant.benchmarks.hotpotqa import HotpotQaAdapter
+
+    examples = _fake_hotpot_examples_with_second_needle_source_shared()
+    monkeypatch.setattr(HotpotQaAdapter, "load_examples", lambda self, limit=None: examples)
+
+    instance = build_multi_needle_instance(
+        context_length_tokens=3000, position="early", question_index=0
+    )
+    assert len(instance.metadata["needle_doc_ids"]) == 2
+    assert instance.metadata["excluded_source_overlap_count"] >= 1
+    all_text = " ".join(d.text for d in instance.documents)
+    assert "A different document from the same source as needle 2." not in all_text
+
+
+def test_d_requested_context_length_still_approximately_preserved_under_exclusion(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Same leakage-heavy fixture as test A -- the real risk this fix
+    # introduces is that removing leaking candidates could starve
+    # `_fill_to_target_length` before it reaches the requested length.
+    import datasets
+
+    rows = _fake_squad_rows_with_shared_source_article()
+    monkeypatch.setattr(datasets, "load_dataset", lambda path, split: rows)
+    target = 4000
+    instance = build_single_needle_instance(
+        context_length_tokens=target, position="late", question_index=0
+    )
+    actual = instance.metadata["actual_token_count"]
+    assert actual >= target
+    assert actual <= target * 1.5  # same whole-document tolerance as pre-fix
+
+
+def test_e_early_middle_late_placement_still_behaves_correctly_under_exclusion(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import datasets
+
+    rows = _fake_squad_rows_with_shared_source_article()
+    monkeypatch.setattr(datasets, "load_dataset", lambda path, split: rows)
+
+    positions_to_index = {}
+    for position in ("early", "middle", "late"):
+        instance = build_single_needle_instance(
+            context_length_tokens=3000, position=position, question_index=0
+        )
+        needle_ids = set(instance.metadata["needle_doc_ids"])
+        index = next(i for i, d in enumerate(instance.documents) if d.doc_id in needle_ids)
+        positions_to_index[position] = index / (len(instance.documents) - 1)
+
+    assert positions_to_index["early"] < positions_to_index["middle"] < positions_to_index["late"]
+    assert positions_to_index["early"] < 0.2
+    assert positions_to_index["late"] > 0.8
+
+
+def test_f_paired_context_lengths_remain_prefix_compatible(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The filler order for a given question_index is seeded independently
+    # of context_length_tokens (see build_single_needle_instance's own
+    # comment on why), so a shorter requested length's filler documents
+    # must be an exact PREFIX (by text, in order) of a longer requested
+    # length's filler documents, at the same "early" position (needle
+    # always at index 0 for depth 0.0).
+    import datasets
+
+    monkeypatch.setattr(datasets, "load_dataset", lambda path, split: _fake_squad_rows())
+
+    short = build_single_needle_instance(
+        context_length_tokens=1500, position="early", question_index=4
+    )
+    long = build_single_needle_instance(
+        context_length_tokens=3000, position="early", question_index=4
+    )
+    short_filler_texts = [d.text for d in short.documents[1:]]
+    long_filler_texts = [d.text for d in long.documents[1:]]
+    assert long_filler_texts[: len(short_filler_texts)] == short_filler_texts
+
+
+def test_g_no_gold_or_support_metadata_reaches_the_runtime_environment(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    import datasets
+
+    from ant.evaluation_suite.document_scope import EvalDocumentEnvironment
+
+    monkeypatch.setattr(datasets, "load_dataset", lambda path, split: _fake_squad_rows())
+    instance = build_single_needle_instance(
+        context_length_tokens=1500, position="middle", question_index=1
+    )
+
+    # Structural guarantee: DocumentRecord itself has no gold/support field
+    # at all (not merely unpopulated) -- verified directly on every
+    # document actually handed to materialize_documents/the environment.
+    for doc in instance.documents:
+        assert set(doc.model_dump().keys()) == {"doc_id", "title", "text"}
+
+    materialize_documents(instance.documents, tmp_path)
+    # EvalDocumentEnvironment's own constructor only accepts `documents`
+    # (a list[DocumentRecord]) -- there is no parameter through which
+    # `instance.metadata` (gold_answers, needle_doc_ids, leak audit, etc.)
+    # could ever reach it, by construction, not merely by this call's own
+    # choice not to pass it.
+    env = EvalDocumentEnvironment(root=tmp_path, documents=instance.documents)
+    needle_ids = set(instance.metadata["needle_doc_ids"])
+    non_needle_doc_ids = [d.doc_id for d in instance.documents if d.doc_id not in needle_ids]
+    for gold in instance.gold_answers:
+        for doc_id in non_needle_doc_ids:
+            path = env.root / env.relative_path_for(doc_id)
+            assert gold not in path.read_text(encoding="utf-8")

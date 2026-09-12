@@ -241,6 +241,17 @@ def _fill_to_target_length(
     always >= target_tokens, within one document's length of it (checked
     against a documented tolerance by this module's own tests).
     """
+    if not pool and target_tokens > 0:
+        msg = (
+            "_fill_to_target_length received an empty filler pool but still needs "
+            f"{target_tokens} filler tokens -- this can happen if source-overlap/answer-leakage "
+            "exclusion (see _exclude_leaking_fillers) removed every candidate, e.g. because a "
+            "substituted/salient entity string happens to be common across the whole candidate "
+            "pool. This is a construction-time configuration problem (too aggressive an "
+            "exclusion for this pool), not something to silently paper over by falling back to "
+            "leaking filler."
+        )
+        raise ValueError(msg)
     filler: list[DocumentRecord] = []
     total = 0
     order = list(pool)
@@ -255,6 +266,67 @@ def _fill_to_target_length(
         filler.append(doc)
         total += _token_count(doc.text)
     return filler
+
+
+def _contains_forbidden_string(text: str, forbidden: str) -> bool:
+    """Word-boundary-aware, case-insensitive containment check -- used for
+    both the source-overlap fix's lexical-leakage audit (Section 9 of the
+    governing filler-leakage-fix spec) and nowhere else. Deliberately NOT
+    a raw substring check: several gold answers in this suite are short,
+    common English words ("yes"/"no"), and a raw substring search for
+    those would flag nearly every filler document (e.g. "no" inside
+    "known", "into", "cannot"), which is not genuine answer leakage and
+    would gut the filler pool for no real benefit. Word-boundary matching
+    still catches genuine leakage (the literal word/phrase standing on
+    its own) for both short common words and long distinctive entity
+    phrases alike.
+    """
+    if not forbidden.strip():
+        return False
+    pattern = r"\b" + re.escape(forbidden.strip()) + r"\b"
+    return re.search(pattern, text, re.IGNORECASE) is not None
+
+
+def _exclude_leaking_fillers(
+    candidates: list[tuple[DocumentRecord, str]],
+    needle_source_ids: set[str],
+    forbidden_strings: list[str],
+) -> tuple[list[DocumentRecord], dict]:
+    """Part B filler source-overlap / answer-leakage fix. `candidates` is
+    (document, source_identity) pairs -- source_identity is the strongest
+    available canonical identity (SQuAD/HotpotQA article title in this
+    module). A filler is excluded if EITHER (a) its own source identity
+    overlaps ANY needle's source identity (regardless of text content --
+    two different SQuAD/HotpotQA questions drawn from the same source
+    article is exactly the leak this fixes, even before checking word
+    content), OR (b) it lexically contains any forbidden string (gold
+    answer, original memorized answer, or substituted entity strings --
+    construction-time-only, never exposed to inference). Deterministic:
+    depends only on (candidates, needle_source_ids, forbidden_strings),
+    never on scores or gold-answer CORRECTNESS, only on gold-answer
+    STRING content for the leakage check (a data-hygiene check, not a
+    relevance filter -- see module docstring's "no question-aware
+    relevance pruning beyond explicit leakage rules" requirement).
+    """
+    excluded_source_ids: list[str] = []
+    excluded_leak_ids: list[str] = []
+    cleaned: list[DocumentRecord] = []
+    for doc, source_id in candidates:
+        if source_id in needle_source_ids:
+            excluded_source_ids.append(doc.doc_id)
+            continue
+        if any(_contains_forbidden_string(doc.text, f) for f in forbidden_strings):
+            excluded_leak_ids.append(doc.doc_id)
+            continue
+        cleaned.append(doc)
+    audit = {
+        "excluded_source_overlap_count": len(excluded_source_ids),
+        "excluded_source_overlap_doc_ids": excluded_source_ids,
+        "excluded_answer_leakage_count": len(excluded_leak_ids),
+        "excluded_answer_leakage_doc_ids": excluded_leak_ids,
+        "final_filler_pool_size": len(cleaned),
+    }
+    return cleaned, audit
 
 
 def _load_squad_pool(limit: int = 400) -> list[dict]:
@@ -307,11 +379,23 @@ def build_single_needle_instance(
     needle_text = needle_row["context"].replace(original_answer, fictional_entity)
     needle_doc = DocumentRecord(doc_id="needle0", title=needle_row["title"], text=needle_text)
 
-    filler_candidates = [
-        DocumentRecord(doc_id=f"filler{i}", title=row["title"], text=row["context"])
+    # Part B filler-leakage fix: exclude any filler drawn from the SAME
+    # source article as the needle (SQuAD packs many distinct questions
+    # per article, so raw `row["id"] != needle_row["id"]` alone is not
+    # enough -- a DIFFERENT question's own context from the identical
+    # article can still state the needle's own true, un-substituted fact),
+    # plus any filler that lexically contains the original or counter-
+    # factual answer string.
+    filler_candidates_raw = [
+        (DocumentRecord(doc_id=f"filler{i}", title=row["title"], text=row["context"]), row["title"])
         for i, row in enumerate(pool)
         if row["id"] != needle_row["id"]
     ]
+    filler_candidates, leak_audit = _exclude_leaking_fillers(
+        filler_candidates_raw,
+        needle_source_ids={needle_row["title"]},
+        forbidden_strings=[original_answer, fictional_entity],
+    )
     needle_tokens = _token_count(needle_text)
     filler = _fill_to_target_length(
         filler_candidates, max(0, context_length_tokens - needle_tokens), rng
@@ -336,6 +420,9 @@ def build_single_needle_instance(
             "actual_token_count": actual_tokens,
             "source_dataset": "squad",
             "original_answer_replaced": original_answer,
+            "needle_source_titles": [needle_row["title"]],
+            "seed": str((NIAH_PLUS_SEED, "single", question_index)),
+            **leak_audit,
         },
     )
 
@@ -399,11 +486,22 @@ def build_fully_counterfactualized_single_needle_instance(
     needle_doc = DocumentRecord(
         doc_id="needle0", title=needle_row["title"], text=counterfactual_context
     )
-    filler_candidates = [
-        DocumentRecord(doc_id=f"filler{i}", title=row["title"], text=row["context"])
+    # Part B filler-leakage fix -- see build_single_needle_instance's own
+    # comment for why source-level exclusion is necessary beyond
+    # `row["id"] != needle_row["id"]`. Forbidden strings here cover BOTH
+    # the original and fictional forms of every substitution (answer AND
+    # the additional salient entities), not just the answer alone.
+    filler_candidates_raw = [
+        (DocumentRecord(doc_id=f"filler{i}", title=row["title"], text=row["context"]), row["title"])
         for i, row in enumerate(pool)
         if row["id"] != needle_row["id"]
     ]
+    forbidden_strings = list(substitutions.keys()) + list(substitutions.values())
+    filler_candidates, leak_audit = _exclude_leaking_fillers(
+        filler_candidates_raw,
+        needle_source_ids={needle_row["title"]},
+        forbidden_strings=forbidden_strings,
+    )
     needle_tokens = _token_count(counterfactual_context)
     filler = _fill_to_target_length(
         filler_candidates, max(0, context_length_tokens - needle_tokens), rng
@@ -430,6 +528,9 @@ def build_fully_counterfactualized_single_needle_instance(
             "original_answer_replaced": original_answer,
             "entity_substitutions": substitutions,
             "condition": "C_fully_counterfactualized",
+            "needle_source_titles": [needle_row["title"]],
+            "seed": str((NIAH_PLUS_SEED, "single_c", question_index)),
+            **leak_audit,
         },
     )
 
@@ -461,16 +562,36 @@ def build_multi_needle_instance(
         msg = f"expected exactly 2 supporting documents, found {len(needle_docs)}"
         raise ValueError(msg)
 
-    filler_candidates: list[DocumentRecord] = []
+    gold_answers = _ground_truths_from_reference(target_example.reference)
+
+    # Part B filler-leakage fix: `other_index == question_index` alone
+    # only excludes the TARGET question's own 10 documents -- it says
+    # nothing about a DIFFERENT HotpotQA validation question that happens
+    # to draw a document from the identical source Wikipedia article as
+    # one of THIS question's own 2 needles (a real, confirmed occurrence
+    # -- see docs/long_context_decision_memo.md Section 8). Needle source
+    # identity is the UNION of both needle documents' own titles.
+    needle_source_titles = {d.title for d in needle_docs}
+    filler_candidates_raw: list[tuple[DocumentRecord, str]] = []
     for other_index, other_example in enumerate(examples):
         if other_index == question_index:
             continue
         for d in other_example.metadata["documents"]:
-            filler_candidates.append(
-                DocumentRecord(
-                    doc_id=f"filler{other_index}_{d['doc_id']}", title=d["title"], text=d["text"]
+            filler_candidates_raw.append(
+                (
+                    DocumentRecord(
+                        doc_id=f"filler{other_index}_{d['doc_id']}",
+                        title=d["title"],
+                        text=d["text"],
+                    ),
+                    d["title"],
                 )
             )
+    filler_candidates, leak_audit = _exclude_leaking_fillers(
+        filler_candidates_raw,
+        needle_source_ids=needle_source_titles,
+        forbidden_strings=gold_answers,
+    )
     needle_tokens = sum(_token_count(d.text) for d in needle_docs)
     filler = _fill_to_target_length(
         filler_candidates, max(0, context_length_tokens - needle_tokens), rng
@@ -490,7 +611,7 @@ def build_multi_needle_instance(
         context_length_tokens=context_length_tokens,
         position=position,
         question=target_example.question,
-        gold_answers=_ground_truths_from_reference(target_example.reference),
+        gold_answers=gold_answers,
         documents=documents,
         metadata={
             "needle_doc_ids": needle_final_ids,
@@ -498,6 +619,9 @@ def build_multi_needle_instance(
             "actual_token_count": actual_tokens,
             "source_dataset": "hotpotqa",
             "source_task_id": target_example.task_id,
+            "needle_source_titles": sorted(needle_source_titles),
+            "seed": str((NIAH_PLUS_SEED, "multi", question_index)),
+            **leak_audit,
         },
     )
 
