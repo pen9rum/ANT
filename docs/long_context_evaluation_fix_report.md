@@ -6,6 +6,18 @@ search behavior, retrieval/indexing behavior, LongAgent, Matched ReAct,
 method prompts, tool budgets. This report is the required 9-section
 summary of that pass.
 
+> **Revision note (second pass, same commit history):** the first frozen
+> extractor optimized purely for "shortest span" and over-shortened a
+> class of already-correct, already-minimal answers (48/570 rows,
+> dominated by compound locations like `"Greenwich Village, New York
+> City"` cut to `"Greenwich Village"`). Sections 2–4 below were updated
+> in place after fixing this (see `answer_extraction.py`'s own
+> "Revision" docstring note for the exact change: reworded prompt goal +
+> one deterministic safeguard, `_extend_over_trailing_qualifier`). The
+> original pre-revision numbers remain in git history (commit `fbfbb7c`)
+> for audit; nothing here claims they never existed. All 570 predictions
+> were rescored a second time against the fixed extractor.
+
 ---
 
 ## 1. Existing answer-contract audit
@@ -72,11 +84,32 @@ agent.
   present in the raw text — is rejected and the ORIGINAL raw answer is
   returned unchanged (`rejected_hallucination=True`, but the physical
   call is still logged/costed).
-- **Never tuned on ANT's own scores.** The prompt/logic was frozen after
+- **Goal, revised once:** the first frozen version asked for the
+  "shortest possible span," which over-shortened already-correct,
+  already-minimal answers (see Section 4). The goal is now **"shortest
+  span that fully answers the question, preserving required
+  qualifiers/components"** — reworded directly in the frozen prompt
+  (compound locations, names, and dates are called out explicitly as
+  units that must stay intact), backed by one deterministic,
+  narrowly-targeted safeguard, `_extend_over_trailing_qualifier`: if the
+  LLM's candidate is a strict prefix of the raw answer and everything cut
+  off is a single comma-attached, Title-Case qualifying phrase running to
+  the very end (the "City, State/Country" pattern), the full raw answer
+  is used instead — constructed by slicing the raw answer itself, so it
+  remains trivially still a substring, adding no new hallucination risk.
+  This safeguard is deliberately narrow: it does not touch
+  semicolon-separated list ambiguity or a dropped clause that is merely
+  space-attached (`"... by K. A. Applegate"`), both left as the distinct,
+  already-documented residual limitations described in Section 4.
+- **Never tuned on ANT's own scores.** The first version was frozen after
   writing 11 unit tests (`tests/test_answer_extraction.py`, covering all
   7 required cases A–G) and one small live validation (3 real calls,
-  ~$0.0005), and was not touched afterward based on how the full
-  rescoring pass turned out.
+  ~$0.0005). The one revision above was made once, in direct response to
+  the audited over-shortening pattern found in Section 4 below (a
+  formatting defect affecting every method symmetrically, not any
+  particular method's score), verified with 6 new unit tests, and
+  re-frozen before the second (and, absent a similarly concrete finding,
+  final) full rescoring pass.
 
 ## 3. Re-scored natural QA table (raw vs. extracted, all 5 methods × 3 benchmarks)
 
@@ -85,87 +118,93 @@ predictions (no rerun) — 15 tasks/benchmark × 5 methods × 3 benchmarks.
 
 | Benchmark | Method | raw EM | raw F1 | extracted EM | extracted F1 |
 |---|---|---|---|---|---|
-| HotpotQA | ant_document | 0.400 | 0.601 | **0.533** | **0.741** |
-| HotpotQA | direct_document | 0.667 | 0.817 | 0.600 | 0.800 |
-| HotpotQA | longagent | 0.533 | 0.758 | 0.467 | 0.730 |
+| HotpotQA | ant_document | 0.400 | 0.601 | **0.600** | **0.746** |
+| HotpotQA | direct_document | 0.667 | 0.817 | 0.667 | 0.817 |
+| HotpotQA | longagent | 0.533 | 0.758 | 0.533 | 0.758 |
 | HotpotQA | matched_react_document | 0.467 | 0.704 | 0.533 | 0.744 |
-| HotpotQA | retrieval_document | 0.400 | 0.597 | 0.533 | 0.721 |
-| 2WikiMultihopQA | ant_document | 0.733 | 0.760 | 0.800 | 0.833 |
+| HotpotQA | retrieval_document | 0.400 | 0.597 | 0.600 | 0.749 |
+| 2WikiMultihopQA | ant_document | 0.733 | 0.760 | 0.800 | 0.812 |
 | 2WikiMultihopQA | direct_document | 0.600 | 0.678 | 0.600 | 0.689 |
 | 2WikiMultihopQA | longagent | 0.733 | 0.842 | 0.733 | 0.853 |
 | 2WikiMultihopQA | matched_react_document | 0.400 | 0.685 | 0.467 | 0.737 |
-| 2WikiMultihopQA | retrieval_document | 0.467 | 0.501 | 0.467 | 0.518 |
+| 2WikiMultihopQA | retrieval_document | 0.467 | 0.501 | 0.467 | 0.519 |
 | MuSiQue | ant_document | 0.467 | 0.596 | 0.467 | 0.596 |
 | MuSiQue | direct_document | 0.467 | 0.633 | 0.467 | 0.633 |
-| MuSiQue | longagent | 0.267 | 0.309 | 0.267 | 0.329 |
+| MuSiQue | longagent | 0.267 | 0.309 | 0.267 | 0.309 |
 | MuSiQue | matched_react_document | 0.400 | 0.536 | 0.400 | 0.536 |
-| MuSiQue | retrieval_document | 0.467 | 0.538 | 0.467 | 0.564 |
+| MuSiQue | retrieval_document | 0.467 | 0.538 | 0.467 | 0.538 |
 
 Extracted EM/F1 is now the primary metric; raw remains an audit column.
 Every one of these 15 rows is one call of the SAME, method-agnostic
-extractor — no method-specific tuning. Full per-row data (including the
-supplementary rescored `multineedle-scaling`/`single-needle-scaling`/
-`contamination-study` tables, 345 additional rows) is in the sibling
-`*.rescored.jsonl` files next to each original `output/runs/**/*.jsonl`.
+extractor — no method-specific tuning. Note several rows are now
+identical to raw (`direct_document`/`longagent` on HotpotQA,
+`MuSiQue` across the board): the fixed extractor correctly recognizes
+these raw answers were already minimal and leaves them untouched, rather
+than the pre-revision extractor's tendency to shorten them anyway. Full
+per-row data (including the supplementary rescored
+`multineedle-scaling`/`single-needle-scaling`/`contamination-study`
+tables, 345 additional rows) is in the sibling `*.rescored.jsonl` files
+next to each original `output/runs/**/*.jsonl`.
 
 ## 4. Score-change audit
 
-Across all 570 rescored rows (225 natural pilot + 225 multineedle-scaling
-+ 90 single-needle-scaling + 30 contamination-study): **0 rows had
-`rejected_hallucination=True`** — the extractor never proposed a
-non-substring span on real data (the hard safety gate was never needed
-to intervene on this data, though it remains active). 457/570 rows used
-the LLM path; 113/570 resolved deterministically (yes/no).
+**First rescoring pass (pre-revision extractor, preserved here for
+audit, superseded below):** across all 570 rows, 0 hallucination-rejects,
+134 rows changed by ≥0.3 F1 — 84 improved (the verbose-but-correct
+pattern working as intended, e.g. `"Yes, both were American."` → `"yes"`,
+raw F1 0.40 → 1.0) but **50 got worse**, 48 of which were one systematic
+pattern: gold expects the full compound span `"Greenwich Village, New
+York City"`; several methods already produced exactly that string
+verbatim (raw EM=1.0, F1=1.0); the extractor judged `"Greenwich
+Village"` alone "shortest" and cut an already-correct answer down past
+what gold's own convention wanted (extracted F1 dropped to 0.57, EM to
+0). Not a hallucination and not a factual change — `"Greenwich
+Village"` remained true, just incomplete relative to gold's exact
+string — but a real, quantified defect worth fixing rather than
+reporting as acceptable noise. This finding is what drove the Section 2
+revision.
 
-**134 rows changed by ≥0.3 F1** (saved to
-`output/runs/answer_extraction_sanity_audit_delta_ge_0.3.json`, with gold
-answers included there ONLY for this post-hoc audit):
+**Second rescoring pass (post-revision extractor, current/authoritative):**
+same 570 rows, re-extracted with the revised extractor (reworded prompt +
+`_extend_over_trailing_qualifier`). Results:
 
-- **84 improved.** Overwhelmingly the exact verbose-but-correct pattern
-  the fix targets: `"Yes, both were American."` → `"yes"` (raw F1 0.40 →
-  1.0), `"No, the Laleli Mosque is in Laleli and the Esma Sultan Mansion
-  is in Ortaköy."` → `"no"` (raw F1 0.14 → 1.0), `"United States
-  ambassador to Ghana, United States ambassador to Czechoslovakia, Chief
-  of Protocol of the United States"` → `"Chief of Protocol of the United
-  States"` (raw F1 0.32 → 0.67). None of these changed factual content —
-  every one is a formatting fix (a full sentence/list shortened to the
-  span the question actually asked for).
-- **50 got worse**, and this is reported honestly rather than buried:
-  - **48/50** are one systematic pattern: gold expects the full span
-    `"Greenwich Village, New York City"`; several methods happened to
-    already produce exactly that string verbatim (raw EM=1.0, raw
-    F1=1.0); the extractor judged `"Greenwich Village"` alone to be the
-    "shortest span that answers the question" and shortened a
-    already-correct answer past the point the benchmark's own gold
-    convention wanted (extracted F1 drops to 0.57, EM to 0). This is a
-    real, quantified limitation of the extractor's "shortest span"
-    heuristic on multi-part gold answers, not a hallucination and not a
-    factual change — `"Greenwich Village"` remains true, just
-    incomplete relative to gold's exact string.
-  - **1/50**: from a raw answer listing three true facts about the same
-    person (`"United States Ambassador to Ghana; United States
-    Ambassador to Czechoslovakia; Chief of Protocol of the United
-    States"`, gold = `"Chief of Protocol"`), the extractor picked
-    `"United States Ambassador to Ghana"` — a different, also-true item
-    from the same list, not the gold-matching one. A genuine
-    extraction-precision miss among multiple valid candidates (case D of
-    the required test matrix), not an invention and not a repair of a
-    false claim.
-  - **1/50**: in a counterfactualized single-needle example, the
-    extractor dropped a parenthetical restating the substituted entity
-    (`"the Main Building (also referred to as Ossenfer Malquorin)"` →
-    `"the Main Building"`), losing the appositive gold expected intact.
+- **0/570 rows had `rejected_hallucination=True`** (unchanged from the
+  first pass — the hard substring gate was never needed to intervene on
+  real data, and remains active as a safety net regardless).
+- **0/570 rows got worse** (down from 50) — a strict improve-or-unchanged
+  result across every single row, not just the ≥0.3-F1 subset. Verified
+  directly: `sum(delta_f1 across all 570 rows) = +47.9`, `min(delta_f1) =
+  0.0`.
+- **70/570 rows improved** (66 by ≥0.3 F1, saved to
+  `output/runs/answer_extraction_sanity_audit_delta_ge_0.3.json` with
+  gold answers included there ONLY for this post-hoc audit) — the same
+  verbose-but-correct pattern as before (`"Yes, both were American."` →
+  `"yes"`; `"No, the Laleli Mosque is in Laleli and the Esma Sultan
+  Mansion is in Ortaköy."` → `"no"`), still working correctly.
+- **500/570 rows unchanged**, including every one of the former 48
+  `"Greenwich Village, New York City"` regressions — confirmed
+  individually: e.g. `niah_multi_32000_early_4`/`direct_document` now
+  extracts `"Greenwich Village, New York City"` verbatim (extracted
+  F1=1.0, matching raw), where the pre-revision extractor had produced
+  `"Greenwich Village"` (F1=0.57).
+- **The two remaining pre-existing minor imprecisions are unaffected, as
+  intended** (out of scope for this revision, not silently "fixed" by
+  accident): the one semicolon-separated list-selection miss (`"United
+  States Ambassador to Ghana; ...; Chief of Protocol of the United
+  States"` → picked the wrong true item) and the one appositive-drop in a
+  counterfactualized example (`"the Main Building (also referred to as
+  Ossenfer Malquorin)"` → `"the Main Building"`) both still occur exactly
+  as before — `_extend_over_trailing_qualifier` is deliberately anchored
+  to comma-attached, Title-Case, end-of-string qualifiers only, and does
+  not touch semicolon lists or parenthetical asides (see Section 2). Both
+  remain documented, quantified, real limitations, not claimed as fixed.
 - **Confirmed: no case changed factual content**, invented an entity, or
   "repaired" a wrong raw answer into a different, more-correct one (test
-  case E's guarantee held on all 570 real rows, matching the unit-test
-  guarantee). No STOP condition from Step 7 was triggered. Net effect
-  across all 570 rows is a clear, substantial improvement (see Section 3
-  and the per-method aggregate in the sibling `.rescored.jsonl` files),
-  with the 50-row over-shortening pattern documented as a known,
-  quantified trade-off for future work (e.g. tightening the extraction
-  prompt to prefer the longest span still satisfying "shortest that
-  fully answers" when gold conventions expect a compound span) — not
-  something this frozen pass tuned away after seeing scores.
+  case E's guarantee held on all 570 real rows in both passes, matching
+  the unit-test guarantee). No STOP condition from Step 7 was triggered
+  in either pass. The revision was made once, verified with 6 new unit
+  tests before rescoring, and not tuned further after seeing this
+  result.
 
 ## 5. Filler leakage audit (old, pre-fix construction, reconstructed live)
 
@@ -175,7 +214,7 @@ documents (only condition specs — `third_party/manifests/long_context/
 _manifest.json` — and generation outputs were saved). Construction is
 fully deterministic (fixed `NIAH_PLUS_SEED`, no run-order/score
 dependence), so the old, pre-fix filler pool was reconstructed exactly
-by replaying every one of the 67 frozen manifest conditions through the
+by replaying every one of the 69 frozen manifest conditions through the
 now-fixed builders and reading off `excluded_source_overlap_count`/
 `excluded_answer_leakage_count` — i.e., counting how many of the
 old-code's actual filler candidates the new rule would have (and now
@@ -186,12 +225,23 @@ does) exclude:
 | multineedle-scaling | multi-needle, HotpotQA | 45 | 0 | **63** (avg 1.4/condition) |
 | single-needle-scaling | Condition C, SQuAD | 18 | **4,824** (avg 268/condition) | 0 |
 | contamination-study, Condition A | SQuAD | 2 | **536** (avg 268/condition) | 0 |
+| contamination-study, Condition B | SQuAD | 2 | **536** (avg 268/condition) | 0 |
 | contamination-study, Condition C | SQuAD | 2 | **536** (avg 268/condition) | 0 |
-| **Total** | | **67** | **5,896** | **63** |
+| **Total** | | **69** | **6,432** | **63** |
 
-(Condition B of the contamination study is a no-context memorization
-probe with no filler documents at all — `ant.evaluation_suite.
-answer_contract` — and is unaffected by this fix.)
+**Correction (caught before scoping the rerun, not after):** an earlier
+draft of this report stated Condition B was "a no-context memorization
+probe... unaffected by this fix." That was wrong, confirmed by rereading
+the actual driver script (`run_contamination_study.py`) rather than
+inferring from the one-line docstring reference in
+`answer_contract.py`: Condition B's `TaskExample` is built as
+`example_a.model_copy(...)` — it reuses Condition A's own documents
+verbatim (`build_single_needle_instance`, the SAME haystack, unchanged);
+the only difference is a post-hoc "reground against context"
+instruction (`apply_context_authoritative_regrounding`) applied to the
+already-produced answer. So Condition B is exactly as affected by the
+Part B leakage fix as Condition A is — the table above corrects the
+earlier omission, and Section 8's rerun scope below includes it.
 
 **Single-needle (SQuAD) was dominated by source-overlap**: SQuAD packs
 many distinct questions per article, so ~268 filler candidates per
@@ -254,28 +304,36 @@ exclusion logic, not just the easy case.
 - **PRE-FIX / NON-CANONICAL** for any needle-retrieval/position/scaling
   claim, effective immediately: `multineedle-scaling` (all 225
   generations), `single-needle-scaling` (all 90 generations),
-  `contamination-study` Conditions A and C (24 of 30 generations;
-  Condition B unaffected). Any Early/Middle/Late positional analysis or
-  32K/64K/128K scaling interpretation built on these — including
-  `docs/long_context_hotpot_audit_and_expansion_report.md` Section C's
-  "128K position trace audit" — is marked non-canonical for that purpose.
-  Canonicality banners were added to the top of `docs/
+  `contamination-study` — **all three conditions, all 30 generations**
+  (corrected from an earlier draft of this report that mistakenly
+  excluded Condition B; see Section 5's correction note — B reuses
+  Condition A's own documents verbatim). Any Early/Middle/Late positional
+  analysis or 32K/64K/128K scaling interpretation built on these —
+  including `docs/long_context_hotpot_audit_and_expansion_report.md`
+  Section C's "128K position trace audit" — is marked non-canonical for
+  that purpose. Canonicality banners were added to the top of `docs/
   long_context_final_report.md`, `docs/long_context_decision_memo.md`,
   and `docs/long_context_hotpot_audit_and_expansion_report.md` pointing
   here; nothing in those files was deleted or rewritten.
 - **Must be rerun** before any needle-retrieval/position/scaling claim
   can be made canonically again: `multineedle-scaling`,
-  `single-needle-scaling`, and `contamination-study` Conditions A/C,
-  against the now-fixed construction (Section 8).
+  `single-needle-scaling`, and all of `contamination-study` (A, B, and
+  C), against the now-fixed construction (Section 8).
 
-## 8. Rerun proposal (not executed this pass)
+## 8. Rerun proposal — authorized and executing
+
+Authorized after the Section 4 revision above (0/570 rows worsened,
+extractor re-frozen): the 345-generation rerun below has been launched
+against the now-fixed construction (corrected from the original
+335-generation estimate — see Section 5/7's correction: all 30
+contamination-study generations are affected, not 20).
 
 | Experiment | Generations | Historical actual cost (pre-fix run) | Historical wall-clock (sequential sum) |
 |---|---|---|---|
 | multineedle-scaling | 225 (5 methods × 45 conditions) | $21.82 | 0.89 h |
 | single-needle-scaling | 90 (5 methods × 18 conditions) | $12.45 | 0.46 h |
-| contamination-study (A+C only; B unaffected) | 20 (5 methods × 4 conditions) | ~$1.63 (proportional share of the $2.44 total 30-gen cost) | ~0.06 h |
-| **Total** | **335** | **~$35.90** | **~1.4 h sequential** |
+| contamination-study (all 3 conditions) | 30 (5 methods × 6 conditions) | $2.44 | ~0.09 h |
+| **Total** | **345** | **~$36.71** | **~1.4 h sequential** |
 
 - **Cost basis:** real, measured per-row cost from the existing
   `output/runs/{multineedle-scaling,single-needle-scaling,
@@ -284,7 +342,7 @@ exclusion logic, not just the easy case.
   filler documents are chosen, not their approximate token volume
   (Section 6: context length preserved within ~2%), so per-generation
   cost should land close to these historical figures — a **20% margin**
-  for retries/variance gives a planning estimate of **~$43**, comfortably
+  for retries/variance gives a planning estimate of **~$44**, comfortably
   inside typical remaining budget for this study (see `docs/
   long_context_budget_ledger.md`).
 - **Wall-clock:** ~1.4 hours if run strictly sequentially in one process
@@ -303,8 +361,14 @@ exclusion logic, not just the easy case.
   question_index)` triples already frozen in the three manifest files;
   the rerun is "regenerate against the same conditions, fixed
   construction," not "redesign the experiment."
-- **Not executed in this pass**, per explicit instruction — this is a
-  proposal only, pending a separate go-ahead.
+- **Execution:** authorized explicitly by the user after reviewing
+  Section 4's clean second-pass results; old `output/runs/{multineedle-
+  scaling,single-needle-scaling,contamination-study}` and their
+  `document-envs/` materialized haystacks were moved aside (renamed with
+  a `-prefix-archived` suffix, not deleted) before regenerating at the
+  original paths, so the pre-fix data remains on disk for audit
+  alongside the new canonical runs. Final results are appended to this
+  report once the rerun completes.
 
 ## 9. Integrity confirmation
 

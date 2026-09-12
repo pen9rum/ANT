@@ -11,6 +11,7 @@ import pytest
 
 from ant.evaluation_suite import answer_extraction as ae_module
 from ant.evaluation_suite.answer_extraction import (
+    _extend_over_trailing_qualifier,
     _is_verbatim_substring,
     extract_answer_span,
 )
@@ -232,3 +233,67 @@ def test_zero_temperature_provider_injects_temperature_into_kwargs() -> None:
     kwargs = provider._responses_kwargs("prompt", 128)
     assert kwargs["temperature"] == 0
     assert kwargs["model"] == "gpt-4.1"
+
+
+# --- Trailing-qualifier safeguard: fixes the confirmed over-shortening
+# pattern (a compound location cut down past what gold expects) without
+# reopening list-selection ambiguity. ---
+
+
+def test_extend_over_trailing_qualifier_restores_a_dropped_city_country() -> None:
+    restored = _extend_over_trailing_qualifier(
+        "Greenwich Village", "Greenwich Village, New York City"
+    )
+    assert restored == "Greenwich Village, New York City"
+
+
+def test_extend_over_trailing_qualifier_handles_a_trailing_period_on_the_raw_answer() -> None:
+    restored = _extend_over_trailing_qualifier(
+        "Greenwich Village", "Greenwich Village, New York City."
+    )
+    assert restored == "Greenwich Village, New York City"
+
+
+def test_extend_over_trailing_qualifier_leaves_space_attached_clauses_alone() -> None:
+    # "by K. A. Applegate" is not a comma-attached qualifying component --
+    # dropping it is legitimate shortening, not the bug this fixes.
+    restored = _extend_over_trailing_qualifier("Animorphs", "Animorphs by K. A. Applegate")
+    assert restored == "Animorphs"
+
+
+def test_extend_over_trailing_qualifier_leaves_semicolon_separated_lists_alone() -> None:
+    raw = (
+        "United States Ambassador to Ghana; United States Ambassador to "
+        "Czechoslovakia; Chief of Protocol of the United States"
+    )
+    restored = _extend_over_trailing_qualifier("United States Ambassador to Ghana", raw)
+    assert restored == "United States Ambassador to Ghana"
+
+
+def test_extend_over_trailing_qualifier_no_op_when_candidate_is_not_a_prefix() -> None:
+    raw = "United States ambassador to Ghana, Chief of Protocol of the United States"
+    restored = _extend_over_trailing_qualifier("Chief of Protocol of the United States", raw)
+    assert restored == "Chief of Protocol of the United States"
+
+
+def test_extract_answer_span_end_to_end_fixes_the_greenwich_village_regression() -> None:
+    # Reproduces the exact confirmed production bug: raw is ALREADY the
+    # full correct gold string, and the (unrevised) extractor shortened
+    # it past what scoring rewards. Simulates an LLM that still makes the
+    # old mistake -- the deterministic safeguard must correct it anyway.
+    import json
+
+    def fake_provider(model: str):
+        return _StubProvider(json.dumps({"extracted_span": "Greenwich Village"}))
+
+    original = ae_module._ZeroTemperatureProvider
+    ae_module._ZeroTemperatureProvider = fake_provider
+    try:
+        result = extract_answer_span(
+            'The director of the romantic comedy "Big Stone Gap" is based in what New York city?',
+            "Greenwich Village, New York City",
+        )
+        assert result.extracted_answer == "Greenwich Village, New York City"
+        assert result.rejected_hallucination is False
+    finally:
+        ae_module._ZeroTemperatureProvider = original

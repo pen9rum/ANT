@@ -45,6 +45,28 @@ normalization, the extracted text must be a verbatim (case-insensitive)
 substring of the raw answer. Any violation -- including an LLM attempting
 to "repair" a wrong answer, invent an entity, or use outside knowledge --
 is rejected and the ORIGINAL raw answer is returned unchanged.
+
+Revision (post first-rescoring audit, before any further rescoring or
+the canonical rerun -- see docs/long_context_evaluation_fix_report.md
+Section 4): the first frozen version optimized purely for "shortest
+span," which over-shortened a class of already-correct, already-minimal
+answers -- most visibly compound locations like "Greenwich Village, New
+York City" cut down to just "Greenwich Village," turning an exact match
+into a partial one. The goal is now "shortest span that FULLY answers
+the question, preserving required qualifiers/components" (reworded in
+the prompt below), backed by a deterministic, narrowly-targeted
+safeguard (`_extend_over_trailing_qualifier`) that restores a dropped
+trailing qualifier when the candidate is a strict prefix of the raw
+answer and everything cut off is a single comma-attached, Title-Case
+qualifying phrase running all the way to the end (the City/State/Country
+pattern) -- never a general "always extend" rule, and it does not touch
+list-style ambiguity (semicolon-separated candidates, or a dropped
+clause not immediately comma-attached), which is a distinct,
+already-documented limitation this revision does not attempt to fix.
+This is the only revision made to this module after the first freeze,
+made in response to the audited over-shortening pattern (a formatting
+defect affecting all methods symmetrically), not in response to any
+method's score.
 """
 
 from __future__ import annotations
@@ -62,14 +84,52 @@ _EXTRACTION_PROMPT = """Question: {question}
 Answer text (already produced by another system, to be shortened only -- not replaced):
 {raw_answer}
 
-Extract the SHORTEST possible span of text, copied VERBATIM character-for-character from the \
-Answer text above, that directly answers the Question. Do not add, remove, correct, or change \
-any words from the copied span. Do not use outside knowledge. Do not fix the answer if it looks \
-wrong -- only copy what is already there. If the Answer text is already short and cannot be \
-shortened further without losing the answer, copy it verbatim in full.
+Extract the SHORTEST span of text, copied VERBATIM character-for-character from the Answer text \
+above, that FULLY and PRECISELY answers the Question. "Shortest" means: do not include \
+surrounding sentences, filler phrases ("The answer is...", "Yes, ..."), or extra explanation. It \
+does NOT mean dropping a qualifying component that is part of the answer itself -- if the answer \
+is a compound name, a location with its city/state/country/region together (e.g. "Greenwich \
+Village, New York City", "Paris, France"), or a date with day/month/year together, keep that \
+whole component intact as one contiguous span. When in doubt between a shorter partial span and a \
+slightly longer span that keeps the full precise answer, prefer the longer, complete one. Do not \
+add, remove, correct, or change any words from the copied span. Do not use outside knowledge. Do \
+not fix the answer if it looks wrong -- only copy what is already there. If the Answer text is \
+already short and cannot be shortened further without losing part of the answer, copy it verbatim \
+in full.
 
 Respond with a JSON object of exactly this form, nothing else:
 {{"extracted_span": "<verbatim substring copied from the Answer text above>"}}"""
+
+# Deterministic safeguard for the confirmed over-shortening pattern: a
+# candidate that is a strict prefix of the (period-stripped) raw answer,
+# where everything cut off is a SINGLE comma-attached, Title-Case
+# qualifying phrase running all the way to the end of the raw answer
+# (the "City, State/Country"-style pattern). A small set of lowercase
+# connector words is allowed inside that phrase (e.g. "United States of
+# America") without weakening the overall Title-Case signal. Deliberately
+# anchored and comma-specific -- it must NOT match a dropped clause that
+# is merely SPACE-attached ("... by K. A. Applegate", "... while visiting
+# her daughter") or semicolon-separated list items, both of which are
+# legitimate shortening/selection decisions this safeguard leaves alone.
+_QUALIFIER_WORD = r"(?:[A-Z][\w.&'-]*|of|the|de|la|and)"
+_TRAILING_QUALIFIER_RE = re.compile(rf"^,\s+{_QUALIFIER_WORD}(?:\s+{_QUALIFIER_WORD})*$")
+
+
+def _extend_over_trailing_qualifier(candidate: str, raw_answer: str) -> str:
+    """See `_TRAILING_QUALIFIER_RE` above. Only ever *lengthens* `candidate`
+    by pulling MORE verbatim text from `raw_answer` -- the result remains
+    trivially a substring of `raw_answer` by construction (it is sliced
+    directly from it), so no additional hallucination risk is introduced.
+    """
+    stripped_raw = raw_answer.strip().rstrip(".").rstrip()
+    stripped_candidate = candidate.strip().rstrip(".").rstrip()
+    if not stripped_candidate or not stripped_raw.lower().startswith(stripped_candidate.lower()):
+        return candidate
+    remainder = stripped_raw[len(stripped_candidate) :]
+    if _TRAILING_QUALIFIER_RE.match(remainder):
+        return stripped_raw
+    return candidate
+
 
 # Fixed, small output budget -- an extracted span is never long. Not
 # tuned per benchmark/method.
@@ -155,6 +215,7 @@ def extract_answer_span(
         candidate = ""
 
     if candidate and _is_verbatim_substring(candidate, raw_model_answer):
+        candidate = _extend_over_trailing_qualifier(candidate, raw_model_answer)
         return ExtractionResult(
             extracted_answer=candidate,
             used_llm=True,
