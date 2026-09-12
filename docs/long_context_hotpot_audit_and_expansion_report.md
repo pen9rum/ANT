@@ -12,6 +12,14 @@
 > raw EM/F1 undercounted verbose-but-correct answers (e.g. this report's
 > own "Yes, both were American." example, Section A). Nothing below has
 > been altered.
+>
+> **UPDATE: the rerun is complete** -- see `docs/
+> long_context_evaluation_fix_report.md` Section 8b for the fresh
+> `multineedle-scaling` results Section C's positional analysis would now
+> need to be redone against (multi-needle scaling itself moved only
+> mildly under the fix -- it had near-zero source-overlap leakage to
+> begin with, unlike the single-needle experiments, which moved
+> dramatically).
 
 Three goals, diagnosis + replication only: (1) diagnose ANT's apparent
 HotpotQA weakness from existing traces, (2) expand the natural pilot from

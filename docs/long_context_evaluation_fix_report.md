@@ -295,6 +295,11 @@ exclusion logic, not just the easy case.
 
 ## 7. Canonicality decision
 
+> This section describes the decision AT THE TIME the leakage fix was
+> implemented, before the rerun. The rerun in Section 8/8b has since
+> completed — see Section 8b's "Canonicality, updated" for the current,
+> post-rerun status. Left as originally written for the audit trail.
+
 - **Still canonical (documents unaffected by Part B):** the natural
   multi-document pilot's document construction (HotpotQA/2WikiMultihopQA/
   MuSiQue — real benchmark documents, no synthetic filler). Its
@@ -367,8 +372,104 @@ contamination-study generations are affected, not 20).
   `document-envs/` materialized haystacks were moved aside (renamed with
   a `-prefix-archived` suffix, not deleted) before regenerating at the
   original paths, so the pre-fix data remains on disk for audit
-  alongside the new canonical runs. Final results are appended to this
-  report once the rerun completes.
+  alongside the new canonical runs.
+
+### 8b. Rerun results (complete)
+
+All 345 generations completed. **Actual cost: $34.98** (generation) +
+$0.35 (re-extraction of all 570 total predictions, natural pilot
+included) = **$35.33 total**, under the $36.71 estimate and well under
+the $44 planning cap. One individual generation
+(`ant_document`/`niah_single_cf_128000_late_0`) failed with
+`FileNotFoundError: ... doc_0633.txt` — confirmed NOT a construction bug
+(the materialized environment had exactly 587 files, `doc_0000.txt`–
+`doc_0586.txt`, byte-matching the manifest's own `num_documents: 587`;
+the other four methods read the identical environment without error) —
+an isolated ANT worker citation referencing a document index far beyond
+the real range on a very large (128K-token, 587-document) haystack, out
+of scope to fix here (ANT core is frozen for this pass). Retried once via
+the same resume-by-task-id mechanism; succeeded (F1=1.0). Final error
+count: **0/345**.
+
+**Canonical (post-fix, extracted-metric) results:**
+
+| Experiment | Method | extracted EM | extracted F1 |
+|---|---|---|---|
+| multineedle-scaling | ant_document | 0.644 | 0.725 |
+| multineedle-scaling | direct_document | 0.622 | 0.737 |
+| multineedle-scaling | longagent | 0.600 | 0.733 |
+| multineedle-scaling | matched_react_document | 0.533 | 0.637 |
+| multineedle-scaling | retrieval_document | 0.800 | 0.862 |
+| single-needle-scaling | ant_document | 0.944 | 0.944 |
+| single-needle-scaling | direct_document | 1.000 | 1.000 |
+| single-needle-scaling | longagent | 0.778 | 0.860 |
+| single-needle-scaling | matched_react_document | 0.000 | 0.056 |
+| single-needle-scaling | retrieval_document | 1.000 | 1.000 |
+| contamination-study | ant_document | 0.167 | 0.262 |
+| contamination-study | direct_document | 0.500 | 0.654 |
+| contamination-study | longagent | 0.167 | 0.306 |
+| contamination-study | matched_react_document | 0.167 | 0.385 |
+| contamination-study | retrieval_document | 0.500 | 0.654 |
+
+Rescoring these 345 fresh predictions alongside the 225 natural-pilot
+ones (570 total) reconfirms Section 4's result held under real new data,
+not just the original audit set: **0/570 rows worsened, 0
+`rejected_hallucination`, net +45.9 F1** across the combined set.
+
+**Pre-fix vs. post-fix, raw metric only (isolates the construction fix
+from the extraction fix — same scoring both sides):**
+
+| Experiment | Method | PRE-FIX raw EM/F1 | POST-FIX raw EM/F1 |
+|---|---|---|---|
+| multineedle-scaling | ant_document | 0.356 / 0.547 | 0.378 / 0.540 |
+| multineedle-scaling | direct_document | 0.689 / 0.770 | 0.622 / 0.737 |
+| multineedle-scaling | longagent | 0.333 / 0.555 | 0.333 / 0.554 |
+| multineedle-scaling | matched_react_document | 0.267 / 0.444 | 0.222 / 0.408 |
+| multineedle-scaling | retrieval_document | 0.400 / 0.578 | 0.444 / 0.596 |
+| single-needle-scaling | ant_document | 0.611 / 0.648 | **0.944 / 0.944** |
+| single-needle-scaling | direct_document | 0.167 / 0.167 | **1.000 / 1.000** |
+| single-needle-scaling | longagent | 0.278 / 0.306 | **0.778 / 0.860** |
+| single-needle-scaling | matched_react_document | 0.000 / 0.000 | 0.000 / 0.056 |
+| single-needle-scaling | retrieval_document | 0.167 / 0.300 | **1.000 / 1.000** |
+| contamination-study | ant_document | 0.167 / 0.167 | 0.167 / 0.262 |
+| contamination-study | direct_document | 0.167 / 0.167 | **0.500 / 0.654** |
+| contamination-study | longagent | 0.000 / 0.000 | 0.167 / 0.306 |
+| contamination-study | matched_react_document | 0.000 / 0.000 | 0.167 / 0.385 |
+| contamination-study | retrieval_document | 0.000 / 0.000 | **0.500 / 0.654** |
+
+**This is the headline empirical finding of the whole pass:**
+`multineedle-scaling` moved only modestly (flat-to-small changes, both
+directions) — consistent with Section 5's audit showing it had **zero**
+source-overlap leakage and only mild direct answer-string leakage (63
+instances total). `single-needle-scaling` and `contamination-study`
+(both built on `build_single_needle_instance`/
+`build_fully_counterfactualized_single_needle_instance`, both dominated
+by ~268 source-overlap exclusions per instance) moved **dramatically** —
+`direct_document` and `retrieval_document` go from EM 0.167 to a clean
+EM 1.0 on single-needle-scaling. The mechanism is now well-understood
+and was NOT the "leakage lets methods cheat" story originally
+hypothesized in Part B's motivation: because these are
+counterfactualized instances (the needle's true answer entity is
+replaced with a fictional one), a same-source-article filler leaking the
+ORIGINAL, un-substituted fact actively competed with the needle's
+fictional replacement inside the model's context, making every method
+LESS likely to report the intended counterfactual answer, not more. Once
+that leakage is removed, most methods can now correctly locate and
+report the needle's own answer without contradiction — meaning the
+PRE-FIX single-needle contamination numbers were not cleanly measuring
+"parametric memory override" as originally intended; they were
+confounded by this construction artifact. `matched_react_document`
+staying at EM=0.000 in both pre- and post-fix single-needle-scaling is
+therefore now a real, unconfounded, disclosed observation about that
+method specifically, not a construction artifact.
+
+- **Canonicality, updated:** `multineedle-scaling`, `single-needle-scaling`,
+  and `contamination-study` (all conditions) are now **CANONICAL** at the
+  paths above — freshly regenerated against the fixed construction,
+  0 construction-side errors, all 345 rows scored with the same frozen,
+  method-agnostic extractor as every other result in this study. The old
+  `-prefix-archived` copies remain on disk, explicitly still marked
+  PRE-FIX/NON-CANONICAL, for audit only.
 
 ## 9. Integrity confirmation
 

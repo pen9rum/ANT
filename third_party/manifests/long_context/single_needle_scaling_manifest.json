@@ -9,8 +9,8 @@
       "gold_answers": [
         "Zorvath Quennelin"
       ],
-      "num_documents": 158,
-      "actual_token_count": 32004,
+      "num_documents": 146,
+      "actual_token_count": 32161,
       "entity_substitutions": {
         "Saint Bernadette Soubirous": "Zorvath Quennelin",
         "Virgin Mary": "Ashcombe Vale"
@@ -25,8 +25,8 @@
       "gold_answers": [
         "Zorvath Quennelin"
       ],
-      "num_documents": 158,
-      "actual_token_count": 32004,
+      "num_documents": 146,
+      "actual_token_count": 32161,
       "entity_substitutions": {
         "Saint Bernadette Soubirous": "Zorvath Quennelin",
         "Virgin Mary": "Ashcombe Vale"
@@ -41,8 +41,8 @@
       "gold_answers": [
         "Zorvath Quennelin"
       ],
-      "num_documents": 158,
-      "actual_token_count": 32004,
+      "num_documents": 146,
+      "actual_token_count": 32161,
       "entity_substitutions": {
         "Saint Bernadette Soubirous": "Zorvath Quennelin",
         "Virgin Mary": "Ashcombe Vale"
@@ -57,8 +57,8 @@
       "gold_answers": [
         "Zorvath Quennelin"
       ],
-      "num_documents": 315,
-      "actual_token_count": 64218,
+      "num_documents": 293,
+      "actual_token_count": 64083,
       "entity_substitutions": {
         "Saint Bernadette Soubirous": "Zorvath Quennelin",
         "Virgin Mary": "Ashcombe Vale"
@@ -73,8 +73,8 @@
       "gold_answers": [
         "Zorvath Quennelin"
       ],
-      "num_documents": 315,
-      "actual_token_count": 64218,
+      "num_documents": 293,
+      "actual_token_count": 64083,
       "entity_substitutions": {
         "Saint Bernadette Soubirous": "Zorvath Quennelin",
         "Virgin Mary": "Ashcombe Vale"
@@ -89,8 +89,8 @@
       "gold_answers": [
         "Zorvath Quennelin"
       ],
-      "num_documents": 315,
-      "actual_token_count": 64218,
+      "num_documents": 293,
+      "actual_token_count": 64083,
       "entity_substitutions": {
         "Saint Bernadette Soubirous": "Zorvath Quennelin",
         "Virgin Mary": "Ashcombe Vale"
@@ -105,8 +105,8 @@
       "gold_answers": [
         "Zorvath Quennelin"
       ],
-      "num_documents": 634,
-      "actual_token_count": 128190,
+      "num_documents": 587,
+      "actual_token_count": 128246,
       "entity_substitutions": {
         "Saint Bernadette Soubirous": "Zorvath Quennelin",
         "Virgin Mary": "Ashcombe Vale"
@@ -121,8 +121,8 @@
       "gold_answers": [
         "Zorvath Quennelin"
       ],
-      "num_documents": 634,
-      "actual_token_count": 128190,
+      "num_documents": 587,
+      "actual_token_count": 128246,
       "entity_substitutions": {
         "Saint Bernadette Soubirous": "Zorvath Quennelin",
         "Virgin Mary": "Ashcombe Vale"
@@ -137,8 +137,8 @@
       "gold_answers": [
         "Zorvath Quennelin"
       ],
-      "num_documents": 634,
-      "actual_token_count": 128190,
+      "num_documents": 587,
+      "actual_token_count": 128246,
       "entity_substitutions": {
         "Saint Bernadette Soubirous": "Zorvath Quennelin",
         "Virgin Mary": "Ashcombe Vale"
@@ -153,8 +153,8 @@
       "gold_answers": [
         "Ossenfer Malquorin"
       ],
-      "num_documents": 158,
-      "actual_token_count": 32013,
+      "num_documents": 147,
+      "actual_token_count": 32065,
       "entity_substitutions": {
         "the Main Building": "Ossenfer Malquorin",
         "Sacred": "Belmara"
@@ -169,8 +169,8 @@
       "gold_answers": [
         "Ossenfer Malquorin"
       ],
-      "num_documents": 158,
-      "actual_token_count": 32013,
+      "num_documents": 147,
+      "actual_token_count": 32065,
       "entity_substitutions": {
         "the Main Building": "Ossenfer Malquorin",
         "Sacred": "Belmara"
@@ -185,8 +185,8 @@
       "gold_answers": [
         "Ossenfer Malquorin"
       ],
-      "num_documents": 158,
-      "actual_token_count": 32013,
+      "num_documents": 147,
+      "actual_token_count": 32065,
       "entity_substitutions": {
         "the Main Building": "Ossenfer Malquorin",
         "Sacred": "Belmara"
@@ -201,8 +201,8 @@
       "gold_answers": [
         "Ossenfer Malquorin"
       ],
-      "num_documents": 323,
-      "actual_token_count": 64177,
+      "num_documents": 292,
+      "actual_token_count": 64003,
       "entity_substitutions": {
         "the Main Building": "Ossenfer Malquorin",
         "Sacred": "Belmara"
@@ -217,8 +217,8 @@
       "gold_answers": [
         "Ossenfer Malquorin"
       ],
-      "num_documents": 323,
-      "actual_token_count": 64177,
+      "num_documents": 292,
+      "actual_token_count": 64003,
       "entity_substitutions": {
         "the Main Building": "Ossenfer Malquorin",
         "Sacred": "Belmara"
@@ -233,8 +233,8 @@
       "gold_answers": [
         "Ossenfer Malquorin"
       ],
-      "num_documents": 323,
-      "actual_token_count": 64177,
+      "num_documents": 292,
+      "actual_token_count": 64003,
       "entity_substitutions": {
         "the Main Building": "Ossenfer Malquorin",
         "Sacred": "Belmara"
@@ -249,8 +249,8 @@
       "gold_answers": [
         "Ossenfer Malquorin"
       ],
-      "num_documents": 628,
-      "actual_token_count": 128241,
+      "num_documents": 586,
+      "actual_token_count": 128159,
       "entity_substitutions": {
         "the Main Building": "Ossenfer Malquorin",
         "Sacred": "Belmara"
@@ -265,8 +265,8 @@
       "gold_answers": [
         "Ossenfer Malquorin"
       ],
-      "num_documents": 628,
-      "actual_token_count": 128241,
+      "num_documents": 586,
+      "actual_token_count": 128159,
       "entity_substitutions": {
         "the Main Building": "Ossenfer Malquorin",
         "Sacred": "Belmara"
@@ -281,8 +281,8 @@
       "gold_answers": [
         "Ossenfer Malquorin"
       ],
-      "num_documents": 628,
-      "actual_token_count": 128241,
+      "num_documents": 586,
+      "actual_token_count": 128159,
       "entity_substitutions": {
         "the Main Building": "Ossenfer Malquorin",
         "Sacred": "Belmara"

@@ -549,11 +549,11 @@
       "gold_answers": [
         "no"
       ],
-      "num_documents": 236,
-      "actual_token_count": 32110,
+      "num_documents": 259,
+      "actual_token_count": 32064,
       "needle_doc_ids": [
         "doc0",
-        "doc76"
+        "doc87"
       ],
       "depth_percents": [
         0.0,
@@ -569,11 +569,11 @@
       "gold_answers": [
         "no"
       ],
-      "num_documents": 236,
-      "actual_token_count": 32110,
+      "num_documents": 259,
+      "actual_token_count": 32064,
       "needle_doc_ids": [
-        "doc75",
-        "doc154"
+        "doc86",
+        "doc173"
       ],
       "depth_percents": [
         0.33,
@@ -589,11 +589,11 @@
       "gold_answers": [
         "no"
       ],
-      "num_documents": 236,
-      "actual_token_count": 32110,
+      "num_documents": 259,
+      "actual_token_count": 32064,
       "needle_doc_ids": [
-        "doc153",
-        "doc235"
+        "doc172",
+        "doc258"
       ],
       "depth_percents": [
         0.66,
@@ -609,11 +609,11 @@
       "gold_answers": [
         "no"
       ],
-      "num_documents": 449,
-      "actual_token_count": 64047,
+      "num_documents": 517,
+      "actual_token_count": 64059,
       "needle_doc_ids": [
         "doc0",
-        "doc154"
+        "doc173"
       ],
       "depth_percents": [
         0.0,
@@ -629,11 +629,11 @@
       "gold_answers": [
         "no"
       ],
-      "num_documents": 449,
-      "actual_token_count": 64047,
+      "num_documents": 517,
+      "actual_token_count": 64059,
       "needle_doc_ids": [
-        "doc153",
-        "doc304"
+        "doc172",
+        "doc342"
       ],
       "depth_percents": [
         0.33,
@@ -649,11 +649,11 @@
       "gold_answers": [
         "no"
       ],
-      "num_documents": 449,
-      "actual_token_count": 64047,
+      "num_documents": 517,
+      "actual_token_count": 64059,
       "needle_doc_ids": [
-        "doc303",
-        "doc448"
+        "doc341",
+        "doc516"
       ],
       "depth_percents": [
         0.66,
@@ -669,11 +669,11 @@
       "gold_answers": [
         "no"
       ],
-      "num_documents": 909,
-      "actual_token_count": 128124,
+      "num_documents": 1035,
+      "actual_token_count": 128064,
       "needle_doc_ids": [
         "doc0",
-        "doc304"
+        "doc342"
       ],
       "depth_percents": [
         0.0,
@@ -689,11 +689,11 @@
       "gold_answers": [
         "no"
       ],
-      "num_documents": 909,
-      "actual_token_count": 128124,
+      "num_documents": 1035,
+      "actual_token_count": 128064,
       "needle_doc_ids": [
-        "doc303",
-        "doc607"
+        "doc341",
+        "doc688"
       ],
       "depth_percents": [
         0.33,
@@ -709,11 +709,11 @@
       "gold_answers": [
         "no"
       ],
-      "num_documents": 909,
-      "actual_token_count": 128124,
+      "num_documents": 1035,
+      "actual_token_count": 128064,
       "needle_doc_ids": [
-        "doc606",
-        "doc908"
+        "doc687",
+        "doc1034"
       ],
       "depth_percents": [
         0.66,

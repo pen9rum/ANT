@@ -19,6 +19,20 @@
 > retrieval/position/scaling; they must be regenerated against the fixed
 > construction before being cited for that purpose. Nothing below has
 > been deleted or altered -- this notice only flags what changed.
+>
+> **UPDATE: the rerun is complete.** New canonical results exist at the
+> same `output/runs/{multineedle-scaling,single-needle-scaling,
+> contamination-study}` paths (old data preserved alongside as
+> `*-prefix-archived`, not deleted). See `docs/
+> long_context_evaluation_fix_report.md` Section 8b for the full results
+> and a striking finding: single-needle contamination-study numbers
+> changed dramatically (e.g. several methods' EM rose from ~0.17 to a
+> clean 1.0) because the leaked filler content was actively competing
+> with the counterfactual needle answer, not helping methods "cheat" as
+> originally hypothesized -- so the override-failure rates reported below
+> were confounded by this construction artifact, not a clean measurement
+> of parametric-memory override. Multi-needle scaling moved only mildly
+> (it had near-zero source-overlap leakage to begin with).
 
 Governing spec: combine (1) diagnosing/fixing the NIAH+ single-needle
 contamination problem, (2) a natural multi-document pilot, (3) a

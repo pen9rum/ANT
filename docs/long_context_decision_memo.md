@@ -14,6 +14,17 @@
 > EM/F1 is superseded by the new extracted-EM/F1 metric (see the fix
 > report's rescored table) -- raw EM/F1 undercounted verbose-but-correct
 > answers. Nothing below has been altered.
+>
+> **UPDATE: the rerun is complete** -- see `docs/
+> long_context_evaluation_fix_report.md` Section 8b. The single-needle
+> tables here (contamination-study and single-needle-scaling) changed
+> dramatically once leakage was removed (e.g. several methods' EM rose
+> from ~0.17 to a clean 1.0): the leaked same-source-article filler
+> turned out to be actively competing with the counterfactual needle
+> answer, not helping methods "cheat," so the override-failure analysis
+> in this memo was measuring that confound, not a clean parametric-memory
+> effect. Multi-needle-scaling changed only mildly (near-zero
+> source-overlap leakage to begin with).
 
 No new API calls, code, prompts, manifests, or outputs were modified to
 produce this memo -- every table below is computed directly from the
