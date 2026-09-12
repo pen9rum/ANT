@@ -1,0 +1,96 @@
+{
+  "conditions": [
+    {
+      "question_index": 0,
+      "condition": "A",
+      "task_id": "niah_single_32000_middle_0",
+      "question": "To whom did the Virgin Mary allegedly appear in 1858 in Lourdes France?",
+      "gold_answers": [
+        "Zorvath Quennelin"
+      ],
+      "original_answer_replaced": "Saint Bernadette Soubirous",
+      "num_documents": 158,
+      "actual_token_count": 32131
+    },
+    {
+      "question_index": 0,
+      "condition": "B",
+      "task_id": "niah_single_32000_middle_0_condB",
+      "question": "To whom did the Virgin Mary allegedly appear in 1858 in Lourdes France?",
+      "gold_answers": [
+        "Zorvath Quennelin"
+      ],
+      "original_answer_replaced": "Saint Bernadette Soubirous",
+      "num_documents": 158,
+      "actual_token_count": 32131,
+      "note": "same instance as condition A, answer_contract_condition=B applied at inference time"
+    },
+    {
+      "question_index": 0,
+      "condition": "C",
+      "task_id": "niah_single_cf_32000_middle_0",
+      "question": "To whom did the Ashcombe Vale allegedly appear in 1858 in Lourdes France?",
+      "gold_answers": [
+        "Zorvath Quennelin"
+      ],
+      "original_answer_replaced": "Saint Bernadette Soubirous",
+      "entity_substitutions": {
+        "Saint Bernadette Soubirous": "Zorvath Quennelin",
+        "Virgin Mary": "Ashcombe Vale"
+      },
+      "num_documents": 158,
+      "actual_token_count": 32004
+    },
+    {
+      "question_index": 1,
+      "condition": "A",
+      "task_id": "niah_single_32000_middle_1",
+      "question": "What is in front of the Notre Dame Main Building?",
+      "gold_answers": [
+        "Bregdil Thanewick"
+      ],
+      "original_answer_replaced": "a copper statue of Christ",
+      "num_documents": 160,
+      "actual_token_count": 32116
+    },
+    {
+      "question_index": 1,
+      "condition": "B",
+      "task_id": "niah_single_32000_middle_1_condB",
+      "question": "What is in front of the Notre Dame Main Building?",
+      "gold_answers": [
+        "Bregdil Thanewick"
+      ],
+      "original_answer_replaced": "a copper statue of Christ",
+      "num_documents": 160,
+      "actual_token_count": 32116,
+      "note": "same instance as condition A, answer_contract_condition=B applied at inference time"
+    },
+    {
+      "question_index": 1,
+      "condition": "C",
+      "task_id": "niah_single_cf_32000_middle_1",
+      "question": "What is in front of the Notre Dame Main Building?",
+      "gold_answers": [
+        "Bregdil Thanewick"
+      ],
+      "original_answer_replaced": "a copper statue of Christ",
+      "entity_substitutions": {
+        "a copper statue of Christ": "Bregdil Thanewick"
+      },
+      "num_documents": 164,
+      "actual_token_count": 32030
+    }
+  ],
+  "context_length_tokens": 32000,
+  "position": "middle",
+  "total_generations": 30,
+  "methods": [
+    "direct_document",
+    "retrieval_document",
+    "matched_react_document",
+    "longagent",
+    "ant_document"
+  ],
+  "frozen_final": true
+}

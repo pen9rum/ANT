@@ -1,0 +1,87 @@
+{
+  "benchmarks": {
+    "hotpotqa": [
+      {
+        "task_id": "5a8b57f25542995d1e6f1371",
+        "question": "Were Scott Derrickson and Ed Wood of the same nationality?",
+        "num_documents": 10
+      },
+      {
+        "task_id": "5a8c7595554299585d9e36b6",
+        "question": "What government position was held by the woman who portrayed Corliss Archer in the film Kiss and Tell?",
+        "num_documents": 10
+      },
+      {
+        "task_id": "5a85ea095542994775f606a8",
+        "question": "What science fantasy young adult series, told in first person, has a set of companion books narrating the stories of enslaved worlds and alien species?",
+        "num_documents": 10
+      },
+      {
+        "task_id": "5adbf0a255429947ff17385a",
+        "question": "Are the Laleli Mosque and Esma Sultan Mansion located in the same neighborhood?",
+        "num_documents": 10
+      },
+      {
+        "task_id": "5a8e3ea95542995a26add48d",
+        "question": "The director of the romantic comedy \"Big Stone Gap\" is based in what New York city?",
+        "num_documents": 10
+      }
+    ],
+    "2wikimultihopqa": [
+      {
+        "task_id": "8813f87c0bdd11eba7f7acde48001122",
+        "question": "Who is the mother of the director of film Polish-Russian War (Film)?",
+        "num_documents": 10
+      },
+      {
+        "task_id": "61a46987092f11ebbdaeac1f6bf848b6",
+        "question": "Which film came out first, Blind Shaft or The Mask Of Fu Manchu?",
+        "num_documents": 10
+      },
+      {
+        "task_id": "e2a3bf2a0bdd11eba7f7acde48001122",
+        "question": "When did John V, Prince Of Anhalt-Zerbst's father die?",
+        "num_documents": 10
+      },
+      {
+        "task_id": "0cd3bdea0bde11eba7f7acde48001122",
+        "question": "What is the award that the director of film Wearing Velvet Slippers Under A Golden Umbrella won?",
+        "num_documents": 10
+      },
+      {
+        "task_id": "f9dcb4a60bda11eba7f7acde48001122",
+        "question": "Where was the director of film Ronnie Rocket born?",
+        "num_documents": 10
+      }
+    ],
+    "musique": [
+      {
+        "task_id": "2hop__460946_294723",
+        "question": "Who is the spouse of the Green performer?",
+        "num_documents": 20
+      },
+      {
+        "task_id": "2hop__252311_366220",
+        "question": "Who founded the company that distributed the film UHF?",
+        "num_documents": 20
+      },
+      {
+        "task_id": "2hop__701895_752697",
+        "question": "What administrative territorial entity is the owner of Ciudad Deportiva located?",
+        "num_documents": 20
+      },
+      {
+        "task_id": "2hop__259228_793698",
+        "question": "Where is Ulrich Walter's employer headquartered?",
+        "num_documents": 20
+      },
+      {
+        "task_id": "2hop__481349_302087",
+        "question": "Which company owns the manufacturer of Learjet 60?",
+        "num_documents": 20
+      }
+    ]
+  },
+  "frozen_final": true,
+  "selection_policy": "first 5 rows of each benchmark's own validation-split row order, deterministic, independent of method score/expected advantage/gold answer/prior outputs -- same policy as the original frozen 6-task manifest"
+}
