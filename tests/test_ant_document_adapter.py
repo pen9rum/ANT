@@ -114,3 +114,67 @@ def test_ant_core_runs_unmodified_on_a_document_substrate_and_finds_the_right_do
     assert any(item.path == "doc_0000.txt" for item in state.evidence)
     assert state.rounds
     assert state.rounds[0].node_executions
+
+
+def test_document_territories_scale_to_a_niah_plus_sized_instance_deterministically(
+    tmp_path: Path,
+) -> None:
+    # Part B (NIAH+) territories/workers can number in the hundreds
+    # (32K-128K token contexts split into many small documents). Territory
+    # construction must remain purely mechanical -- one territory per
+    # document, no LLM calls, no dependency on which document(s) happen to
+    # be the needle(s) -- at this scale, not just the ~10-20-document scale
+    # the original 3-benchmark track exercises.
+    documents = [
+        DocumentRecord(doc_id=f"doc{i}", title=f"Filler {i}", text=f"filler content {i} " * 5)
+        for i in range(300)
+    ]
+    materialize_documents(documents, tmp_path)
+    environment = EvalDocumentEnvironment(tmp_path, documents)
+
+    territories = _document_territories(environment)
+
+    assert len(territories) == 300
+    assert len({t.id for t in territories}) == 300  # every id unique
+    # Deterministic: rebuilding from the same environment produces an
+    # identical territory list, regardless of which of these 300 documents
+    # (if any) a NIAH+ instance's own needle happens to be -- territory
+    # construction never reads that information at all (see next test).
+    territories_again = _document_territories(environment)
+    assert [t.model_dump() for t in territories] == [t.model_dump() for t in territories_again]
+
+
+def test_document_territories_never_read_niah_plus_needle_or_depth_metadata(
+    tmp_path: Path,
+) -> None:
+    # A NIAH+-materialized environment is built from plain DocumentRecords
+    # exactly like every other benchmark's -- needle_doc_ids/depth_percents
+    # live only in the benchmark adapter's own TaskExample.metadata
+    # ("niah_metadata"), never inside a DocumentRecord itself. This test
+    # pins down that _document_territories' OWN construction is identical
+    # whether or not a caller happens to know which documents are needles
+    # -- i.e. it structurally cannot special-case a "needle territory",
+    # since DocumentRecord has no such field to read in the first place.
+    documents = [
+        DocumentRecord(doc_id=f"doc{i}", title=f"Filler {i}", text=f"filler {i} " * 5)
+        for i in range(20)
+    ]
+    # Simulate two different "needle placements" over the IDENTICAL
+    # document set/order -- construction must be byte-identical regardless.
+    materialize_documents(documents, tmp_path)
+    environment = EvalDocumentEnvironment(tmp_path, documents)
+    needle_ids_scenario_a = {"doc2", "doc15"}  # unused by _document_territories
+    needle_ids_scenario_b = {"doc0", "doc19"}  # unused by _document_territories
+    del needle_ids_scenario_a, needle_ids_scenario_b  # never passed in -- the point
+
+    for doc in documents:
+        assert set(doc.model_dump()) == {"doc_id", "title", "text"}
+
+    territories = _document_territories(environment)
+    for territory in territories:
+        assert set(territory.model_dump()) == {"id", "root", "files", "summary"}
+        # Summary is derived only from doc_id/title -- never mentions
+        # needle/depth/position, which _document_territories has no access
+        # to at all.
+        assert "needle" not in territory.summary.lower()
+        assert "depth" not in territory.summary.lower()

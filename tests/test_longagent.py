@@ -445,3 +445,49 @@ def test_apply_concise_answer_contract_true_condenses_the_final_answer_only(
     # ONE extra physical call on top, not a change to round semantics.
     assert result.metadata["leader_calls"] == 1
     assert result.metadata["member_calls"] == 0
+
+
+def _make_repo_with_content_size(tmp_path: Path, word_count: int) -> Path:
+    (tmp_path / "src").mkdir(parents=True)
+    (tmp_path / "src" / "a.py").write_text(f"# {'word ' * word_count}\n", encoding="utf-8")
+    return tmp_path
+
+
+def test_member_count_scales_with_input_length(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Real chunk_document/serialize_repository, real (small, fixed)
+    # chunk_size_tokens -- only the provider boundary is mocked. Uses
+    # _KeyedScriptedProvider (matches by prompt substring, not call order)
+    # since the exact number of member calls depends on how many chunks
+    # the larger repo actually produces, which this test deliberately does
+    # not hardcode.
+    script = {
+        "FIRST round": _FOUR_CHUNK_LEADER_SCRIPT["FIRST round"],
+        "Discussion history so far": _FOUR_CHUNK_LEADER_SCRIPT["Discussion history so far"],
+    }
+    # Every member call falls through to _KeyedScriptedProvider's own
+    # generic {"content": "fallback"} default, which is a valid response
+    # for ANY member regardless of its own chunk text or how many there are.
+    small_root = _make_repo_with_content_size(tmp_path / "small", word_count=40)
+    small_provider = _KeyedScriptedProvider(dict(script))
+    monkeypatch.setattr(longagent_module, "CountingOpenAIProvider", lambda model: small_provider)
+    small_adapter = LongAgentAdapter(chunk_size_tokens=50, member_concurrency=4)
+    small_example = TaskExample(benchmark="test", task_id="small", question="Q?", reference="")
+    small_result = small_adapter.run(small_example, small_root)
+
+    large_root = _make_repo_with_content_size(tmp_path / "large", word_count=400)
+    large_provider = _KeyedScriptedProvider(dict(script))
+    monkeypatch.setattr(longagent_module, "CountingOpenAIProvider", lambda model: large_provider)
+    large_adapter = LongAgentAdapter(chunk_size_tokens=50, member_concurrency=4)
+    large_example = TaskExample(benchmark="test", task_id="large", question="Q?", reference="")
+    large_result = large_adapter.run(large_example, large_root)
+
+    small_members = small_result.metadata["n_members"]
+    large_members = large_result.metadata["n_members"]
+    assert large_members > small_members
+    # ~10x more raw content at a fixed chunk size should produce
+    # meaningfully more chunks -- not exact (tokenization/serialization
+    # overhead vary), but the ratio must be in the right ballpark, not
+    # merely "one more".
+    assert large_members >= small_members * 5
