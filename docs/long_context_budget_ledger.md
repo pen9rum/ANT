@@ -26,7 +26,16 @@ part_ab_report.md Sections 5-7), not invented.
 | A | 30 | ~$5 (pre-launch: 6 instances x per-method-set ~$0.56 (32K single-needle scale, measured) + condition-B regrounding overhead, +margin) | $0.00 | ~$5 | **$2.44** | **$2.44** |
 | B | 75 | ~$3 | $2.44 | ~$5.44 | **$2.30** | **$4.74** |
 | C | 225 | ~$25-30 (see detail below) | $4.74 | ~$30-35 | **$21.82** | **$26.56** |
-| D | <=90 | ~$19 (see detail below) | $26.56 | ~$45.56 | TBD | TBD |
+| D | <=90 | ~$19 (see detail below) | $26.56 | ~$45.56 | **$12.45** | **$39.01** |
+
+## Final total: $39.01 of $70.00 hard ceiling (all four phases completed, zero errors across all 420 generations, 30+75+225+90)
+
+This finished below the $50-60 target range, not above it -- no phase was
+cut short or scaled back to stay under budget; all four phases (including
+the optional Part D) ran at their full planned scope because actual
+per-generation costs across the whole pass consistently came in under
+their own conservative pre-launch estimates (see each phase's own actual-
+vs-estimated line above).
 
 ### Phase D pre-launch estimate detail
 

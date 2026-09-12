@@ -1,0 +1,303 @@
+{
+  "conditions": [
+    {
+      "task_id": "niah_single_cf_32000_early_0",
+      "question_index": 0,
+      "context_length_tokens": 32000,
+      "position": "early",
+      "question": "To whom did the Ashcombe Vale allegedly appear in 1858 in Lourdes France?",
+      "gold_answers": [
+        "Zorvath Quennelin"
+      ],
+      "num_documents": 158,
+      "actual_token_count": 32004,
+      "entity_substitutions": {
+        "Saint Bernadette Soubirous": "Zorvath Quennelin",
+        "Virgin Mary": "Ashcombe Vale"
+      }
+    },
+    {
+      "task_id": "niah_single_cf_32000_middle_0",
+      "question_index": 0,
+      "context_length_tokens": 32000,
+      "position": "middle",
+      "question": "To whom did the Ashcombe Vale allegedly appear in 1858 in Lourdes France?",
+      "gold_answers": [
+        "Zorvath Quennelin"
+      ],
+      "num_documents": 158,
+      "actual_token_count": 32004,
+      "entity_substitutions": {
+        "Saint Bernadette Soubirous": "Zorvath Quennelin",
+        "Virgin Mary": "Ashcombe Vale"
+      }
+    },
+    {
+      "task_id": "niah_single_cf_32000_late_0",
+      "question_index": 0,
+      "context_length_tokens": 32000,
+      "position": "late",
+      "question": "To whom did the Ashcombe Vale allegedly appear in 1858 in Lourdes France?",
+      "gold_answers": [
+        "Zorvath Quennelin"
+      ],
+      "num_documents": 158,
+      "actual_token_count": 32004,
+      "entity_substitutions": {
+        "Saint Bernadette Soubirous": "Zorvath Quennelin",
+        "Virgin Mary": "Ashcombe Vale"
+      }
+    },
+    {
+      "task_id": "niah_single_cf_64000_early_0",
+      "question_index": 0,
+      "context_length_tokens": 64000,
+      "position": "early",
+      "question": "To whom did the Ashcombe Vale allegedly appear in 1858 in Lourdes France?",
+      "gold_answers": [
+        "Zorvath Quennelin"
+      ],
+      "num_documents": 315,
+      "actual_token_count": 64218,
+      "entity_substitutions": {
+        "Saint Bernadette Soubirous": "Zorvath Quennelin",
+        "Virgin Mary": "Ashcombe Vale"
+      }
+    },
+    {
+      "task_id": "niah_single_cf_64000_middle_0",
+      "question_index": 0,
+      "context_length_tokens": 64000,
+      "position": "middle",
+      "question": "To whom did the Ashcombe Vale allegedly appear in 1858 in Lourdes France?",
+      "gold_answers": [
+        "Zorvath Quennelin"
+      ],
+      "num_documents": 315,
+      "actual_token_count": 64218,
+      "entity_substitutions": {
+        "Saint Bernadette Soubirous": "Zorvath Quennelin",
+        "Virgin Mary": "Ashcombe Vale"
+      }
+    },
+    {
+      "task_id": "niah_single_cf_64000_late_0",
+      "question_index": 0,
+      "context_length_tokens": 64000,
+      "position": "late",
+      "question": "To whom did the Ashcombe Vale allegedly appear in 1858 in Lourdes France?",
+      "gold_answers": [
+        "Zorvath Quennelin"
+      ],
+      "num_documents": 315,
+      "actual_token_count": 64218,
+      "entity_substitutions": {
+        "Saint Bernadette Soubirous": "Zorvath Quennelin",
+        "Virgin Mary": "Ashcombe Vale"
+      }
+    },
+    {
+      "task_id": "niah_single_cf_128000_early_0",
+      "question_index": 0,
+      "context_length_tokens": 128000,
+      "position": "early",
+      "question": "To whom did the Ashcombe Vale allegedly appear in 1858 in Lourdes France?",
+      "gold_answers": [
+        "Zorvath Quennelin"
+      ],
+      "num_documents": 634,
+      "actual_token_count": 128190,
+      "entity_substitutions": {
+        "Saint Bernadette Soubirous": "Zorvath Quennelin",
+        "Virgin Mary": "Ashcombe Vale"
+      }
+    },
+    {
+      "task_id": "niah_single_cf_128000_middle_0",
+      "question_index": 0,
+      "context_length_tokens": 128000,
+      "position": "middle",
+      "question": "To whom did the Ashcombe Vale allegedly appear in 1858 in Lourdes France?",
+      "gold_answers": [
+        "Zorvath Quennelin"
+      ],
+      "num_documents": 634,
+      "actual_token_count": 128190,
+      "entity_substitutions": {
+        "Saint Bernadette Soubirous": "Zorvath Quennelin",
+        "Virgin Mary": "Ashcombe Vale"
+      }
+    },
+    {
+      "task_id": "niah_single_cf_128000_late_0",
+      "question_index": 0,
+      "context_length_tokens": 128000,
+      "position": "late",
+      "question": "To whom did the Ashcombe Vale allegedly appear in 1858 in Lourdes France?",
+      "gold_answers": [
+        "Zorvath Quennelin"
+      ],
+      "num_documents": 634,
+      "actual_token_count": 128190,
+      "entity_substitutions": {
+        "Saint Bernadette Soubirous": "Zorvath Quennelin",
+        "Virgin Mary": "Ashcombe Vale"
+      }
+    },
+    {
+      "task_id": "niah_single_cf_32000_early_2",
+      "question_index": 2,
+      "context_length_tokens": 32000,
+      "position": "early",
+      "question": "The Basilica of the Belmara heart at Notre Dame is beside to which structure?",
+      "gold_answers": [
+        "Ossenfer Malquorin"
+      ],
+      "num_documents": 158,
+      "actual_token_count": 32013,
+      "entity_substitutions": {
+        "the Main Building": "Ossenfer Malquorin",
+        "Sacred": "Belmara"
+      }
+    },
+    {
+      "task_id": "niah_single_cf_32000_middle_2",
+      "question_index": 2,
+      "context_length_tokens": 32000,
+      "position": "middle",
+      "question": "The Basilica of the Belmara heart at Notre Dame is beside to which structure?",
+      "gold_answers": [
+        "Ossenfer Malquorin"
+      ],
+      "num_documents": 158,
+      "actual_token_count": 32013,
+      "entity_substitutions": {
+        "the Main Building": "Ossenfer Malquorin",
+        "Sacred": "Belmara"
+      }
+    },
+    {
+      "task_id": "niah_single_cf_32000_late_2",
+      "question_index": 2,
+      "context_length_tokens": 32000,
+      "position": "late",
+      "question": "The Basilica of the Belmara heart at Notre Dame is beside to which structure?",
+      "gold_answers": [
+        "Ossenfer Malquorin"
+      ],
+      "num_documents": 158,
+      "actual_token_count": 32013,
+      "entity_substitutions": {
+        "the Main Building": "Ossenfer Malquorin",
+        "Sacred": "Belmara"
+      }
+    },
+    {
+      "task_id": "niah_single_cf_64000_early_2",
+      "question_index": 2,
+      "context_length_tokens": 64000,
+      "position": "early",
+      "question": "The Basilica of the Belmara heart at Notre Dame is beside to which structure?",
+      "gold_answers": [
+        "Ossenfer Malquorin"
+      ],
+      "num_documents": 323,
+      "actual_token_count": 64177,
+      "entity_substitutions": {
+        "the Main Building": "Ossenfer Malquorin",
+        "Sacred": "Belmara"
+      }
+    },
+    {
+      "task_id": "niah_single_cf_64000_middle_2",
+      "question_index": 2,
+      "context_length_tokens": 64000,
+      "position": "middle",
+      "question": "The Basilica of the Belmara heart at Notre Dame is beside to which structure?",
+      "gold_answers": [
+        "Ossenfer Malquorin"
+      ],
+      "num_documents": 323,
+      "actual_token_count": 64177,
+      "entity_substitutions": {
+        "the Main Building": "Ossenfer Malquorin",
+        "Sacred": "Belmara"
+      }
+    },
+    {
+      "task_id": "niah_single_cf_64000_late_2",
+      "question_index": 2,
+      "context_length_tokens": 64000,
+      "position": "late",
+      "question": "The Basilica of the Belmara heart at Notre Dame is beside to which structure?",
+      "gold_answers": [
+        "Ossenfer Malquorin"
+      ],
+      "num_documents": 323,
+      "actual_token_count": 64177,
+      "entity_substitutions": {
+        "the Main Building": "Ossenfer Malquorin",
+        "Sacred": "Belmara"
+      }
+    },
+    {
+      "task_id": "niah_single_cf_128000_early_2",
+      "question_index": 2,
+      "context_length_tokens": 128000,
+      "position": "early",
+      "question": "The Basilica of the Belmara heart at Notre Dame is beside to which structure?",
+      "gold_answers": [
+        "Ossenfer Malquorin"
+      ],
+      "num_documents": 628,
+      "actual_token_count": 128241,
+      "entity_substitutions": {
+        "the Main Building": "Ossenfer Malquorin",
+        "Sacred": "Belmara"
+      }
+    },
+    {
+      "task_id": "niah_single_cf_128000_middle_2",
+      "question_index": 2,
+      "context_length_tokens": 128000,
+      "position": "middle",
+      "question": "The Basilica of the Belmara heart at Notre Dame is beside to which structure?",
+      "gold_answers": [
+        "Ossenfer Malquorin"
+      ],
+      "num_documents": 628,
+      "actual_token_count": 128241,
+      "entity_substitutions": {
+        "the Main Building": "Ossenfer Malquorin",
+        "Sacred": "Belmara"
+      }
+    },
+    {
+      "task_id": "niah_single_cf_128000_late_2",
+      "question_index": 2,
+      "context_length_tokens": 128000,
+      "position": "late",
+      "question": "The Basilica of the Belmara heart at Notre Dame is beside to which structure?",
+      "gold_answers": [
+        "Ossenfer Malquorin"
+      ],
+      "num_documents": 628,
+      "actual_token_count": 128241,
+      "entity_substitutions": {
+        "the Main Building": "Ossenfer Malquorin",
+        "Sacred": "Belmara"
+      }
+    }
+  ],
+  "total_conditions": 18,
+  "methods": [
+    "direct_document",
+    "retrieval_document",
+    "matched_react_document",
+    "longagent",
+    "ant_document"
+  ],
+  "total_generations": 90,
+  "frozen_final": true,
+  "question_selection_policy": "construction-quality filter only (>=2 entity substitutions in the fully-counterfactualized instance), scanned deterministically from question_index=0 upward, never based on any method output/score -- see docs/single_needle_contamination_study.md"
+}
