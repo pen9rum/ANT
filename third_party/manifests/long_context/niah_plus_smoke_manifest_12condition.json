@@ -1,0 +1,243 @@
+{
+  "conditions": [
+    {
+      "task_id": "niah_single_32000_early_0",
+      "task_type": "single_needle",
+      "context_length_tokens_target": 32000,
+      "position": "early",
+      "question": "To whom did the Virgin Mary allegedly appear in 1858 in Lourdes France?",
+      "gold_answers": [
+        "Zorvath Quennelin"
+      ],
+      "num_documents": 158,
+      "actual_token_count": 32131,
+      "needle_doc_ids": [
+        "doc0"
+      ],
+      "depth_percents": [
+        0.0
+      ]
+    },
+    {
+      "task_id": "niah_single_32000_middle_0",
+      "task_type": "single_needle",
+      "context_length_tokens_target": 32000,
+      "position": "middle",
+      "question": "To whom did the Virgin Mary allegedly appear in 1858 in Lourdes France?",
+      "gold_answers": [
+        "Zorvath Quennelin"
+      ],
+      "num_documents": 158,
+      "actual_token_count": 32131,
+      "needle_doc_ids": [
+        "doc81"
+      ],
+      "depth_percents": [
+        0.5
+      ]
+    },
+    {
+      "task_id": "niah_single_32000_late_0",
+      "task_type": "single_needle",
+      "context_length_tokens_target": 32000,
+      "position": "late",
+      "question": "To whom did the Virgin Mary allegedly appear in 1858 in Lourdes France?",
+      "gold_answers": [
+        "Zorvath Quennelin"
+      ],
+      "num_documents": 158,
+      "actual_token_count": 32131,
+      "needle_doc_ids": [
+        "doc157"
+      ],
+      "depth_percents": [
+        1.0
+      ]
+    },
+    {
+      "task_id": "niah_single_128000_early_0",
+      "task_type": "single_needle",
+      "context_length_tokens_target": 128000,
+      "position": "early",
+      "question": "To whom did the Virgin Mary allegedly appear in 1858 in Lourdes France?",
+      "gold_answers": [
+        "Zorvath Quennelin"
+      ],
+      "num_documents": 633,
+      "actual_token_count": 128160,
+      "needle_doc_ids": [
+        "doc0"
+      ],
+      "depth_percents": [
+        0.0
+      ]
+    },
+    {
+      "task_id": "niah_single_128000_middle_0",
+      "task_type": "single_needle",
+      "context_length_tokens_target": 128000,
+      "position": "middle",
+      "question": "To whom did the Virgin Mary allegedly appear in 1858 in Lourdes France?",
+      "gold_answers": [
+        "Zorvath Quennelin"
+      ],
+      "num_documents": 633,
+      "actual_token_count": 128160,
+      "needle_doc_ids": [
+        "doc315"
+      ],
+      "depth_percents": [
+        0.5
+      ]
+    },
+    {
+      "task_id": "niah_single_128000_late_0",
+      "task_type": "single_needle",
+      "context_length_tokens_target": 128000,
+      "position": "late",
+      "question": "To whom did the Virgin Mary allegedly appear in 1858 in Lourdes France?",
+      "gold_answers": [
+        "Zorvath Quennelin"
+      ],
+      "num_documents": 633,
+      "actual_token_count": 128160,
+      "needle_doc_ids": [
+        "doc632"
+      ],
+      "depth_percents": [
+        1.0
+      ]
+    },
+    {
+      "task_id": "niah_multi_32000_early_0",
+      "task_type": "multi_needle",
+      "context_length_tokens_target": 32000,
+      "position": "early",
+      "question": "Were Scott Derrickson and Ed Wood of the same nationality?",
+      "gold_answers": [
+        "yes"
+      ],
+      "num_documents": 233,
+      "actual_token_count": 32047,
+      "needle_doc_ids": [
+        "doc0",
+        "doc75"
+      ],
+      "depth_percents": [
+        0.0,
+        0.33
+      ]
+    },
+    {
+      "task_id": "niah_multi_32000_middle_0",
+      "task_type": "multi_needle",
+      "context_length_tokens_target": 32000,
+      "position": "middle",
+      "question": "Were Scott Derrickson and Ed Wood of the same nationality?",
+      "gold_answers": [
+        "yes"
+      ],
+      "num_documents": 233,
+      "actual_token_count": 32047,
+      "needle_doc_ids": [
+        "doc74",
+        "doc163"
+      ],
+      "depth_percents": [
+        0.33,
+        0.66
+      ]
+    },
+    {
+      "task_id": "niah_multi_32000_late_0",
+      "task_type": "multi_needle",
+      "context_length_tokens_target": 32000,
+      "position": "late",
+      "question": "Were Scott Derrickson and Ed Wood of the same nationality?",
+      "gold_answers": [
+        "yes"
+      ],
+      "num_documents": 233,
+      "actual_token_count": 32047,
+      "needle_doc_ids": [
+        "doc162",
+        "doc232"
+      ],
+      "depth_percents": [
+        0.66,
+        1.0
+      ]
+    },
+    {
+      "task_id": "niah_multi_128000_early_0",
+      "task_type": "multi_needle",
+      "context_length_tokens_target": 128000,
+      "position": "early",
+      "question": "Were Scott Derrickson and Ed Wood of the same nationality?",
+      "gold_answers": [
+        "yes"
+      ],
+      "num_documents": 924,
+      "actual_token_count": 128004,
+      "needle_doc_ids": [
+        "doc0",
+        "doc303"
+      ],
+      "depth_percents": [
+        0.0,
+        0.33
+      ]
+    },
+    {
+      "task_id": "niah_multi_128000_middle_0",
+      "task_type": "multi_needle",
+      "context_length_tokens_target": 128000,
+      "position": "middle",
+      "question": "Were Scott Derrickson and Ed Wood of the same nationality?",
+      "gold_answers": [
+        "yes"
+      ],
+      "num_documents": 924,
+      "actual_token_count": 128004,
+      "needle_doc_ids": [
+        "doc302",
+        "doc601"
+      ],
+      "depth_percents": [
+        0.33,
+        0.66
+      ]
+    },
+    {
+      "task_id": "niah_multi_128000_late_0",
+      "task_type": "multi_needle",
+      "context_length_tokens_target": 128000,
+      "position": "late",
+      "question": "Were Scott Derrickson and Ed Wood of the same nationality?",
+      "gold_answers": [
+        "yes"
+      ],
+      "num_documents": 924,
+      "actual_token_count": 128004,
+      "needle_doc_ids": [
+        "doc600",
+        "doc923"
+      ],
+      "depth_percents": [
+        0.66,
+        1.0
+      ]
+    }
+  ],
+  "selection_policy": "one deterministic instance per (task_type, context_length, position) cell, question_index=0 fixed before any generation or inference -- never selected based on gold answers or scores. See docs/niah_plus_fidelity_audit.md for the full construction audit.",
+  "total_conditions": 12,
+  "methods_to_run": [
+    "direct_document",
+    "retrieval_document",
+    "matched_react_document",
+    "longagent",
+    "ant_document"
+  ],
+  "total_generations": 60,
+  "frozen_final": true
+}
