@@ -25,8 +25,21 @@ part_ab_report.md Sections 5-7), not invented.
 |---|---|---|---|---|---|---|
 | A | 30 | ~$5 (pre-launch: 6 instances x per-method-set ~$0.56 (32K single-needle scale, measured) + condition-B regrounding overhead, +margin) | $0.00 | ~$5 | **$2.44** | **$2.44** |
 | B | 75 | ~$3 | $2.44 | ~$5.44 | **$2.30** | **$4.74** |
-| C | 225 | ~$25-30 (see detail below) | $4.74 | ~$30-35 | TBD | TBD |
-| D | <=90 | <=$15 | TBD | TBD | TBD | TBD |
+| C | 225 | ~$25-30 (see detail below) | $4.74 | ~$30-35 | **$21.82** | **$26.56** |
+| D | <=90 | ~$19 (see detail below) | $26.56 | ~$45.56 | TBD | TBD |
+
+### Phase D pre-launch estimate detail
+
+Frozen manifest: `third_party/manifests/long_context/single_needle_scaling_manifest.json`
+(2 question indices [0, 2], construction-quality-filtered per docs/single_needle_
+contamination_study.md, x 3 lengths x 3 positions = 18 instances x 5 methods = 90
+generations, fully-counterfactualized Condition C only). Per-method-set-of-5 basis:
+32K (measured, Part A Condition A) ~$0.47, 128K (measured, original NIAH+ smoke
+single-needle) ~$0.99, 64K interpolated ~$0.73. Per-question (3 lengths) ~$2.19;
+x3 positions ~$6.56/question; x2 questions ~$13.1. +40% margin (ANT single-needle
+costs showed high run-to-run variance, $0.017-$0.356 observed) => **~$19 conservative
+estimate**. Cumulative prior actual: $26.56. Projected cumulative after D: ~$45.56,
+comfortably under the $65 threshold with the required >=$5 buffer before $70 intact.
 
 ### Phase C pre-launch estimate detail
 
