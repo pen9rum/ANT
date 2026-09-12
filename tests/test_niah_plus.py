@@ -12,10 +12,13 @@ import pytest
 
 from ant.evaluation_suite.document_scope import DocumentRecord
 from ant.evaluation_suite.niah_plus import (
+    MAX_OTHER_ENTITIES_PER_INSTANCE,
     MULTI_NEEDLE_DEPTHS,
     SINGLE_NEEDLE_DEPTHS,
     _fill_to_target_length,
     _insert_needles_by_token_depth,
+    _salient_shared_entities,
+    build_fully_counterfactualized_single_needle_instance,
     build_multi_needle_instance,
     build_single_needle_instance,
 )
@@ -198,6 +201,183 @@ def test_build_single_needle_instance_is_deterministic(monkeypatch: pytest.Monke
         context_length_tokens=2000, position="middle", question_index=0
     )
     assert first.model_dump() == second.model_dump()
+
+
+def _fake_squad_rows_with_shared_entity(n: int = 30) -> list[dict]:
+    """Like _fake_squad_rows, but the QUESTION also repeats a capitalized
+    entity ("Central Subject N") that appears in the context -- needed to
+    exercise Condition C's "replace additional entities shared between
+    question and context" behavior, which _fake_squad_rows' own bland
+    question ("Who is mentioned in passage N?") never triggers.
+    """
+    rows = []
+    for i in range(n):
+        rows.append(
+            {
+                "id": f"squad{i}",
+                "title": f"Topic{i}",
+                "context": f"Central Subject {i} visited the town. " * 10
+                + f"The answer entity is Person{i}.",
+                "question": f"Who did Central Subject {i} visit?",
+                "answers": {"text": [f"Person{i}"], "answer_start": [0]},
+            }
+        )
+    return rows
+
+
+def test_salient_shared_entities_finds_phrases_in_both_question_and_context() -> None:
+    entities = _salient_shared_entities(
+        question="Who did Central Subject 0 visit?",
+        context="Central Subject 0 visited the town.",
+        exclude=set(),
+    )
+    assert "Central Subject" in entities or "Central" in entities
+
+
+def test_salient_shared_entities_excludes_the_answer_and_drops_overlapping_shorter_matches() -> (
+    None
+):
+    entities = _salient_shared_entities(
+        question="Where did Virgin Mary and Mary go?",
+        context="Virgin Mary and Mary went to Lourdes.",
+        exclude={"Lourdes"},
+    )
+    # "Virgin Mary" (longer) selected; the separately-matched shorter "Mary"
+    # is dropped since it's contained in the already-selected longer phrase.
+    assert "Virgin Mary" in entities
+    assert "Mary" not in entities
+    assert "Lourdes" not in entities  # excluded explicitly
+
+
+def test_build_fully_counterfactualized_replaces_the_answer_entity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import datasets
+
+    monkeypatch.setattr(
+        datasets, "load_dataset", lambda path, split: _fake_squad_rows_with_shared_entity()
+    )
+    instance = build_fully_counterfactualized_single_needle_instance(
+        context_length_tokens=2000, position="early", question_index=0
+    )
+    needle_doc = next(
+        d for d in instance.documents if d.doc_id in instance.metadata["needle_doc_ids"]
+    )
+    assert "Person0" not in needle_doc.text
+    assert "Person0" not in instance.question
+    assert instance.gold_answers[0] in needle_doc.text
+
+
+def test_build_fully_counterfactualized_replaces_additional_shared_entities(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import datasets
+
+    monkeypatch.setattr(
+        datasets, "load_dataset", lambda path, split: _fake_squad_rows_with_shared_entity()
+    )
+    instance = build_fully_counterfactualized_single_needle_instance(
+        context_length_tokens=2000, position="early", question_index=0
+    )
+    substitutions = instance.metadata["entity_substitutions"]
+    # More than just the answer entity was substituted -- "Central Subject
+    # 0" (shared between question and context) must also have been caught.
+    assert len(substitutions) >= 2
+    assert "Central Subject 0" not in instance.question
+    needle_doc = next(
+        d for d in instance.documents if d.doc_id in instance.metadata["needle_doc_ids"]
+    )
+    assert "Central Subject 0" not in needle_doc.text
+
+
+def test_build_fully_counterfactualized_question_and_context_stay_mutually_consistent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import datasets
+
+    monkeypatch.setattr(
+        datasets, "load_dataset", lambda path, split: _fake_squad_rows_with_shared_entity()
+    )
+    instance = build_fully_counterfactualized_single_needle_instance(
+        context_length_tokens=2000, position="early", question_index=0
+    )
+    needle_doc = next(
+        d for d in instance.documents if d.doc_id in instance.metadata["needle_doc_ids"]
+    )
+    for original, fictional in instance.metadata["entity_substitutions"].items():
+        if original == instance.metadata["original_answer_replaced"]:
+            continue
+        # Every non-answer substitution's fictional replacement appears in
+        # BOTH the question and the needle context -- they were replaced
+        # consistently, not independently.
+        if fictional in instance.question:
+            assert fictional in needle_doc.text
+
+
+def test_build_fully_counterfactualized_never_states_the_original_answer_or_a_negative_hint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import datasets
+
+    monkeypatch.setattr(
+        datasets, "load_dataset", lambda path, split: _fake_squad_rows_with_shared_entity()
+    )
+    instance = build_fully_counterfactualized_single_needle_instance(
+        context_length_tokens=2000, position="early", question_index=0
+    )
+    full_text = instance.question + " " + " ".join(d.text for d in instance.documents)
+    assert instance.metadata["original_answer_replaced"] not in full_text
+    assert "do not answer" not in full_text.lower()
+    assert "not the answer" not in full_text.lower()
+
+
+def test_build_fully_counterfactualized_respects_the_max_other_entities_cap(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import datasets
+
+    monkeypatch.setattr(
+        datasets, "load_dataset", lambda path, split: _fake_squad_rows_with_shared_entity()
+    )
+    instance = build_fully_counterfactualized_single_needle_instance(
+        context_length_tokens=2000, position="early", question_index=0
+    )
+    # answer + at most MAX_OTHER_ENTITIES_PER_INSTANCE others.
+    assert len(instance.metadata["entity_substitutions"]) <= 1 + MAX_OTHER_ENTITIES_PER_INSTANCE
+
+
+def test_build_fully_counterfactualized_is_deterministic(monkeypatch: pytest.MonkeyPatch) -> None:
+    import datasets
+
+    monkeypatch.setattr(
+        datasets, "load_dataset", lambda path, split: _fake_squad_rows_with_shared_entity()
+    )
+    first = build_fully_counterfactualized_single_needle_instance(
+        context_length_tokens=2000, position="middle", question_index=1
+    )
+    second = build_fully_counterfactualized_single_needle_instance(
+        context_length_tokens=2000, position="middle", question_index=1
+    )
+    assert first.model_dump() == second.model_dump()
+
+
+def test_build_fully_counterfactualized_same_material_across_positions(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import datasets
+
+    monkeypatch.setattr(
+        datasets, "load_dataset", lambda path, split: _fake_squad_rows_with_shared_entity()
+    )
+    early = build_fully_counterfactualized_single_needle_instance(
+        context_length_tokens=2000, position="early", question_index=2
+    )
+    late = build_fully_counterfactualized_single_needle_instance(
+        context_length_tokens=2000, position="late", question_index=2
+    )
+    assert early.question == late.question
+    assert early.gold_answers == late.gold_answers
+    assert {d.text for d in early.documents} == {d.text for d in late.documents}
 
 
 def _fake_hotpot_examples(n: int = 10):

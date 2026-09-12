@@ -23,9 +23,11 @@ percentages live in `NiahPlusExample.metadata`, read only by this module's
 own scoring/diagnostics -- never exposed to any inference method, same
 discipline as every other benchmark adapter in this suite.
 """
+
 from __future__ import annotations
 
 import random
+import re
 from typing import Literal
 
 import tiktoken
@@ -58,6 +60,97 @@ _FICTIONAL_ENTITIES = [
     "Wrenthold Kavastri",
     "Milgrave Ondrethin",
 ]
+
+# Single-Needle Contamination Study Condition C (fully counterfactualized):
+# a SEPARATE fictional-name pool from _FICTIONAL_ENTITIES (which is
+# reserved for the answer entity) used for OTHER salient entities replaced
+# in both question and context -- deliberately distinct so a reader/audit
+# can immediately tell "answer substitute" from "other-entity substitute"
+# apart in any logged instance. Picked deterministically by index, never
+# re-rolled based on output.
+_FICTIONAL_OTHER_ENTITIES = [
+    "Ashcombe Vale",
+    "Kellmoor",
+    "Draventhorpe",
+    "Northwick Fen",
+    "Belmara",
+    "Thistledown Reach",
+    "Vosmere",
+    "Calderfen",
+    "Ormsgate",
+    "Brindlewood",
+]
+
+# How many additional salient entities (beyond the answer itself) Condition
+# C replaces -- fixed before any generation, not tuned per instance.
+MAX_OTHER_ENTITIES_PER_INSTANCE = 2
+
+# Heuristic (capitalization-pattern-based) proper-noun-phrase matcher --
+# NOT true NER. Disclosed limitation (see docs/niah_plus_fidelity_audit.md's
+# contamination-study note): may over- or under-identify entities on
+# unusual phrasing. Chosen because SQuAD/Wikipedia prose reliably
+# capitalizes proper nouns, and adding a real NER dependency for this small
+# diagnostic study was judged not worth the added complexity/risk.
+_PROPER_PHRASE_RE = re.compile(r"\b[A-Z][a-zA-Z']*(?:\s+[A-Z][a-zA-Z']*)*\b")
+_STOPWORD_SINGLE_WORDS = {
+    "The",
+    "A",
+    "An",
+    "In",
+    "On",
+    "At",
+    "To",
+    "For",
+    "Of",
+    "And",
+    "Who",
+    "What",
+    "When",
+    "Where",
+    "Which",
+    "How",
+    "Why",
+    "Is",
+    "Was",
+    "Were",
+    "Are",
+    "Did",
+    "Does",
+    "Do",
+    "By",
+    "With",
+    "From",
+}
+
+
+def _salient_shared_entities(question: str, context: str, exclude: set[str]) -> list[str]:
+    """Proper-noun-like phrases appearing in BOTH `question` and `context`,
+    longest match first, with shorter overlapping matches dropped (e.g. if
+    "Virgin Mary" is selected, a separately-matched "Mary" is dropped
+    rather than substituted a second time, which would otherwise corrupt
+    the already-substituted phrase). See module-level comment above this
+    function for the disclosed heuristic-vs-true-NER limitation.
+    """
+    candidates: list[str] = []
+    seen: set[str] = set()
+    for match in _PROPER_PHRASE_RE.finditer(question):
+        phrase = match.group(0)
+        if phrase in exclude or phrase in seen:
+            continue
+        words = phrase.split()
+        if len(words) == 1 and words[0] in _STOPWORD_SINGLE_WORDS:
+            continue
+        if phrase in context:
+            candidates.append(phrase)
+            seen.add(phrase)
+    candidates.sort(key=len, reverse=True)
+    selected: list[str] = []
+    for phrase in candidates:
+        if any(phrase in longer for longer in selected):
+            continue
+        selected.append(phrase)
+    return selected
+
 
 TaskType = Literal["single_needle", "multi_needle"]
 Position = Literal["early", "middle", "late"]
@@ -212,9 +305,7 @@ def build_single_needle_instance(
     original_answer = needle_row["answers"]["text"][0]
     fictional_entity = _FICTIONAL_ENTITIES[question_index % len(_FICTIONAL_ENTITIES)]
     needle_text = needle_row["context"].replace(original_answer, fictional_entity)
-    needle_doc = DocumentRecord(
-        doc_id="needle0", title=needle_row["title"], text=needle_text
-    )
+    needle_doc = DocumentRecord(doc_id="needle0", title=needle_row["title"], text=needle_text)
 
     filler_candidates = [
         DocumentRecord(doc_id=f"filler{i}", title=row["title"], text=row["context"])
@@ -245,6 +336,100 @@ def build_single_needle_instance(
             "actual_token_count": actual_tokens,
             "source_dataset": "squad",
             "original_answer_replaced": original_answer,
+        },
+    )
+
+
+def build_fully_counterfactualized_single_needle_instance(
+    *, context_length_tokens: int, position: Position, question_index: int = 0
+) -> NiahPlusExample:
+    """Single-Needle Contamination Study Condition C: replaces not just the
+    answer entity but up to MAX_OTHER_ENTITIES_PER_INSTANCE additional
+    salient entities shared between the question and its own context
+    (e.g. the central subject, a location) with deterministic fictional
+    substitutes, applied identically to BOTH question and context so they
+    remain mutually consistent -- so the memorized SQuAD question->answer
+    mapping no longer directly applies, without changing the underlying
+    semantic relation/QA structure or reasoning complexity, and without
+    ever stating the original answer or an explicit negative instruction
+    anywhere in the constructed instance (the substitution is invisible at
+    inference time -- only this function's own returned `metadata` records
+    what was replaced, for diagnostics only).
+    """
+    # Independent seed namespace ("single_c") from Condition A/B's "single"
+    # -- guarantees this condition's own filler sampling never accidentally
+    # collides with build_single_needle_instance's, even for the same
+    # question_index.
+    rng = random.Random(str((NIAH_PLUS_SEED, "single_c", question_index)))
+    pool = _load_squad_pool()
+
+    needle_row = None
+    for row in pool[question_index:] + pool[:question_index]:
+        if row["answers"]["text"] and row["answers"]["text"][0] in row["context"]:
+            needle_row = row
+            break
+    if needle_row is None:
+        msg = "no SQuAD row in the sampled pool has its answer verbatim in its own context"
+        raise ValueError(msg)
+
+    original_answer = needle_row["answers"]["text"][0]
+    fictional_answer = _FICTIONAL_ENTITIES[question_index % len(_FICTIONAL_ENTITIES)]
+
+    other_entities = _salient_shared_entities(
+        needle_row["question"], needle_row["context"], exclude={original_answer}
+    )[:MAX_OTHER_ENTITIES_PER_INSTANCE]
+    substitutions: dict[str, str] = {original_answer: fictional_answer}
+    offset = question_index * MAX_OTHER_ENTITIES_PER_INSTANCE
+    for i, entity in enumerate(other_entities):
+        substitutions[entity] = _FICTIONAL_OTHER_ENTITIES[
+            (offset + i) % len(_FICTIONAL_OTHER_ENTITIES)
+        ]
+
+    # Longest original strings substituted first so a shorter substitution
+    # target that happens to be a substring of a longer one (unlikely given
+    # these are real distinct entities, but not assumed) never partially
+    # corrupts the longer one before it's replaced.
+    counterfactual_question = needle_row["question"]
+    counterfactual_context = needle_row["context"]
+    for original in sorted(substitutions, key=len, reverse=True):
+        fictional = substitutions[original]
+        counterfactual_question = counterfactual_question.replace(original, fictional)
+        counterfactual_context = counterfactual_context.replace(original, fictional)
+
+    needle_doc = DocumentRecord(
+        doc_id="needle0", title=needle_row["title"], text=counterfactual_context
+    )
+    filler_candidates = [
+        DocumentRecord(doc_id=f"filler{i}", title=row["title"], text=row["context"])
+        for i, row in enumerate(pool)
+        if row["id"] != needle_row["id"]
+    ]
+    needle_tokens = _token_count(counterfactual_context)
+    filler = _fill_to_target_length(
+        filler_candidates, max(0, context_length_tokens - needle_tokens), rng
+    )
+    depth = SINGLE_NEEDLE_DEPTHS[position]
+    documents = _insert_needles_by_token_depth(filler, [(depth, needle_doc)])
+    documents = [d.model_copy(update={"doc_id": f"doc{i}"}) for i, d in enumerate(documents)]
+    needle_final_id = next(d.doc_id for d in documents if d.text == counterfactual_context)
+
+    actual_tokens = sum(_token_count(d.text) for d in documents)
+    return NiahPlusExample(
+        task_id=f"niah_single_cf_{context_length_tokens}_{position}_{question_index}",
+        task_type="single_needle",
+        context_length_tokens=context_length_tokens,
+        position=position,
+        question=counterfactual_question,
+        gold_answers=[fictional_answer],
+        documents=documents,
+        metadata={
+            "needle_doc_ids": [needle_final_id],
+            "depth_percents": [depth],
+            "actual_token_count": actual_tokens,
+            "source_dataset": "squad",
+            "original_answer_replaced": original_answer,
+            "entity_substitutions": substitutions,
+            "condition": "C_fully_counterfactualized",
         },
     )
 
