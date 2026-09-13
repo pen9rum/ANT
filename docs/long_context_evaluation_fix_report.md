@@ -471,6 +471,15 @@ method specifically, not a construction artifact.
   `-prefix-archived` copies remain on disk, explicitly still marked
   PRE-FIX/NON-CANONICAL, for audit only.
 
+> **ADDENDUM (later pass, separate commit): Chain-of-Agents (CoA) added
+> as a 6th method** to this same canonical 45-condition
+> `multineedle-scaling` matrix, reading the identical byte-verified clean
+> environments described above (preflight-checked before any paid call).
+> Frozen evaluation run, not a construction or extraction change — see
+> `docs/chain_of_agents_multineedle_scaling_report.md` for the full
+> results (CoA's own scaling, the six-method quality table, and the
+> position analysis). Nothing above this addendum was altered.
+
 ## 9. Integrity confirmation
 
 - ANT core coordination, worker routing, Need Graph logic, search
