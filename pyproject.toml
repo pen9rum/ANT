@@ -51,6 +51,11 @@ select = ["E", "F", "I", "UP", "B"]
 # above it in judge.py) -- it must not be reformatted to satisfy line
 # length, so this file is exempted from E501 rather than touching the text.
 "src/ant/evaluation/judge.py" = ["E501"]
+# Every prompt in chainrag.py is reproduced VERBATIM (including original
+# line breaks/indentation) from the pinned upstream ChainRAG commit -- see
+# docs/chainrag_fidelity_audit.md. Reflowing them to satisfy line length
+# would mean editing the fidelity-critical prompt text itself.
+"src/ant/external_wrappers/chainrag.py" = ["E501"]
 
 [tool.pyright]
 include = ["src", "tests"]
