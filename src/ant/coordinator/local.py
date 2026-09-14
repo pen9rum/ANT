@@ -391,6 +391,7 @@ class LocalCoordinator:
         enforce_alignment: bool = False,
         coverage_gap_node_ids: list[str] | None = None,
         targeted_need_ids: set[str] | None = None,
+        search_top_k: int = 4,
     ) -> EvidenceState:
         # max_rounds is a blunt outer safety ceiling only -- the real
         # per-node/per-subgraph stopping logic is the Dependency Graph
@@ -427,10 +428,16 @@ class LocalCoordinator:
         # check_need_resolution decided about the need's own
         # resolved/partial/unresolved status this round (see that gate's
         # own docstring: Evidence admissibility != need completion).
+        # search_top_k: default 4 reproduces every existing caller's exact
+        # prior behavior byte-for-byte (AutonomousWorker.run()'s own
+        # search()/dense_search() calls were hardcoded to limit=4 before
+        # this became a passthrough parameter) -- a disclosed knob for
+        # controlled boundary-expansion experiments only, never read by
+        # routing/Need-Graph/recovery logic itself.
         evidence: list[Evidence] = list(initial_evidence) if initial_evidence is not None else []
         seen_worker_ids: set[str] = set()
         search = LocalSearchTool(self.repo_root, index_path=self.index_path)
-        worker_config = WorkerRunConfig(max_tool_calls=11)
+        worker_config = WorkerRunConfig(max_tool_calls=11, search_top_k=search_top_k)
         worker_by_id = {worker.id: worker for worker in self.workers}
         memory_hints = _memory_hints_from_routes(self.memory_routes)
         # Built once per ask() call, reused every round (self.workers never

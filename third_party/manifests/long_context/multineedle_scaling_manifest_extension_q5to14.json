@@ -1,0 +1,1805 @@
+{
+  "conditions": [
+    {
+      "task_id": "niah_multi_32000_early_5",
+      "question_index": 5,
+      "context_length_tokens": 32000,
+      "position": "early",
+      "question": "2014 S/S is the debut album of a South Korean boy group that was formed by who?",
+      "gold_answers": [
+        "YG Entertainment"
+      ],
+      "num_documents": 238,
+      "actual_token_count": 32008,
+      "needle_doc_ids": [
+        "doc0",
+        "doc72"
+      ],
+      "depth_percents": [
+        0.0,
+        0.33
+      ]
+    },
+    {
+      "task_id": "niah_multi_32000_middle_5",
+      "question_index": 5,
+      "context_length_tokens": 32000,
+      "position": "middle",
+      "question": "2014 S/S is the debut album of a South Korean boy group that was formed by who?",
+      "gold_answers": [
+        "YG Entertainment"
+      ],
+      "num_documents": 238,
+      "actual_token_count": 32008,
+      "needle_doc_ids": [
+        "doc71",
+        "doc147"
+      ],
+      "depth_percents": [
+        0.33,
+        0.66
+      ]
+    },
+    {
+      "task_id": "niah_multi_32000_late_5",
+      "question_index": 5,
+      "context_length_tokens": 32000,
+      "position": "late",
+      "question": "2014 S/S is the debut album of a South Korean boy group that was formed by who?",
+      "gold_answers": [
+        "YG Entertainment"
+      ],
+      "num_documents": 238,
+      "actual_token_count": 32008,
+      "needle_doc_ids": [
+        "doc146",
+        "doc237"
+      ],
+      "depth_percents": [
+        0.66,
+        1.0
+      ]
+    },
+    {
+      "task_id": "niah_multi_64000_early_5",
+      "question_index": 5,
+      "context_length_tokens": 64000,
+      "position": "early",
+      "question": "2014 S/S is the debut album of a South Korean boy group that was formed by who?",
+      "gold_answers": [
+        "YG Entertainment"
+      ],
+      "num_documents": 471,
+      "actual_token_count": 64113,
+      "needle_doc_ids": [
+        "doc0",
+        "doc148"
+      ],
+      "depth_percents": [
+        0.0,
+        0.33
+      ]
+    },
+    {
+      "task_id": "niah_multi_64000_middle_5",
+      "question_index": 5,
+      "context_length_tokens": 64000,
+      "position": "middle",
+      "question": "2014 S/S is the debut album of a South Korean boy group that was formed by who?",
+      "gold_answers": [
+        "YG Entertainment"
+      ],
+      "num_documents": 471,
+      "actual_token_count": 64113,
+      "needle_doc_ids": [
+        "doc147",
+        "doc293"
+      ],
+      "depth_percents": [
+        0.33,
+        0.66
+      ]
+    },
+    {
+      "task_id": "niah_multi_64000_late_5",
+      "question_index": 5,
+      "context_length_tokens": 64000,
+      "position": "late",
+      "question": "2014 S/S is the debut album of a South Korean boy group that was formed by who?",
+      "gold_answers": [
+        "YG Entertainment"
+      ],
+      "num_documents": 471,
+      "actual_token_count": 64113,
+      "needle_doc_ids": [
+        "doc292",
+        "doc470"
+      ],
+      "depth_percents": [
+        0.66,
+        1.0
+      ]
+    },
+    {
+      "task_id": "niah_multi_128000_early_5",
+      "question_index": 5,
+      "context_length_tokens": 128000,
+      "position": "early",
+      "question": "2014 S/S is the debut album of a South Korean boy group that was formed by who?",
+      "gold_answers": [
+        "YG Entertainment"
+      ],
+      "num_documents": 923,
+      "actual_token_count": 128062,
+      "needle_doc_ids": [
+        "doc0",
+        "doc293"
+      ],
+      "depth_percents": [
+        0.0,
+        0.33
+      ]
+    },
+    {
+      "task_id": "niah_multi_128000_middle_5",
+      "question_index": 5,
+      "context_length_tokens": 128000,
+      "position": "middle",
+      "question": "2014 S/S is the debut album of a South Korean boy group that was formed by who?",
+      "gold_answers": [
+        "YG Entertainment"
+      ],
+      "num_documents": 923,
+      "actual_token_count": 128062,
+      "needle_doc_ids": [
+        "doc292",
+        "doc617"
+      ],
+      "depth_percents": [
+        0.33,
+        0.66
+      ]
+    },
+    {
+      "task_id": "niah_multi_128000_late_5",
+      "question_index": 5,
+      "context_length_tokens": 128000,
+      "position": "late",
+      "question": "2014 S/S is the debut album of a South Korean boy group that was formed by who?",
+      "gold_answers": [
+        "YG Entertainment"
+      ],
+      "num_documents": 923,
+      "actual_token_count": 128062,
+      "needle_doc_ids": [
+        "doc616",
+        "doc922"
+      ],
+      "depth_percents": [
+        0.66,
+        1.0
+      ]
+    },
+    {
+      "task_id": "niah_multi_32000_early_6",
+      "question_index": 6,
+      "context_length_tokens": 32000,
+      "position": "early",
+      "question": "Who was known by his stage name Aladin and helped organizations improve their performance as a consultant?",
+      "gold_answers": [
+        "Eenasul Fateh"
+      ],
+      "num_documents": 237,
+      "actual_token_count": 33383,
+      "needle_doc_ids": [
+        "doc0",
+        "doc91"
+      ],
+      "depth_percents": [
+        0.0,
+        0.33
+      ]
+    },
+    {
+      "task_id": "niah_multi_32000_middle_6",
+      "question_index": 6,
+      "context_length_tokens": 32000,
+      "position": "middle",
+      "question": "Who was known by his stage name Aladin and helped organizations improve their performance as a consultant?",
+      "gold_answers": [
+        "Eenasul Fateh"
+      ],
+      "num_documents": 237,
+      "actual_token_count": 33383,
+      "needle_doc_ids": [
+        "doc90",
+        "doc162"
+      ],
+      "depth_percents": [
+        0.33,
+        0.66
+      ]
+    },
+    {
+      "task_id": "niah_multi_32000_late_6",
+      "question_index": 6,
+      "context_length_tokens": 32000,
+      "position": "late",
+      "question": "Who was known by his stage name Aladin and helped organizations improve their performance as a consultant?",
+      "gold_answers": [
+        "Eenasul Fateh"
+      ],
+      "num_documents": 237,
+      "actual_token_count": 33383,
+      "needle_doc_ids": [
+        "doc161",
+        "doc236"
+      ],
+      "depth_percents": [
+        0.66,
+        1.0
+      ]
+    },
+    {
+      "task_id": "niah_multi_64000_early_6",
+      "question_index": 6,
+      "context_length_tokens": 64000,
+      "position": "early",
+      "question": "Who was known by his stage name Aladin and helped organizations improve their performance as a consultant?",
+      "gold_answers": [
+        "Eenasul Fateh"
+      ],
+      "num_documents": 459,
+      "actual_token_count": 64022,
+      "needle_doc_ids": [
+        "doc0",
+        "doc160"
+      ],
+      "depth_percents": [
+        0.0,
+        0.33
+      ]
+    },
+    {
+      "task_id": "niah_multi_64000_middle_6",
+      "question_index": 6,
+      "context_length_tokens": 64000,
+      "position": "middle",
+      "question": "Who was known by his stage name Aladin and helped organizations improve their performance as a consultant?",
+      "gold_answers": [
+        "Eenasul Fateh"
+      ],
+      "num_documents": 459,
+      "actual_token_count": 64022,
+      "needle_doc_ids": [
+        "doc159",
+        "doc301"
+      ],
+      "depth_percents": [
+        0.33,
+        0.66
+      ]
+    },
+    {
+      "task_id": "niah_multi_64000_late_6",
+      "question_index": 6,
+      "context_length_tokens": 64000,
+      "position": "late",
+      "question": "Who was known by his stage name Aladin and helped organizations improve their performance as a consultant?",
+      "gold_answers": [
+        "Eenasul Fateh"
+      ],
+      "num_documents": 459,
+      "actual_token_count": 64022,
+      "needle_doc_ids": [
+        "doc300",
+        "doc458"
+      ],
+      "depth_percents": [
+        0.66,
+        1.0
+      ]
+    },
+    {
+      "task_id": "niah_multi_128000_early_6",
+      "question_index": 6,
+      "context_length_tokens": 128000,
+      "position": "early",
+      "question": "Who was known by his stage name Aladin and helped organizations improve their performance as a consultant?",
+      "gold_answers": [
+        "Eenasul Fateh"
+      ],
+      "num_documents": 941,
+      "actual_token_count": 128012,
+      "needle_doc_ids": [
+        "doc0",
+        "doc301"
+      ],
+      "depth_percents": [
+        0.0,
+        0.33
+      ]
+    },
+    {
+      "task_id": "niah_multi_128000_middle_6",
+      "question_index": 6,
+      "context_length_tokens": 128000,
+      "position": "middle",
+      "question": "Who was known by his stage name Aladin and helped organizations improve their performance as a consultant?",
+      "gold_answers": [
+        "Eenasul Fateh"
+      ],
+      "num_documents": 941,
+      "actual_token_count": 128012,
+      "needle_doc_ids": [
+        "doc300",
+        "doc624"
+      ],
+      "depth_percents": [
+        0.33,
+        0.66
+      ]
+    },
+    {
+      "task_id": "niah_multi_128000_late_6",
+      "question_index": 6,
+      "context_length_tokens": 128000,
+      "position": "late",
+      "question": "Who was known by his stage name Aladin and helped organizations improve their performance as a consultant?",
+      "gold_answers": [
+        "Eenasul Fateh"
+      ],
+      "num_documents": 941,
+      "actual_token_count": 128012,
+      "needle_doc_ids": [
+        "doc623",
+        "doc940"
+      ],
+      "depth_percents": [
+        0.66,
+        1.0
+      ]
+    },
+    {
+      "task_id": "niah_multi_32000_early_7",
+      "question_index": 7,
+      "context_length_tokens": 32000,
+      "position": "early",
+      "question": "The arena where the Lewiston Maineiacs played their home games can seat how many people?",
+      "gold_answers": [
+        "3,677 seated"
+      ],
+      "num_documents": 249,
+      "actual_token_count": 32026,
+      "needle_doc_ids": [
+        "doc0",
+        "doc82"
+      ],
+      "depth_percents": [
+        0.0,
+        0.33
+      ]
+    },
+    {
+      "task_id": "niah_multi_32000_middle_7",
+      "question_index": 7,
+      "context_length_tokens": 32000,
+      "position": "middle",
+      "question": "The arena where the Lewiston Maineiacs played their home games can seat how many people?",
+      "gold_answers": [
+        "3,677 seated"
+      ],
+      "num_documents": 249,
+      "actual_token_count": 32026,
+      "needle_doc_ids": [
+        "doc81",
+        "doc157"
+      ],
+      "depth_percents": [
+        0.33,
+        0.66
+      ]
+    },
+    {
+      "task_id": "niah_multi_32000_late_7",
+      "question_index": 7,
+      "context_length_tokens": 32000,
+      "position": "late",
+      "question": "The arena where the Lewiston Maineiacs played their home games can seat how many people?",
+      "gold_answers": [
+        "3,677 seated"
+      ],
+      "num_documents": 249,
+      "actual_token_count": 32026,
+      "needle_doc_ids": [
+        "doc156",
+        "doc248"
+      ],
+      "depth_percents": [
+        0.66,
+        1.0
+      ]
+    },
+    {
+      "task_id": "niah_multi_64000_early_7",
+      "question_index": 7,
+      "context_length_tokens": 64000,
+      "position": "early",
+      "question": "The arena where the Lewiston Maineiacs played their home games can seat how many people?",
+      "gold_answers": [
+        "3,677 seated"
+      ],
+      "num_documents": 493,
+      "actual_token_count": 64003,
+      "needle_doc_ids": [
+        "doc0",
+        "doc157"
+      ],
+      "depth_percents": [
+        0.0,
+        0.33
+      ]
+    },
+    {
+      "task_id": "niah_multi_64000_middle_7",
+      "question_index": 7,
+      "context_length_tokens": 64000,
+      "position": "middle",
+      "question": "The arena where the Lewiston Maineiacs played their home games can seat how many people?",
+      "gold_answers": [
+        "3,677 seated"
+      ],
+      "num_documents": 493,
+      "actual_token_count": 64003,
+      "needle_doc_ids": [
+        "doc156",
+        "doc330"
+      ],
+      "depth_percents": [
+        0.33,
+        0.66
+      ]
+    },
+    {
+      "task_id": "niah_multi_64000_late_7",
+      "question_index": 7,
+      "context_length_tokens": 64000,
+      "position": "late",
+      "question": "The arena where the Lewiston Maineiacs played their home games can seat how many people?",
+      "gold_answers": [
+        "3,677 seated"
+      ],
+      "num_documents": 493,
+      "actual_token_count": 64003,
+      "needle_doc_ids": [
+        "doc329",
+        "doc492"
+      ],
+      "depth_percents": [
+        0.66,
+        1.0
+      ]
+    },
+    {
+      "task_id": "niah_multi_128000_early_7",
+      "question_index": 7,
+      "context_length_tokens": 128000,
+      "position": "early",
+      "question": "The arena where the Lewiston Maineiacs played their home games can seat how many people?",
+      "gold_answers": [
+        "3,677 seated"
+      ],
+      "num_documents": 983,
+      "actual_token_count": 128017,
+      "needle_doc_ids": [
+        "doc0",
+        "doc330"
+      ],
+      "depth_percents": [
+        0.0,
+        0.33
+      ]
+    },
+    {
+      "task_id": "niah_multi_128000_middle_7",
+      "question_index": 7,
+      "context_length_tokens": 128000,
+      "position": "middle",
+      "question": "The arena where the Lewiston Maineiacs played their home games can seat how many people?",
+      "gold_answers": [
+        "3,677 seated"
+      ],
+      "num_documents": 983,
+      "actual_token_count": 128017,
+      "needle_doc_ids": [
+        "doc329",
+        "doc645"
+      ],
+      "depth_percents": [
+        0.33,
+        0.66
+      ]
+    },
+    {
+      "task_id": "niah_multi_128000_late_7",
+      "question_index": 7,
+      "context_length_tokens": 128000,
+      "position": "late",
+      "question": "The arena where the Lewiston Maineiacs played their home games can seat how many people?",
+      "gold_answers": [
+        "3,677 seated"
+      ],
+      "num_documents": 983,
+      "actual_token_count": 128017,
+      "needle_doc_ids": [
+        "doc644",
+        "doc982"
+      ],
+      "depth_percents": [
+        0.66,
+        1.0
+      ]
+    },
+    {
+      "task_id": "niah_multi_32000_early_8",
+      "question_index": 8,
+      "context_length_tokens": 32000,
+      "position": "early",
+      "question": "Who is older, Annie Morton or Terry Richardson?",
+      "gold_answers": [
+        "Terry Richardson"
+      ],
+      "num_documents": 221,
+      "actual_token_count": 32607,
+      "needle_doc_ids": [
+        "doc0",
+        "doc85"
+      ],
+      "depth_percents": [
+        0.0,
+        0.33
+      ]
+    },
+    {
+      "task_id": "niah_multi_32000_middle_8",
+      "question_index": 8,
+      "context_length_tokens": 32000,
+      "position": "middle",
+      "question": "Who is older, Annie Morton or Terry Richardson?",
+      "gold_answers": [
+        "Terry Richardson"
+      ],
+      "num_documents": 221,
+      "actual_token_count": 32607,
+      "needle_doc_ids": [
+        "doc84",
+        "doc150"
+      ],
+      "depth_percents": [
+        0.33,
+        0.66
+      ]
+    },
+    {
+      "task_id": "niah_multi_32000_late_8",
+      "question_index": 8,
+      "context_length_tokens": 32000,
+      "position": "late",
+      "question": "Who is older, Annie Morton or Terry Richardson?",
+      "gold_answers": [
+        "Terry Richardson"
+      ],
+      "num_documents": 221,
+      "actual_token_count": 32607,
+      "needle_doc_ids": [
+        "doc149",
+        "doc220"
+      ],
+      "depth_percents": [
+        0.66,
+        1.0
+      ]
+    },
+    {
+      "task_id": "niah_multi_64000_early_8",
+      "question_index": 8,
+      "context_length_tokens": 64000,
+      "position": "early",
+      "question": "Who is older, Annie Morton or Terry Richardson?",
+      "gold_answers": [
+        "Terry Richardson"
+      ],
+      "num_documents": 458,
+      "actual_token_count": 64203,
+      "needle_doc_ids": [
+        "doc0",
+        "doc149"
+      ],
+      "depth_percents": [
+        0.0,
+        0.33
+      ]
+    },
+    {
+      "task_id": "niah_multi_64000_middle_8",
+      "question_index": 8,
+      "context_length_tokens": 64000,
+      "position": "middle",
+      "question": "Who is older, Annie Morton or Terry Richardson?",
+      "gold_answers": [
+        "Terry Richardson"
+      ],
+      "num_documents": 458,
+      "actual_token_count": 64203,
+      "needle_doc_ids": [
+        "doc148",
+        "doc300"
+      ],
+      "depth_percents": [
+        0.33,
+        0.66
+      ]
+    },
+    {
+      "task_id": "niah_multi_64000_late_8",
+      "question_index": 8,
+      "context_length_tokens": 64000,
+      "position": "late",
+      "question": "Who is older, Annie Morton or Terry Richardson?",
+      "gold_answers": [
+        "Terry Richardson"
+      ],
+      "num_documents": 458,
+      "actual_token_count": 64203,
+      "needle_doc_ids": [
+        "doc299",
+        "doc457"
+      ],
+      "depth_percents": [
+        0.66,
+        1.0
+      ]
+    },
+    {
+      "task_id": "niah_multi_128000_early_8",
+      "question_index": 8,
+      "context_length_tokens": 128000,
+      "position": "early",
+      "question": "Who is older, Annie Morton or Terry Richardson?",
+      "gold_answers": [
+        "Terry Richardson"
+      ],
+      "num_documents": 917,
+      "actual_token_count": 128194,
+      "needle_doc_ids": [
+        "doc0",
+        "doc300"
+      ],
+      "depth_percents": [
+        0.0,
+        0.33
+      ]
+    },
+    {
+      "task_id": "niah_multi_128000_middle_8",
+      "question_index": 8,
+      "context_length_tokens": 128000,
+      "position": "middle",
+      "question": "Who is older, Annie Morton or Terry Richardson?",
+      "gold_answers": [
+        "Terry Richardson"
+      ],
+      "num_documents": 917,
+      "actual_token_count": 128194,
+      "needle_doc_ids": [
+        "doc299",
+        "doc598"
+      ],
+      "depth_percents": [
+        0.33,
+        0.66
+      ]
+    },
+    {
+      "task_id": "niah_multi_128000_late_8",
+      "question_index": 8,
+      "context_length_tokens": 128000,
+      "position": "late",
+      "question": "Who is older, Annie Morton or Terry Richardson?",
+      "gold_answers": [
+        "Terry Richardson"
+      ],
+      "num_documents": 917,
+      "actual_token_count": 128194,
+      "needle_doc_ids": [
+        "doc597",
+        "doc916"
+      ],
+      "depth_percents": [
+        0.66,
+        1.0
+      ]
+    },
+    {
+      "task_id": "niah_multi_32000_early_9",
+      "question_index": 9,
+      "context_length_tokens": 32000,
+      "position": "early",
+      "question": "Are Local H and For Against both from the United States?",
+      "gold_answers": [
+        "yes"
+      ],
+      "num_documents": 215,
+      "actual_token_count": 32330,
+      "needle_doc_ids": [
+        "doc0",
+        "doc86"
+      ],
+      "depth_percents": [
+        0.0,
+        0.33
+      ]
+    },
+    {
+      "task_id": "niah_multi_32000_middle_9",
+      "question_index": 9,
+      "context_length_tokens": 32000,
+      "position": "middle",
+      "question": "Are Local H and For Against both from the United States?",
+      "gold_answers": [
+        "yes"
+      ],
+      "num_documents": 215,
+      "actual_token_count": 32330,
+      "needle_doc_ids": [
+        "doc85",
+        "doc158"
+      ],
+      "depth_percents": [
+        0.33,
+        0.66
+      ]
+    },
+    {
+      "task_id": "niah_multi_32000_late_9",
+      "question_index": 9,
+      "context_length_tokens": 32000,
+      "position": "late",
+      "question": "Are Local H and For Against both from the United States?",
+      "gold_answers": [
+        "yes"
+      ],
+      "num_documents": 215,
+      "actual_token_count": 32330,
+      "needle_doc_ids": [
+        "doc157",
+        "doc214"
+      ],
+      "depth_percents": [
+        0.66,
+        1.0
+      ]
+    },
+    {
+      "task_id": "niah_multi_64000_early_9",
+      "question_index": 9,
+      "context_length_tokens": 64000,
+      "position": "early",
+      "question": "Are Local H and For Against both from the United States?",
+      "gold_answers": [
+        "yes"
+      ],
+      "num_documents": 463,
+      "actual_token_count": 64016,
+      "needle_doc_ids": [
+        "doc0",
+        "doc156"
+      ],
+      "depth_percents": [
+        0.0,
+        0.33
+      ]
+    },
+    {
+      "task_id": "niah_multi_64000_middle_9",
+      "question_index": 9,
+      "context_length_tokens": 64000,
+      "position": "middle",
+      "question": "Are Local H and For Against both from the United States?",
+      "gold_answers": [
+        "yes"
+      ],
+      "num_documents": 463,
+      "actual_token_count": 64016,
+      "needle_doc_ids": [
+        "doc155",
+        "doc290"
+      ],
+      "depth_percents": [
+        0.33,
+        0.66
+      ]
+    },
+    {
+      "task_id": "niah_multi_64000_late_9",
+      "question_index": 9,
+      "context_length_tokens": 64000,
+      "position": "late",
+      "question": "Are Local H and For Against both from the United States?",
+      "gold_answers": [
+        "yes"
+      ],
+      "num_documents": 463,
+      "actual_token_count": 64016,
+      "needle_doc_ids": [
+        "doc289",
+        "doc462"
+      ],
+      "depth_percents": [
+        0.66,
+        1.0
+      ]
+    },
+    {
+      "task_id": "niah_multi_128000_early_9",
+      "question_index": 9,
+      "context_length_tokens": 128000,
+      "position": "early",
+      "question": "Are Local H and For Against both from the United States?",
+      "gold_answers": [
+        "yes"
+      ],
+      "num_documents": 918,
+      "actual_token_count": 128177,
+      "needle_doc_ids": [
+        "doc0",
+        "doc291"
+      ],
+      "depth_percents": [
+        0.0,
+        0.33
+      ]
+    },
+    {
+      "task_id": "niah_multi_128000_middle_9",
+      "question_index": 9,
+      "context_length_tokens": 128000,
+      "position": "middle",
+      "question": "Are Local H and For Against both from the United States?",
+      "gold_answers": [
+        "yes"
+      ],
+      "num_documents": 918,
+      "actual_token_count": 128177,
+      "needle_doc_ids": [
+        "doc290",
+        "doc605"
+      ],
+      "depth_percents": [
+        0.33,
+        0.66
+      ]
+    },
+    {
+      "task_id": "niah_multi_128000_late_9",
+      "question_index": 9,
+      "context_length_tokens": 128000,
+      "position": "late",
+      "question": "Are Local H and For Against both from the United States?",
+      "gold_answers": [
+        "yes"
+      ],
+      "num_documents": 918,
+      "actual_token_count": 128177,
+      "needle_doc_ids": [
+        "doc604",
+        "doc917"
+      ],
+      "depth_percents": [
+        0.66,
+        1.0
+      ]
+    },
+    {
+      "task_id": "niah_multi_32000_early_10",
+      "question_index": 10,
+      "context_length_tokens": 32000,
+      "position": "early",
+      "question": "What is the name of the fight song of the university whose main campus is in Lawrence, Kansas and whose branch campuses are in the Kansas City metropolitan area?",
+      "gold_answers": [
+        "Kansas Song"
+      ],
+      "num_documents": 228,
+      "actual_token_count": 32008,
+      "needle_doc_ids": [
+        "doc0",
+        "doc89"
+      ],
+      "depth_percents": [
+        0.0,
+        0.33
+      ]
+    },
+    {
+      "task_id": "niah_multi_32000_middle_10",
+      "question_index": 10,
+      "context_length_tokens": 32000,
+      "position": "middle",
+      "question": "What is the name of the fight song of the university whose main campus is in Lawrence, Kansas and whose branch campuses are in the Kansas City metropolitan area?",
+      "gold_answers": [
+        "Kansas Song"
+      ],
+      "num_documents": 228,
+      "actual_token_count": 32008,
+      "needle_doc_ids": [
+        "doc88",
+        "doc151"
+      ],
+      "depth_percents": [
+        0.33,
+        0.66
+      ]
+    },
+    {
+      "task_id": "niah_multi_32000_late_10",
+      "question_index": 10,
+      "context_length_tokens": 32000,
+      "position": "late",
+      "question": "What is the name of the fight song of the university whose main campus is in Lawrence, Kansas and whose branch campuses are in the Kansas City metropolitan area?",
+      "gold_answers": [
+        "Kansas Song"
+      ],
+      "num_documents": 228,
+      "actual_token_count": 32008,
+      "needle_doc_ids": [
+        "doc150",
+        "doc227"
+      ],
+      "depth_percents": [
+        0.66,
+        1.0
+      ]
+    },
+    {
+      "task_id": "niah_multi_64000_early_10",
+      "question_index": 10,
+      "context_length_tokens": 64000,
+      "position": "early",
+      "question": "What is the name of the fight song of the university whose main campus is in Lawrence, Kansas and whose branch campuses are in the Kansas City metropolitan area?",
+      "gold_answers": [
+        "Kansas Song"
+      ],
+      "num_documents": 470,
+      "actual_token_count": 64002,
+      "needle_doc_ids": [
+        "doc0",
+        "doc152"
+      ],
+      "depth_percents": [
+        0.0,
+        0.33
+      ]
+    },
+    {
+      "task_id": "niah_multi_64000_middle_10",
+      "question_index": 10,
+      "context_length_tokens": 64000,
+      "position": "middle",
+      "question": "What is the name of the fight song of the university whose main campus is in Lawrence, Kansas and whose branch campuses are in the Kansas City metropolitan area?",
+      "gold_answers": [
+        "Kansas Song"
+      ],
+      "num_documents": 470,
+      "actual_token_count": 64002,
+      "needle_doc_ids": [
+        "doc151",
+        "doc316"
+      ],
+      "depth_percents": [
+        0.33,
+        0.66
+      ]
+    },
+    {
+      "task_id": "niah_multi_64000_late_10",
+      "question_index": 10,
+      "context_length_tokens": 64000,
+      "position": "late",
+      "question": "What is the name of the fight song of the university whose main campus is in Lawrence, Kansas and whose branch campuses are in the Kansas City metropolitan area?",
+      "gold_answers": [
+        "Kansas Song"
+      ],
+      "num_documents": 470,
+      "actual_token_count": 64002,
+      "needle_doc_ids": [
+        "doc315",
+        "doc469"
+      ],
+      "depth_percents": [
+        0.66,
+        1.0
+      ]
+    },
+    {
+      "task_id": "niah_multi_128000_early_10",
+      "question_index": 10,
+      "context_length_tokens": 128000,
+      "position": "early",
+      "question": "What is the name of the fight song of the university whose main campus is in Lawrence, Kansas and whose branch campuses are in the Kansas City metropolitan area?",
+      "gold_answers": [
+        "Kansas Song"
+      ],
+      "num_documents": 932,
+      "actual_token_count": 128014,
+      "needle_doc_ids": [
+        "doc0",
+        "doc316"
+      ],
+      "depth_percents": [
+        0.0,
+        0.33
+      ]
+    },
+    {
+      "task_id": "niah_multi_128000_middle_10",
+      "question_index": 10,
+      "context_length_tokens": 128000,
+      "position": "middle",
+      "question": "What is the name of the fight song of the university whose main campus is in Lawrence, Kansas and whose branch campuses are in the Kansas City metropolitan area?",
+      "gold_answers": [
+        "Kansas Song"
+      ],
+      "num_documents": 932,
+      "actual_token_count": 128014,
+      "needle_doc_ids": [
+        "doc315",
+        "doc622"
+      ],
+      "depth_percents": [
+        0.33,
+        0.66
+      ]
+    },
+    {
+      "task_id": "niah_multi_128000_late_10",
+      "question_index": 10,
+      "context_length_tokens": 128000,
+      "position": "late",
+      "question": "What is the name of the fight song of the university whose main campus is in Lawrence, Kansas and whose branch campuses are in the Kansas City metropolitan area?",
+      "gold_answers": [
+        "Kansas Song"
+      ],
+      "num_documents": 932,
+      "actual_token_count": 128014,
+      "needle_doc_ids": [
+        "doc621",
+        "doc931"
+      ],
+      "depth_percents": [
+        0.66,
+        1.0
+      ]
+    },
+    {
+      "task_id": "niah_multi_32000_early_11",
+      "question_index": 11,
+      "context_length_tokens": 32000,
+      "position": "early",
+      "question": "What screenwriter with credits for \"Evolution\" co-wrote a film starring Nicolas Cage and Téa Leoni?",
+      "gold_answers": [
+        "David Weissman"
+      ],
+      "num_documents": 242,
+      "actual_token_count": 32157,
+      "needle_doc_ids": [
+        "doc0",
+        "doc75"
+      ],
+      "depth_percents": [
+        0.0,
+        0.33
+      ]
+    },
+    {
+      "task_id": "niah_multi_32000_middle_11",
+      "question_index": 11,
+      "context_length_tokens": 32000,
+      "position": "middle",
+      "question": "What screenwriter with credits for \"Evolution\" co-wrote a film starring Nicolas Cage and Téa Leoni?",
+      "gold_answers": [
+        "David Weissman"
+      ],
+      "num_documents": 242,
+      "actual_token_count": 32157,
+      "needle_doc_ids": [
+        "doc74",
+        "doc157"
+      ],
+      "depth_percents": [
+        0.33,
+        0.66
+      ]
+    },
+    {
+      "task_id": "niah_multi_32000_late_11",
+      "question_index": 11,
+      "context_length_tokens": 32000,
+      "position": "late",
+      "question": "What screenwriter with credits for \"Evolution\" co-wrote a film starring Nicolas Cage and Téa Leoni?",
+      "gold_answers": [
+        "David Weissman"
+      ],
+      "num_documents": 242,
+      "actual_token_count": 32157,
+      "needle_doc_ids": [
+        "doc156",
+        "doc241"
+      ],
+      "depth_percents": [
+        0.66,
+        1.0
+      ]
+    },
+    {
+      "task_id": "niah_multi_64000_early_11",
+      "question_index": 11,
+      "context_length_tokens": 64000,
+      "position": "early",
+      "question": "What screenwriter with credits for \"Evolution\" co-wrote a film starring Nicolas Cage and Téa Leoni?",
+      "gold_answers": [
+        "David Weissman"
+      ],
+      "num_documents": 469,
+      "actual_token_count": 64046,
+      "needle_doc_ids": [
+        "doc0",
+        "doc157"
+      ],
+      "depth_percents": [
+        0.0,
+        0.33
+      ]
+    },
+    {
+      "task_id": "niah_multi_64000_middle_11",
+      "question_index": 11,
+      "context_length_tokens": 64000,
+      "position": "middle",
+      "question": "What screenwriter with credits for \"Evolution\" co-wrote a film starring Nicolas Cage and Téa Leoni?",
+      "gold_answers": [
+        "David Weissman"
+      ],
+      "num_documents": 469,
+      "actual_token_count": 64046,
+      "needle_doc_ids": [
+        "doc156",
+        "doc319"
+      ],
+      "depth_percents": [
+        0.33,
+        0.66
+      ]
+    },
+    {
+      "task_id": "niah_multi_64000_late_11",
+      "question_index": 11,
+      "context_length_tokens": 64000,
+      "position": "late",
+      "question": "What screenwriter with credits for \"Evolution\" co-wrote a film starring Nicolas Cage and Téa Leoni?",
+      "gold_answers": [
+        "David Weissman"
+      ],
+      "num_documents": 469,
+      "actual_token_count": 64046,
+      "needle_doc_ids": [
+        "doc318",
+        "doc468"
+      ],
+      "depth_percents": [
+        0.66,
+        1.0
+      ]
+    },
+    {
+      "task_id": "niah_multi_128000_early_11",
+      "question_index": 11,
+      "context_length_tokens": 128000,
+      "position": "early",
+      "question": "What screenwriter with credits for \"Evolution\" co-wrote a film starring Nicolas Cage and Téa Leoni?",
+      "gold_answers": [
+        "David Weissman"
+      ],
+      "num_documents": 924,
+      "actual_token_count": 128020,
+      "needle_doc_ids": [
+        "doc0",
+        "doc319"
+      ],
+      "depth_percents": [
+        0.0,
+        0.33
+      ]
+    },
+    {
+      "task_id": "niah_multi_128000_middle_11",
+      "question_index": 11,
+      "context_length_tokens": 128000,
+      "position": "middle",
+      "question": "What screenwriter with credits for \"Evolution\" co-wrote a film starring Nicolas Cage and Téa Leoni?",
+      "gold_answers": [
+        "David Weissman"
+      ],
+      "num_documents": 924,
+      "actual_token_count": 128020,
+      "needle_doc_ids": [
+        "doc318",
+        "doc607"
+      ],
+      "depth_percents": [
+        0.33,
+        0.66
+      ]
+    },
+    {
+      "task_id": "niah_multi_128000_late_11",
+      "question_index": 11,
+      "context_length_tokens": 128000,
+      "position": "late",
+      "question": "What screenwriter with credits for \"Evolution\" co-wrote a film starring Nicolas Cage and Téa Leoni?",
+      "gold_answers": [
+        "David Weissman"
+      ],
+      "num_documents": 924,
+      "actual_token_count": 128020,
+      "needle_doc_ids": [
+        "doc606",
+        "doc923"
+      ],
+      "depth_percents": [
+        0.66,
+        1.0
+      ]
+    },
+    {
+      "task_id": "niah_multi_32000_early_12",
+      "question_index": 12,
+      "context_length_tokens": 32000,
+      "position": "early",
+      "question": "What year did Guns N Roses perform a promo for a movie starring Arnold Schwarzenegger as a former New York Police detective?",
+      "gold_answers": [
+        "1999"
+      ],
+      "num_documents": 240,
+      "actual_token_count": 32022,
+      "needle_doc_ids": [
+        "doc0",
+        "doc68"
+      ],
+      "depth_percents": [
+        0.0,
+        0.33
+      ]
+    },
+    {
+      "task_id": "niah_multi_32000_middle_12",
+      "question_index": 12,
+      "context_length_tokens": 32000,
+      "position": "middle",
+      "question": "What year did Guns N Roses perform a promo for a movie starring Arnold Schwarzenegger as a former New York Police detective?",
+      "gold_answers": [
+        "1999"
+      ],
+      "num_documents": 240,
+      "actual_token_count": 32022,
+      "needle_doc_ids": [
+        "doc67",
+        "doc153"
+      ],
+      "depth_percents": [
+        0.33,
+        0.66
+      ]
+    },
+    {
+      "task_id": "niah_multi_32000_late_12",
+      "question_index": 12,
+      "context_length_tokens": 32000,
+      "position": "late",
+      "question": "What year did Guns N Roses perform a promo for a movie starring Arnold Schwarzenegger as a former New York Police detective?",
+      "gold_answers": [
+        "1999"
+      ],
+      "num_documents": 240,
+      "actual_token_count": 32022,
+      "needle_doc_ids": [
+        "doc152",
+        "doc239"
+      ],
+      "depth_percents": [
+        0.66,
+        1.0
+      ]
+    },
+    {
+      "task_id": "niah_multi_64000_early_12",
+      "question_index": 12,
+      "context_length_tokens": 64000,
+      "position": "early",
+      "question": "What year did Guns N Roses perform a promo for a movie starring Arnold Schwarzenegger as a former New York Police detective?",
+      "gold_answers": [
+        "1999"
+      ],
+      "num_documents": 449,
+      "actual_token_count": 64062,
+      "needle_doc_ids": [
+        "doc0",
+        "doc154"
+      ],
+      "depth_percents": [
+        0.0,
+        0.33
+      ]
+    },
+    {
+      "task_id": "niah_multi_64000_middle_12",
+      "question_index": 12,
+      "context_length_tokens": 64000,
+      "position": "middle",
+      "question": "What year did Guns N Roses perform a promo for a movie starring Arnold Schwarzenegger as a former New York Police detective?",
+      "gold_answers": [
+        "1999"
+      ],
+      "num_documents": 449,
+      "actual_token_count": 64062,
+      "needle_doc_ids": [
+        "doc153",
+        "doc312"
+      ],
+      "depth_percents": [
+        0.33,
+        0.66
+      ]
+    },
+    {
+      "task_id": "niah_multi_64000_late_12",
+      "question_index": 12,
+      "context_length_tokens": 64000,
+      "position": "late",
+      "question": "What year did Guns N Roses perform a promo for a movie starring Arnold Schwarzenegger as a former New York Police detective?",
+      "gold_answers": [
+        "1999"
+      ],
+      "num_documents": 449,
+      "actual_token_count": 64062,
+      "needle_doc_ids": [
+        "doc311",
+        "doc448"
+      ],
+      "depth_percents": [
+        0.66,
+        1.0
+      ]
+    },
+    {
+      "task_id": "niah_multi_128000_early_12",
+      "question_index": 12,
+      "context_length_tokens": 128000,
+      "position": "early",
+      "question": "What year did Guns N Roses perform a promo for a movie starring Arnold Schwarzenegger as a former New York Police detective?",
+      "gold_answers": [
+        "1999"
+      ],
+      "num_documents": 928,
+      "actual_token_count": 128061,
+      "needle_doc_ids": [
+        "doc0",
+        "doc312"
+      ],
+      "depth_percents": [
+        0.0,
+        0.33
+      ]
+    },
+    {
+      "task_id": "niah_multi_128000_middle_12",
+      "question_index": 12,
+      "context_length_tokens": 128000,
+      "position": "middle",
+      "question": "What year did Guns N Roses perform a promo for a movie starring Arnold Schwarzenegger as a former New York Police detective?",
+      "gold_answers": [
+        "1999"
+      ],
+      "num_documents": 928,
+      "actual_token_count": 128061,
+      "needle_doc_ids": [
+        "doc311",
+        "doc614"
+      ],
+      "depth_percents": [
+        0.33,
+        0.66
+      ]
+    },
+    {
+      "task_id": "niah_multi_128000_late_12",
+      "question_index": 12,
+      "context_length_tokens": 128000,
+      "position": "late",
+      "question": "What year did Guns N Roses perform a promo for a movie starring Arnold Schwarzenegger as a former New York Police detective?",
+      "gold_answers": [
+        "1999"
+      ],
+      "num_documents": 928,
+      "actual_token_count": 128061,
+      "needle_doc_ids": [
+        "doc613",
+        "doc927"
+      ],
+      "depth_percents": [
+        0.66,
+        1.0
+      ]
+    },
+    {
+      "task_id": "niah_multi_32000_early_13",
+      "question_index": 13,
+      "context_length_tokens": 32000,
+      "position": "early",
+      "question": "Are Random House Tower and 888 7th Avenue both used for real estate?",
+      "gold_answers": [
+        "no"
+      ],
+      "num_documents": 257,
+      "actual_token_count": 32038,
+      "needle_doc_ids": [
+        "doc0",
+        "doc86"
+      ],
+      "depth_percents": [
+        0.0,
+        0.33
+      ]
+    },
+    {
+      "task_id": "niah_multi_32000_middle_13",
+      "question_index": 13,
+      "context_length_tokens": 32000,
+      "position": "middle",
+      "question": "Are Random House Tower and 888 7th Avenue both used for real estate?",
+      "gold_answers": [
+        "no"
+      ],
+      "num_documents": 257,
+      "actual_token_count": 32038,
+      "needle_doc_ids": [
+        "doc85",
+        "doc174"
+      ],
+      "depth_percents": [
+        0.33,
+        0.66
+      ]
+    },
+    {
+      "task_id": "niah_multi_32000_late_13",
+      "question_index": 13,
+      "context_length_tokens": 32000,
+      "position": "late",
+      "question": "Are Random House Tower and 888 7th Avenue both used for real estate?",
+      "gold_answers": [
+        "no"
+      ],
+      "num_documents": 257,
+      "actual_token_count": 32038,
+      "needle_doc_ids": [
+        "doc173",
+        "doc256"
+      ],
+      "depth_percents": [
+        0.66,
+        1.0
+      ]
+    },
+    {
+      "task_id": "niah_multi_64000_early_13",
+      "question_index": 13,
+      "context_length_tokens": 64000,
+      "position": "early",
+      "question": "Are Random House Tower and 888 7th Avenue both used for real estate?",
+      "gold_answers": [
+        "no"
+      ],
+      "num_documents": 526,
+      "actual_token_count": 64057,
+      "needle_doc_ids": [
+        "doc0",
+        "doc174"
+      ],
+      "depth_percents": [
+        0.0,
+        0.33
+      ]
+    },
+    {
+      "task_id": "niah_multi_64000_middle_13",
+      "question_index": 13,
+      "context_length_tokens": 64000,
+      "position": "middle",
+      "question": "Are Random House Tower and 888 7th Avenue both used for real estate?",
+      "gold_answers": [
+        "no"
+      ],
+      "num_documents": 526,
+      "actual_token_count": 64057,
+      "needle_doc_ids": [
+        "doc173",
+        "doc346"
+      ],
+      "depth_percents": [
+        0.33,
+        0.66
+      ]
+    },
+    {
+      "task_id": "niah_multi_64000_late_13",
+      "question_index": 13,
+      "context_length_tokens": 64000,
+      "position": "late",
+      "question": "Are Random House Tower and 888 7th Avenue both used for real estate?",
+      "gold_answers": [
+        "no"
+      ],
+      "num_documents": 526,
+      "actual_token_count": 64057,
+      "needle_doc_ids": [
+        "doc345",
+        "doc525"
+      ],
+      "depth_percents": [
+        0.66,
+        1.0
+      ]
+    },
+    {
+      "task_id": "niah_multi_128000_early_13",
+      "question_index": 13,
+      "context_length_tokens": 128000,
+      "position": "early",
+      "question": "Are Random House Tower and 888 7th Avenue both used for real estate?",
+      "gold_answers": [
+        "no"
+      ],
+      "num_documents": 1048,
+      "actual_token_count": 128105,
+      "needle_doc_ids": [
+        "doc0",
+        "doc346"
+      ],
+      "depth_percents": [
+        0.0,
+        0.33
+      ]
+    },
+    {
+      "task_id": "niah_multi_128000_middle_13",
+      "question_index": 13,
+      "context_length_tokens": 128000,
+      "position": "middle",
+      "question": "Are Random House Tower and 888 7th Avenue both used for real estate?",
+      "gold_answers": [
+        "no"
+      ],
+      "num_documents": 1048,
+      "actual_token_count": 128105,
+      "needle_doc_ids": [
+        "doc345",
+        "doc693"
+      ],
+      "depth_percents": [
+        0.33,
+        0.66
+      ]
+    },
+    {
+      "task_id": "niah_multi_128000_late_13",
+      "question_index": 13,
+      "context_length_tokens": 128000,
+      "position": "late",
+      "question": "Are Random House Tower and 888 7th Avenue both used for real estate?",
+      "gold_answers": [
+        "no"
+      ],
+      "num_documents": 1048,
+      "actual_token_count": 128105,
+      "needle_doc_ids": [
+        "doc692",
+        "doc1047"
+      ],
+      "depth_percents": [
+        0.66,
+        1.0
+      ]
+    },
+    {
+      "task_id": "niah_multi_32000_early_14",
+      "question_index": 14,
+      "context_length_tokens": 32000,
+      "position": "early",
+      "question": "The football manager who recruited David Beckham managed Manchester United during what timeframe?",
+      "gold_answers": [
+        "from 1986 to 2013"
+      ],
+      "num_documents": 227,
+      "actual_token_count": 32453,
+      "needle_doc_ids": [
+        "doc0",
+        "doc89"
+      ],
+      "depth_percents": [
+        0.0,
+        0.33
+      ]
+    },
+    {
+      "task_id": "niah_multi_32000_middle_14",
+      "question_index": 14,
+      "context_length_tokens": 32000,
+      "position": "middle",
+      "question": "The football manager who recruited David Beckham managed Manchester United during what timeframe?",
+      "gold_answers": [
+        "from 1986 to 2013"
+      ],
+      "num_documents": 227,
+      "actual_token_count": 32453,
+      "needle_doc_ids": [
+        "doc88",
+        "doc151"
+      ],
+      "depth_percents": [
+        0.33,
+        0.66
+      ]
+    },
+    {
+      "task_id": "niah_multi_32000_late_14",
+      "question_index": 14,
+      "context_length_tokens": 32000,
+      "position": "late",
+      "question": "The football manager who recruited David Beckham managed Manchester United during what timeframe?",
+      "gold_answers": [
+        "from 1986 to 2013"
+      ],
+      "num_documents": 227,
+      "actual_token_count": 32453,
+      "needle_doc_ids": [
+        "doc150",
+        "doc226"
+      ],
+      "depth_percents": [
+        0.66,
+        1.0
+      ]
+    },
+    {
+      "task_id": "niah_multi_64000_early_14",
+      "question_index": 14,
+      "context_length_tokens": 64000,
+      "position": "early",
+      "question": "The football manager who recruited David Beckham managed Manchester United during what timeframe?",
+      "gold_answers": [
+        "from 1986 to 2013"
+      ],
+      "num_documents": 454,
+      "actual_token_count": 64110,
+      "needle_doc_ids": [
+        "doc0",
+        "doc149"
+      ],
+      "depth_percents": [
+        0.0,
+        0.33
+      ]
+    },
+    {
+      "task_id": "niah_multi_64000_middle_14",
+      "question_index": 14,
+      "context_length_tokens": 64000,
+      "position": "middle",
+      "question": "The football manager who recruited David Beckham managed Manchester United during what timeframe?",
+      "gold_answers": [
+        "from 1986 to 2013"
+      ],
+      "num_documents": 454,
+      "actual_token_count": 64110,
+      "needle_doc_ids": [
+        "doc148",
+        "doc299"
+      ],
+      "depth_percents": [
+        0.33,
+        0.66
+      ]
+    },
+    {
+      "task_id": "niah_multi_64000_late_14",
+      "question_index": 14,
+      "context_length_tokens": 64000,
+      "position": "late",
+      "question": "The football manager who recruited David Beckham managed Manchester United during what timeframe?",
+      "gold_answers": [
+        "from 1986 to 2013"
+      ],
+      "num_documents": 454,
+      "actual_token_count": 64110,
+      "needle_doc_ids": [
+        "doc298",
+        "doc453"
+      ],
+      "depth_percents": [
+        0.66,
+        1.0
+      ]
+    },
+    {
+      "task_id": "niah_multi_128000_early_14",
+      "question_index": 14,
+      "context_length_tokens": 128000,
+      "position": "early",
+      "question": "The football manager who recruited David Beckham managed Manchester United during what timeframe?",
+      "gold_answers": [
+        "from 1986 to 2013"
+      ],
+      "num_documents": 903,
+      "actual_token_count": 128108,
+      "needle_doc_ids": [
+        "doc0",
+        "doc299"
+      ],
+      "depth_percents": [
+        0.0,
+        0.33
+      ]
+    },
+    {
+      "task_id": "niah_multi_128000_middle_14",
+      "question_index": 14,
+      "context_length_tokens": 128000,
+      "position": "middle",
+      "question": "The football manager who recruited David Beckham managed Manchester United during what timeframe?",
+      "gold_answers": [
+        "from 1986 to 2013"
+      ],
+      "num_documents": 903,
+      "actual_token_count": 128108,
+      "needle_doc_ids": [
+        "doc298",
+        "doc604"
+      ],
+      "depth_percents": [
+        0.33,
+        0.66
+      ]
+    },
+    {
+      "task_id": "niah_multi_128000_late_14",
+      "question_index": 14,
+      "context_length_tokens": 128000,
+      "position": "late",
+      "question": "The football manager who recruited David Beckham managed Manchester United during what timeframe?",
+      "gold_answers": [
+        "from 1986 to 2013"
+      ],
+      "num_documents": 903,
+      "actual_token_count": 128108,
+      "needle_doc_ids": [
+        "doc603",
+        "doc902"
+      ],
+      "depth_percents": [
+        0.66,
+        1.0
+      ]
+    }
+  ],
+  "total_conditions": 90
+}

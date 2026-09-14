@@ -178,7 +178,7 @@ def test_ant_document_adapter_calls_the_shared_condensation_function_after_ask_r
         def __init__(self, *args: object, **kwargs: object) -> None:
             pass
 
-        def ask(self, question: str, max_rounds: int = 6) -> EvidenceState:
+        def ask(self, question: str, max_rounds: int = 6, search_top_k: int = 4) -> EvidenceState:
             return EvidenceState(question=question, answer=RAW_ANSWER)
 
     monkeypatch.setattr(ant_document_adapter_module, "condense_to_answer_span", _fake_condense)
@@ -293,7 +293,7 @@ def test_ant_document_adapter_condition_b_regrounds_before_condensing(
         def __init__(self, *args: object, **kwargs: object) -> None:
             pass
 
-        def ask(self, question: str, max_rounds: int = 6) -> EvidenceState:
+        def ask(self, question: str, max_rounds: int = 6, search_top_k: int = 4) -> EvidenceState:
             return EvidenceState(
                 question=question,
                 answer=RAW_ANSWER,

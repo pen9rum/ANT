@@ -39,6 +39,12 @@ class WorkerRunConfig:
     # operating budget for a fixed, always-fully-run tool sequence) since
     # it no longer bounds a fixed amount of work, only a worst case.
     max_tool_calls: int = 30
+    # top_k for the two initial, always-run search()/dense_search() calls
+    # below -- a plain, disclosed knob (default 4, matching prior
+    # unconditional behavior byte-for-byte for every existing caller) for
+    # controlled boundary-expansion experiments; never read by any
+    # routing/Need-Graph/recovery decision, only by these two tool calls.
+    search_top_k: int = 4
     # Safety cap only, not a relevance decision: the real "what actually
     # matters" judgment now happens once, in LocalCoordinator._select_evidence,
     # over the full pool from every worker/round. This just bounds a single
@@ -74,7 +80,7 @@ class AutonomousWorker:
         evidence: list[Evidence] = []
         tool_calls = 0
 
-        search_results = self.tools.search(need, self.card.files, limit=4)
+        search_results = self.tools.search(need, self.card.files, limit=config.search_top_k)
         tool_calls += 1
         actions.append(
             WorkerAction(
@@ -91,7 +97,7 @@ class AutonomousWorker:
         # lexically with `need` is invisible to search() no matter how the
         # need happened to be phrased. No-ops (returns []) when no embedding
         # index has been built for this repo.
-        dense_results = self.tools.dense_search(need, self.card.files, limit=4)
+        dense_results = self.tools.dense_search(need, self.card.files, limit=config.search_top_k)
         tool_calls += 1
         actions.append(
             WorkerAction(

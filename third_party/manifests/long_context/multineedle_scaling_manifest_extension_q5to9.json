@@ -1,0 +1,725 @@
+{
+  "conditions": [
+    {
+      "task_id": "niah_multi_32000_early_5",
+      "question_index": 5,
+      "context_length_tokens": 32000,
+      "position": "early",
+      "question": "2014 S/S is the debut album of a South Korean boy group that was formed by who?",
+      "gold_answers": [
+        "YG Entertainment"
+      ],
+      "num_documents": 238,
+      "actual_token_count": 32008,
+      "needle_doc_ids": [
+        "doc0",
+        "doc72"
+      ]
+    },
+    {
+      "task_id": "niah_multi_32000_middle_5",
+      "question_index": 5,
+      "context_length_tokens": 32000,
+      "position": "middle",
+      "question": "2014 S/S is the debut album of a South Korean boy group that was formed by who?",
+      "gold_answers": [
+        "YG Entertainment"
+      ],
+      "num_documents": 238,
+      "actual_token_count": 32008,
+      "needle_doc_ids": [
+        "doc71",
+        "doc147"
+      ]
+    },
+    {
+      "task_id": "niah_multi_32000_late_5",
+      "question_index": 5,
+      "context_length_tokens": 32000,
+      "position": "late",
+      "question": "2014 S/S is the debut album of a South Korean boy group that was formed by who?",
+      "gold_answers": [
+        "YG Entertainment"
+      ],
+      "num_documents": 238,
+      "actual_token_count": 32008,
+      "needle_doc_ids": [
+        "doc146",
+        "doc237"
+      ]
+    },
+    {
+      "task_id": "niah_multi_64000_early_5",
+      "question_index": 5,
+      "context_length_tokens": 64000,
+      "position": "early",
+      "question": "2014 S/S is the debut album of a South Korean boy group that was formed by who?",
+      "gold_answers": [
+        "YG Entertainment"
+      ],
+      "num_documents": 471,
+      "actual_token_count": 64113,
+      "needle_doc_ids": [
+        "doc0",
+        "doc148"
+      ]
+    },
+    {
+      "task_id": "niah_multi_64000_middle_5",
+      "question_index": 5,
+      "context_length_tokens": 64000,
+      "position": "middle",
+      "question": "2014 S/S is the debut album of a South Korean boy group that was formed by who?",
+      "gold_answers": [
+        "YG Entertainment"
+      ],
+      "num_documents": 471,
+      "actual_token_count": 64113,
+      "needle_doc_ids": [
+        "doc147",
+        "doc293"
+      ]
+    },
+    {
+      "task_id": "niah_multi_64000_late_5",
+      "question_index": 5,
+      "context_length_tokens": 64000,
+      "position": "late",
+      "question": "2014 S/S is the debut album of a South Korean boy group that was formed by who?",
+      "gold_answers": [
+        "YG Entertainment"
+      ],
+      "num_documents": 471,
+      "actual_token_count": 64113,
+      "needle_doc_ids": [
+        "doc292",
+        "doc470"
+      ]
+    },
+    {
+      "task_id": "niah_multi_128000_early_5",
+      "question_index": 5,
+      "context_length_tokens": 128000,
+      "position": "early",
+      "question": "2014 S/S is the debut album of a South Korean boy group that was formed by who?",
+      "gold_answers": [
+        "YG Entertainment"
+      ],
+      "num_documents": 923,
+      "actual_token_count": 128062,
+      "needle_doc_ids": [
+        "doc0",
+        "doc293"
+      ]
+    },
+    {
+      "task_id": "niah_multi_128000_middle_5",
+      "question_index": 5,
+      "context_length_tokens": 128000,
+      "position": "middle",
+      "question": "2014 S/S is the debut album of a South Korean boy group that was formed by who?",
+      "gold_answers": [
+        "YG Entertainment"
+      ],
+      "num_documents": 923,
+      "actual_token_count": 128062,
+      "needle_doc_ids": [
+        "doc292",
+        "doc617"
+      ]
+    },
+    {
+      "task_id": "niah_multi_128000_late_5",
+      "question_index": 5,
+      "context_length_tokens": 128000,
+      "position": "late",
+      "question": "2014 S/S is the debut album of a South Korean boy group that was formed by who?",
+      "gold_answers": [
+        "YG Entertainment"
+      ],
+      "num_documents": 923,
+      "actual_token_count": 128062,
+      "needle_doc_ids": [
+        "doc616",
+        "doc922"
+      ]
+    },
+    {
+      "task_id": "niah_multi_32000_early_6",
+      "question_index": 6,
+      "context_length_tokens": 32000,
+      "position": "early",
+      "question": "Who was known by his stage name Aladin and helped organizations improve their performance as a consultant?",
+      "gold_answers": [
+        "Eenasul Fateh"
+      ],
+      "num_documents": 237,
+      "actual_token_count": 33383,
+      "needle_doc_ids": [
+        "doc0",
+        "doc91"
+      ]
+    },
+    {
+      "task_id": "niah_multi_32000_middle_6",
+      "question_index": 6,
+      "context_length_tokens": 32000,
+      "position": "middle",
+      "question": "Who was known by his stage name Aladin and helped organizations improve their performance as a consultant?",
+      "gold_answers": [
+        "Eenasul Fateh"
+      ],
+      "num_documents": 237,
+      "actual_token_count": 33383,
+      "needle_doc_ids": [
+        "doc90",
+        "doc162"
+      ]
+    },
+    {
+      "task_id": "niah_multi_32000_late_6",
+      "question_index": 6,
+      "context_length_tokens": 32000,
+      "position": "late",
+      "question": "Who was known by his stage name Aladin and helped organizations improve their performance as a consultant?",
+      "gold_answers": [
+        "Eenasul Fateh"
+      ],
+      "num_documents": 237,
+      "actual_token_count": 33383,
+      "needle_doc_ids": [
+        "doc161",
+        "doc236"
+      ]
+    },
+    {
+      "task_id": "niah_multi_64000_early_6",
+      "question_index": 6,
+      "context_length_tokens": 64000,
+      "position": "early",
+      "question": "Who was known by his stage name Aladin and helped organizations improve their performance as a consultant?",
+      "gold_answers": [
+        "Eenasul Fateh"
+      ],
+      "num_documents": 459,
+      "actual_token_count": 64022,
+      "needle_doc_ids": [
+        "doc0",
+        "doc160"
+      ]
+    },
+    {
+      "task_id": "niah_multi_64000_middle_6",
+      "question_index": 6,
+      "context_length_tokens": 64000,
+      "position": "middle",
+      "question": "Who was known by his stage name Aladin and helped organizations improve their performance as a consultant?",
+      "gold_answers": [
+        "Eenasul Fateh"
+      ],
+      "num_documents": 459,
+      "actual_token_count": 64022,
+      "needle_doc_ids": [
+        "doc159",
+        "doc301"
+      ]
+    },
+    {
+      "task_id": "niah_multi_64000_late_6",
+      "question_index": 6,
+      "context_length_tokens": 64000,
+      "position": "late",
+      "question": "Who was known by his stage name Aladin and helped organizations improve their performance as a consultant?",
+      "gold_answers": [
+        "Eenasul Fateh"
+      ],
+      "num_documents": 459,
+      "actual_token_count": 64022,
+      "needle_doc_ids": [
+        "doc300",
+        "doc458"
+      ]
+    },
+    {
+      "task_id": "niah_multi_128000_early_6",
+      "question_index": 6,
+      "context_length_tokens": 128000,
+      "position": "early",
+      "question": "Who was known by his stage name Aladin and helped organizations improve their performance as a consultant?",
+      "gold_answers": [
+        "Eenasul Fateh"
+      ],
+      "num_documents": 941,
+      "actual_token_count": 128012,
+      "needle_doc_ids": [
+        "doc0",
+        "doc301"
+      ]
+    },
+    {
+      "task_id": "niah_multi_128000_middle_6",
+      "question_index": 6,
+      "context_length_tokens": 128000,
+      "position": "middle",
+      "question": "Who was known by his stage name Aladin and helped organizations improve their performance as a consultant?",
+      "gold_answers": [
+        "Eenasul Fateh"
+      ],
+      "num_documents": 941,
+      "actual_token_count": 128012,
+      "needle_doc_ids": [
+        "doc300",
+        "doc624"
+      ]
+    },
+    {
+      "task_id": "niah_multi_128000_late_6",
+      "question_index": 6,
+      "context_length_tokens": 128000,
+      "position": "late",
+      "question": "Who was known by his stage name Aladin and helped organizations improve their performance as a consultant?",
+      "gold_answers": [
+        "Eenasul Fateh"
+      ],
+      "num_documents": 941,
+      "actual_token_count": 128012,
+      "needle_doc_ids": [
+        "doc623",
+        "doc940"
+      ]
+    },
+    {
+      "task_id": "niah_multi_32000_early_7",
+      "question_index": 7,
+      "context_length_tokens": 32000,
+      "position": "early",
+      "question": "The arena where the Lewiston Maineiacs played their home games can seat how many people?",
+      "gold_answers": [
+        "3,677 seated"
+      ],
+      "num_documents": 249,
+      "actual_token_count": 32026,
+      "needle_doc_ids": [
+        "doc0",
+        "doc82"
+      ]
+    },
+    {
+      "task_id": "niah_multi_32000_middle_7",
+      "question_index": 7,
+      "context_length_tokens": 32000,
+      "position": "middle",
+      "question": "The arena where the Lewiston Maineiacs played their home games can seat how many people?",
+      "gold_answers": [
+        "3,677 seated"
+      ],
+      "num_documents": 249,
+      "actual_token_count": 32026,
+      "needle_doc_ids": [
+        "doc81",
+        "doc157"
+      ]
+    },
+    {
+      "task_id": "niah_multi_32000_late_7",
+      "question_index": 7,
+      "context_length_tokens": 32000,
+      "position": "late",
+      "question": "The arena where the Lewiston Maineiacs played their home games can seat how many people?",
+      "gold_answers": [
+        "3,677 seated"
+      ],
+      "num_documents": 249,
+      "actual_token_count": 32026,
+      "needle_doc_ids": [
+        "doc156",
+        "doc248"
+      ]
+    },
+    {
+      "task_id": "niah_multi_64000_early_7",
+      "question_index": 7,
+      "context_length_tokens": 64000,
+      "position": "early",
+      "question": "The arena where the Lewiston Maineiacs played their home games can seat how many people?",
+      "gold_answers": [
+        "3,677 seated"
+      ],
+      "num_documents": 493,
+      "actual_token_count": 64003,
+      "needle_doc_ids": [
+        "doc0",
+        "doc157"
+      ]
+    },
+    {
+      "task_id": "niah_multi_64000_middle_7",
+      "question_index": 7,
+      "context_length_tokens": 64000,
+      "position": "middle",
+      "question": "The arena where the Lewiston Maineiacs played their home games can seat how many people?",
+      "gold_answers": [
+        "3,677 seated"
+      ],
+      "num_documents": 493,
+      "actual_token_count": 64003,
+      "needle_doc_ids": [
+        "doc156",
+        "doc330"
+      ]
+    },
+    {
+      "task_id": "niah_multi_64000_late_7",
+      "question_index": 7,
+      "context_length_tokens": 64000,
+      "position": "late",
+      "question": "The arena where the Lewiston Maineiacs played their home games can seat how many people?",
+      "gold_answers": [
+        "3,677 seated"
+      ],
+      "num_documents": 493,
+      "actual_token_count": 64003,
+      "needle_doc_ids": [
+        "doc329",
+        "doc492"
+      ]
+    },
+    {
+      "task_id": "niah_multi_128000_early_7",
+      "question_index": 7,
+      "context_length_tokens": 128000,
+      "position": "early",
+      "question": "The arena where the Lewiston Maineiacs played their home games can seat how many people?",
+      "gold_answers": [
+        "3,677 seated"
+      ],
+      "num_documents": 983,
+      "actual_token_count": 128017,
+      "needle_doc_ids": [
+        "doc0",
+        "doc330"
+      ]
+    },
+    {
+      "task_id": "niah_multi_128000_middle_7",
+      "question_index": 7,
+      "context_length_tokens": 128000,
+      "position": "middle",
+      "question": "The arena where the Lewiston Maineiacs played their home games can seat how many people?",
+      "gold_answers": [
+        "3,677 seated"
+      ],
+      "num_documents": 983,
+      "actual_token_count": 128017,
+      "needle_doc_ids": [
+        "doc329",
+        "doc645"
+      ]
+    },
+    {
+      "task_id": "niah_multi_128000_late_7",
+      "question_index": 7,
+      "context_length_tokens": 128000,
+      "position": "late",
+      "question": "The arena where the Lewiston Maineiacs played their home games can seat how many people?",
+      "gold_answers": [
+        "3,677 seated"
+      ],
+      "num_documents": 983,
+      "actual_token_count": 128017,
+      "needle_doc_ids": [
+        "doc644",
+        "doc982"
+      ]
+    },
+    {
+      "task_id": "niah_multi_32000_early_8",
+      "question_index": 8,
+      "context_length_tokens": 32000,
+      "position": "early",
+      "question": "Who is older, Annie Morton or Terry Richardson?",
+      "gold_answers": [
+        "Terry Richardson"
+      ],
+      "num_documents": 221,
+      "actual_token_count": 32607,
+      "needle_doc_ids": [
+        "doc0",
+        "doc85"
+      ]
+    },
+    {
+      "task_id": "niah_multi_32000_middle_8",
+      "question_index": 8,
+      "context_length_tokens": 32000,
+      "position": "middle",
+      "question": "Who is older, Annie Morton or Terry Richardson?",
+      "gold_answers": [
+        "Terry Richardson"
+      ],
+      "num_documents": 221,
+      "actual_token_count": 32607,
+      "needle_doc_ids": [
+        "doc84",
+        "doc150"
+      ]
+    },
+    {
+      "task_id": "niah_multi_32000_late_8",
+      "question_index": 8,
+      "context_length_tokens": 32000,
+      "position": "late",
+      "question": "Who is older, Annie Morton or Terry Richardson?",
+      "gold_answers": [
+        "Terry Richardson"
+      ],
+      "num_documents": 221,
+      "actual_token_count": 32607,
+      "needle_doc_ids": [
+        "doc149",
+        "doc220"
+      ]
+    },
+    {
+      "task_id": "niah_multi_64000_early_8",
+      "question_index": 8,
+      "context_length_tokens": 64000,
+      "position": "early",
+      "question": "Who is older, Annie Morton or Terry Richardson?",
+      "gold_answers": [
+        "Terry Richardson"
+      ],
+      "num_documents": 458,
+      "actual_token_count": 64203,
+      "needle_doc_ids": [
+        "doc0",
+        "doc149"
+      ]
+    },
+    {
+      "task_id": "niah_multi_64000_middle_8",
+      "question_index": 8,
+      "context_length_tokens": 64000,
+      "position": "middle",
+      "question": "Who is older, Annie Morton or Terry Richardson?",
+      "gold_answers": [
+        "Terry Richardson"
+      ],
+      "num_documents": 458,
+      "actual_token_count": 64203,
+      "needle_doc_ids": [
+        "doc148",
+        "doc300"
+      ]
+    },
+    {
+      "task_id": "niah_multi_64000_late_8",
+      "question_index": 8,
+      "context_length_tokens": 64000,
+      "position": "late",
+      "question": "Who is older, Annie Morton or Terry Richardson?",
+      "gold_answers": [
+        "Terry Richardson"
+      ],
+      "num_documents": 458,
+      "actual_token_count": 64203,
+      "needle_doc_ids": [
+        "doc299",
+        "doc457"
+      ]
+    },
+    {
+      "task_id": "niah_multi_128000_early_8",
+      "question_index": 8,
+      "context_length_tokens": 128000,
+      "position": "early",
+      "question": "Who is older, Annie Morton or Terry Richardson?",
+      "gold_answers": [
+        "Terry Richardson"
+      ],
+      "num_documents": 917,
+      "actual_token_count": 128194,
+      "needle_doc_ids": [
+        "doc0",
+        "doc300"
+      ]
+    },
+    {
+      "task_id": "niah_multi_128000_middle_8",
+      "question_index": 8,
+      "context_length_tokens": 128000,
+      "position": "middle",
+      "question": "Who is older, Annie Morton or Terry Richardson?",
+      "gold_answers": [
+        "Terry Richardson"
+      ],
+      "num_documents": 917,
+      "actual_token_count": 128194,
+      "needle_doc_ids": [
+        "doc299",
+        "doc598"
+      ]
+    },
+    {
+      "task_id": "niah_multi_128000_late_8",
+      "question_index": 8,
+      "context_length_tokens": 128000,
+      "position": "late",
+      "question": "Who is older, Annie Morton or Terry Richardson?",
+      "gold_answers": [
+        "Terry Richardson"
+      ],
+      "num_documents": 917,
+      "actual_token_count": 128194,
+      "needle_doc_ids": [
+        "doc597",
+        "doc916"
+      ]
+    },
+    {
+      "task_id": "niah_multi_32000_early_9",
+      "question_index": 9,
+      "context_length_tokens": 32000,
+      "position": "early",
+      "question": "Are Local H and For Against both from the United States?",
+      "gold_answers": [
+        "yes"
+      ],
+      "num_documents": 215,
+      "actual_token_count": 32330,
+      "needle_doc_ids": [
+        "doc0",
+        "doc86"
+      ]
+    },
+    {
+      "task_id": "niah_multi_32000_middle_9",
+      "question_index": 9,
+      "context_length_tokens": 32000,
+      "position": "middle",
+      "question": "Are Local H and For Against both from the United States?",
+      "gold_answers": [
+        "yes"
+      ],
+      "num_documents": 215,
+      "actual_token_count": 32330,
+      "needle_doc_ids": [
+        "doc85",
+        "doc158"
+      ]
+    },
+    {
+      "task_id": "niah_multi_32000_late_9",
+      "question_index": 9,
+      "context_length_tokens": 32000,
+      "position": "late",
+      "question": "Are Local H and For Against both from the United States?",
+      "gold_answers": [
+        "yes"
+      ],
+      "num_documents": 215,
+      "actual_token_count": 32330,
+      "needle_doc_ids": [
+        "doc157",
+        "doc214"
+      ]
+    },
+    {
+      "task_id": "niah_multi_64000_early_9",
+      "question_index": 9,
+      "context_length_tokens": 64000,
+      "position": "early",
+      "question": "Are Local H and For Against both from the United States?",
+      "gold_answers": [
+        "yes"
+      ],
+      "num_documents": 463,
+      "actual_token_count": 64016,
+      "needle_doc_ids": [
+        "doc0",
+        "doc156"
+      ]
+    },
+    {
+      "task_id": "niah_multi_64000_middle_9",
+      "question_index": 9,
+      "context_length_tokens": 64000,
+      "position": "middle",
+      "question": "Are Local H and For Against both from the United States?",
+      "gold_answers": [
+        "yes"
+      ],
+      "num_documents": 463,
+      "actual_token_count": 64016,
+      "needle_doc_ids": [
+        "doc155",
+        "doc290"
+      ]
+    },
+    {
+      "task_id": "niah_multi_64000_late_9",
+      "question_index": 9,
+      "context_length_tokens": 64000,
+      "position": "late",
+      "question": "Are Local H and For Against both from the United States?",
+      "gold_answers": [
+        "yes"
+      ],
+      "num_documents": 463,
+      "actual_token_count": 64016,
+      "needle_doc_ids": [
+        "doc289",
+        "doc462"
+      ]
+    },
+    {
+      "task_id": "niah_multi_128000_early_9",
+      "question_index": 9,
+      "context_length_tokens": 128000,
+      "position": "early",
+      "question": "Are Local H and For Against both from the United States?",
+      "gold_answers": [
+        "yes"
+      ],
+      "num_documents": 918,
+      "actual_token_count": 128177,
+      "needle_doc_ids": [
+        "doc0",
+        "doc291"
+      ]
+    },
+    {
+      "task_id": "niah_multi_128000_middle_9",
+      "question_index": 9,
+      "context_length_tokens": 128000,
+      "position": "middle",
+      "question": "Are Local H and For Against both from the United States?",
+      "gold_answers": [
+        "yes"
+      ],
+      "num_documents": 918,
+      "actual_token_count": 128177,
+      "needle_doc_ids": [
+        "doc290",
+        "doc605"
+      ]
+    },
+    {
+      "task_id": "niah_multi_128000_late_9",
+      "question_index": 9,
+      "context_length_tokens": 128000,
+      "position": "late",
+      "question": "Are Local H and For Against both from the United States?",
+      "gold_answers": [
+        "yes"
+      ],
+      "num_documents": 918,
+      "actual_token_count": 128177,
+      "needle_doc_ids": [
+        "doc604",
+        "doc917"
+      ]
+    }
+  ],
+  "total_conditions": 45
+}

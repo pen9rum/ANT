@@ -1,0 +1,235 @@
+{
+  "benchmarks": {
+    "hotpotqa": [
+      {
+        "task_id": "5a75e05c55429976ec32bc5f",
+        "question": "Brown State Fishing Lake is in a country that has a population of how many inhabitants ?",
+        "num_documents": 10
+      },
+      {
+        "task_id": "5ab3e45655429976abd1bcd4",
+        "question": "The Vermont Catamounts men's soccer team currently competes in a conference that was formerly known as what from 1988 to 1996?",
+        "num_documents": 10
+      },
+      {
+        "task_id": "5ab29c24554299449642c932",
+        "question": "Are Giuseppe Verdi and Ambroise Thomas both Opera composers ?",
+        "num_documents": 10
+      },
+      {
+        "task_id": "5ae0d4c9554299603e418468",
+        "question": "Roger O. Egeberg was Assistant Secretary for Health and Scientific Affairs during the administration of a president that served during what years?",
+        "num_documents": 10
+      },
+      {
+        "task_id": "5a8133725542995ce29dcbdb",
+        "question": "Which writer was from England, Henry Roth or Robert Erskine Childers?",
+        "num_documents": 10
+      },
+      {
+        "task_id": "5ae7a8175542993210983ed8",
+        "question": "Which other Mexican Formula One race car driver has held the podium besides the Force India driver born in 1990?",
+        "num_documents": 10
+      },
+      {
+        "task_id": "5ae6050f55429929b0807a5e",
+        "question": "This singer of A Rather Blustery Day also voiced what hedgehog?",
+        "num_documents": 10
+      },
+      {
+        "task_id": "5adddccd5542997dc7907069",
+        "question": "Aside from the Apple Remote, what other device can control the program Apple Remote was originally designed to interact with?",
+        "num_documents": 10
+      },
+      {
+        "task_id": "5ae2070a5542994d89d5b313",
+        "question": "Which performance act has a higher instrument to person ratio, Badly Drawn Boy or Wolf Alice? ",
+        "num_documents": 10
+      },
+      {
+        "task_id": "5ae22b8d554299234fd0440f",
+        "question": "What was the father of Kasper Schmeichel voted to be by the IFFHS in 1992?",
+        "num_documents": 10
+      },
+      {
+        "task_id": "5a722b8655429971e9dc9329",
+        "question": "Who was the writer of These Boots Are Made for Walkin' and who died in 2007?",
+        "num_documents": 10
+      },
+      {
+        "task_id": "5adf37a95542995ec70e8f97",
+        "question": "The 2011–12 VCU Rams men's basketball team, led by third year head coach Shaka Smart, represented Virginia Commonwealth University which was founded in what year?",
+        "num_documents": 10
+      },
+      {
+        "task_id": "5abd259d55429924427fcf1a",
+        "question": "Are both Dictyosperma, and Huernia described as a genus?",
+        "num_documents": 2
+      },
+      {
+        "task_id": "5a828c8355429966c78a6a50",
+        "question": "Kaiser Ventures corporation was founded by an American industrialist who became known as the father of modern American shipbuilding?",
+        "num_documents": 10
+      },
+      {
+        "task_id": "5a8a3e745542996c9b8d5e70",
+        "question": "What is the name for the adventure in \"Tunnels and Trolls\", a game designed by Ken St. Andre?",
+        "num_documents": 10
+      }
+    ],
+    "2wikimultihopqa": [
+      {
+        "task_id": "2935f1640bda11eba7f7acde48001122",
+        "question": "Where was the place of death of the director of film Beat Girl?",
+        "num_documents": 10
+      },
+      {
+        "task_id": "ada1b358085211ebbd58ac1f6bf848b6",
+        "question": "Who died first, Fleetwood Sheppard or George William Whitaker?",
+        "num_documents": 10
+      },
+      {
+        "task_id": "3f857208086c11ebbd61ac1f6bf848b6",
+        "question": "Which film has the director born first, The Raven'S Dance or Keïta! L'Héritage Du Griot?",
+        "num_documents": 10
+      },
+      {
+        "task_id": "dfe93efe0bdd11eba7f7acde48001122",
+        "question": "When did Jean Martin (Singer)'s husband die?",
+        "num_documents": 10
+      },
+      {
+        "task_id": "1d890623088711ebbd6dac1f6bf848b6",
+        "question": "Which film has the director who died earlier, Tangled Destinies or The Daltons' Women?",
+        "num_documents": 10
+      },
+      {
+        "task_id": "d8c36503097411ebbdb0ac1f6bf848b6",
+        "question": "Which film was released earlier, Moment Of Danger or The Ballad Of Josie?",
+        "num_documents": 10
+      },
+      {
+        "task_id": "2207e9060bda11eba7f7acde48001122",
+        "question": "What nationality is the director of film World And Time Enough?",
+        "num_documents": 10
+      },
+      {
+        "task_id": "7abc1e3008d511ebbd98ac1f6bf848b6",
+        "question": "Which film has the director died earlier, Poker In Bed or The Machine To Kill Bad People?",
+        "num_documents": 10
+      },
+      {
+        "task_id": "ae331827088b11ebbd6fac1f6bf848b6",
+        "question": "Which film whose director is younger, Heads I Win, Tails You Lose or The Incredible Sarah?",
+        "num_documents": 10
+      },
+      {
+        "task_id": "2002bf0c0bb011ebab90acde48001122",
+        "question": "Who is Catherine Of Pomerania, Countess Palatine Of Neumarkt's father-in-law?",
+        "num_documents": 10
+      },
+      {
+        "task_id": "c531e7560baf11ebab90acde48001122",
+        "question": "Who is Marie Zéphyrine Of France's paternal grandmother?",
+        "num_documents": 10
+      },
+      {
+        "task_id": "4d982dc308c111ebbd8bac1f6bf848b6",
+        "question": "Which film has the director died earlier, Condemned Women or Faces In The Dark?",
+        "num_documents": 10
+      },
+      {
+        "task_id": "a9cc5f240bdb11eba7f7acde48001122",
+        "question": "Who is the spouse of the director of film Eden And After?",
+        "num_documents": 10
+      },
+      {
+        "task_id": "6ebe05740bde11eba7f7acde48001122",
+        "question": "Where was the place of death of Anastasia Of Serbia's husband?",
+        "num_documents": 10
+      },
+      {
+        "task_id": "a0065fe9085f11ebbd5dac1f6bf848b6",
+        "question": "Are Fire In Hell and The Tiger: An Old Hunter'S Tale from the same country?",
+        "num_documents": 10
+      }
+    ],
+    "musique": [
+      {
+        "task_id": "2hop__683835_709167",
+        "question": "What award did the author of The Red Tree receive?",
+        "num_documents": 20
+      },
+      {
+        "task_id": "2hop__197470_271394",
+        "question": "Where was Tyler MacDuff's child educated?",
+        "num_documents": 20
+      },
+      {
+        "task_id": "2hop__458131_174974",
+        "question": "Who is the spouse of the Rabbit Hole's producer?",
+        "num_documents": 20
+      },
+      {
+        "task_id": "2hop__299142_347613",
+        "question": "Who is the child of Sigrid Eskilsdotter's child?",
+        "num_documents": 20
+      },
+      {
+        "task_id": "2hop__528263_865831",
+        "question": "In which county is Kimbrough Memorial Stadium located?",
+        "num_documents": 20
+      },
+      {
+        "task_id": "2hop__569582_304416",
+        "question": "What record label is the performer of Almost Made Ya signed to?",
+        "num_documents": 20
+      },
+      {
+        "task_id": "2hop__505860_650613",
+        "question": "Where was the author of Hannibal and Scipio educated at?",
+        "num_documents": 20
+      },
+      {
+        "task_id": "2hop__821197_368148",
+        "question": "In which county is Southern Maryland Electric Cooperative headquartered?",
+        "num_documents": 20
+      },
+      {
+        "task_id": "2hop__554167_451128",
+        "question": "Who is the child of the Victim of Romance performer?",
+        "num_documents": 20
+      },
+      {
+        "task_id": "2hop__702496_430061",
+        "question": "What county was Tim Dubois born in?",
+        "num_documents": 20
+      },
+      {
+        "task_id": "2hop__549146_223121",
+        "question": "What record label did the person who is part of The Bruce Lee Band start?",
+        "num_documents": 20
+      },
+      {
+        "task_id": "2hop__647996_551681",
+        "question": "What is another notable work made by the author of Miss Sara Sampson?",
+        "num_documents": 20
+      },
+      {
+        "task_id": "2hop__673655_316668",
+        "question": "What instrument is played by the person from The Blackout All-Stars?",
+        "num_documents": 20
+      },
+      {
+        "task_id": "2hop__574419_270105",
+        "question": "What is the seat of the county where Van Hook Township is located?",
+        "num_documents": 20
+      },
+      {
+        "task_id": "2hop__403712_793210",
+        "question": "Who is the father of Edward Baring, 1st Baron Revelstoke's father?",
+        "num_documents": 20
+      }
+    ]
+  }
+}

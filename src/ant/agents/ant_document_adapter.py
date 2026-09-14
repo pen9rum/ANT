@@ -64,6 +64,11 @@ from ant.evaluation_suite.answer_contract import (
 )
 from ant.evaluation_suite.counting_provider import CountingOpenAIProvider
 from ant.evaluation_suite.document_scope import DocumentRecord, EvalDocumentEnvironment
+from ant.evaluation_suite.natural_qa_synthesis import (
+    format_evidence_block,
+    is_natural_multihop_qa_benchmark,
+    synthesize_natural_multihop_answer,
+)
 from ant.evaluation_suite.usage import UsageStats
 from ant.indexing import build_worker_cards
 from ant.memory import IndexStore
@@ -110,10 +115,18 @@ class AntDocumentAgent:
     name = "ant_document"
 
     def __init__(
-        self, model: str = "gpt-4.1", max_rounds: int = 6, index_root: Path | None = None
+        self,
+        model: str = "gpt-4.1",
+        max_rounds: int = 6,
+        search_top_k: int = 4,
+        index_root: Path | None = None,
     ) -> None:
         self.model = model
         self.max_rounds = max_rounds
+        # Default 4 reproduces prior behavior exactly for every existing
+        # caller -- a disclosed passthrough to LocalCoordinator.ask()'s own
+        # search_top_k, for controlled boundary-expansion experiments only.
+        self.search_top_k = search_top_k
         self.index_root = index_root or Path(".ant/eval-suite-documents")
 
     def _index_path_for(self, example: TaskExample, environment_root: Path) -> Path:
@@ -148,7 +161,9 @@ class AntDocumentAgent:
             # memory_routes / cross_repo_experience deliberately omitted --
             # same "ordinary clean runtime" shape as ant_adapter.AntAgent.
         )
-        state = coordinator.ask(example.question, max_rounds=self.max_rounds)
+        state = coordinator.ask(
+            example.question, max_rounds=self.max_rounds, search_top_k=self.search_top_k
+        )
         # Shared short-answer contract (Part A of the long-context spec) --
         # applied STRICTLY after coordinator.ask() has already returned its
         # complete, unmodified result. This is the critical property for
@@ -164,22 +179,45 @@ class AntDocumentAgent:
         # byte-identical to a run with this call deleted; only the string
         # returned to the harness changes.
         raw_answer = state.answer
-        # Single-Needle Contamination Study Condition B -- post-hoc, against
-        # the SAME evidence state.evidence the frozen coordinator already
-        # gathered on its own. Same non-negotiable property as condensation
-        # above: this runs strictly after coordinator.ask() returns, so
-        # routing/Need-Graph/recovery are provably unaffected -- the
-        # question string ANT's own internals saw is never touched.
+        # Benchmark-scoped final-answer synthesis (fixes a benchmark-policy
+        # leakage -- see ant.evaluation_suite.natural_qa_synthesis's module
+        # docstring): state.answer is the frozen core coordinator's OWN
+        # synthesis, developed/tuned against SWE-QA-Pro's abstention-
+        # tolerant repository-QA setting. For the three standard multi-hop
+        # QA benchmarks, that abstention-prone text is not used as the
+        # final answer's basis at all -- a SEPARATE, evidence-driven
+        # synthesis step (never reading state.answer, never touching
+        # routing/Need-Graph/retrieval) is used instead. Every other
+        # benchmark (including SWE-QA-Pro, which uses a completely
+        # different adapter, ant.agents.ant_adapter.AntAgent, and never
+        # imports this module) keeps the exact prior behavior.
         grounded_answer = raw_answer
-        if example.metadata.get("answer_contract_condition") == "B":
-            evidence_block = "\n".join(
-                f"[{item.path}:{item.line_start}-{item.line_end}] {item.quote}"
-                for item in state.evidence
+        if is_natural_multihop_qa_benchmark(example.benchmark):
+            assert example.metadata.get("answer_contract_condition") is None, (
+                "answer_contract_condition (Condition B regrounding) is not defined for the "
+                "natural-multihop-QA synthesis branch"
             )
-            grounded_answer = apply_context_authoritative_regrounding(
-                provider, example.question, raw_answer, evidence_block
+            evidence_block = format_evidence_block(state.evidence)
+            final_answer = synthesize_natural_multihop_answer(
+                provider, example.question, evidence_block
             )
-        final_answer = condense_to_answer_span(provider, example.question, grounded_answer)
+        else:
+            # Single-Needle Contamination Study Condition B -- post-hoc,
+            # against the SAME evidence state.evidence the frozen
+            # coordinator already gathered on its own. Same non-negotiable
+            # property as condensation below: this runs strictly after
+            # coordinator.ask() returns, so routing/Need-Graph/recovery are
+            # provably unaffected -- the question string ANT's own
+            # internals saw is never touched.
+            if example.metadata.get("answer_contract_condition") == "B":
+                evidence_block = "\n".join(
+                    f"[{item.path}:{item.line_start}-{item.line_end}] {item.quote}"
+                    for item in state.evidence
+                )
+                grounded_answer = apply_context_authoritative_regrounding(
+                    provider, example.question, raw_answer, evidence_block
+                )
+            final_answer = condense_to_answer_span(provider, example.question, grounded_answer)
         llm_calls = provider.drain_call_count()
 
         # Behavioral-diagnostic counts for Section 13/14 of the long-context
@@ -254,6 +292,11 @@ class AntDocumentAgent:
                 "grounded_answer_after_regrounding": grounded_answer
                 if grounded_answer != raw_answer
                 else None,
+                "final_synthesis_policy": (
+                    "natural_multihop_qa"
+                    if is_natural_multihop_qa_benchmark(example.benchmark)
+                    else "swe_qa_pro_default"
+                ),
             },
         )
 
