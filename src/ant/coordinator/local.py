@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import re
 import warnings
 from collections import defaultdict
@@ -68,6 +69,13 @@ from ant.tools.path_prior import has_low_value_part, has_source_part
 from ant.workers import AutonomousWorker, WorkerRunConfig
 
 BASE_CLASS_RE = re.compile(r"\bclass\s+[A-Za-z_][A-Za-z0-9_]*\(([^)]*)\)")
+
+# Diagnostic-only: silent at every default logging configuration (no
+# handler attached, standard library default level WARNING > DEBUG), so
+# emitting records here changes no inference behavior. Used solely to
+# make global_fallback's own query construction/results inspectable
+# after the fact without needing to re-instrument ad hoc for every audit.
+_logger = logging.getLogger(__name__)
 
 # need_type values that a heuristic evidence match is allowed to close outright.
 # Absence-shaped needs (negative_presence, unknown) are deliberately excluded:
@@ -873,11 +881,11 @@ class LocalCoordinator:
                     # persistent candidate for a future bridge.
                 else:  # global_fallback
                     all_files = sorted({file for worker in self.workers for file in worker.files})
+                    adaptive_query = self._query_from_needs(question, [node.detail])
+                    adaptive_hits_raw = search.search(adaptive_query, all_files, limit=8)
                     hits = [
                         item.model_copy(update={"need_ids": [need_id]})
-                        for item in search.search(
-                            self._query_from_needs(question, [node.detail]), all_files, limit=8
-                        )
+                        for item in adaptive_hits_raw
                     ]
                     evidence.extend(hits)
                     observations = [
@@ -889,6 +897,23 @@ class LocalCoordinator:
                         )
                     ]
                     worker_ids_used = []
+                    _logger.debug(
+                        "global_fallback adaptive query need_id=%r question=%r "
+                        "need=%r missing=%r description=%r need_type=%r "
+                        "relevant_symbols=%r suggested_terms=%r "
+                        "suggested_territories=%r query=%r top_results=%r",
+                        need_id,
+                        question,
+                        node.need,
+                        node.detail.missing,
+                        node.detail.description,
+                        node.detail.need_type,
+                        node.detail.relevant_symbols,
+                        node.detail.suggested_terms,
+                        node.detail.suggested_territories,
+                        adaptive_query,
+                        [(item.path, item.line_start, item.line_end) for item in adaptive_hits_raw],
+                    )
                 if episode is not None:
                     episode.used_special_tactics.add(tactic)
 

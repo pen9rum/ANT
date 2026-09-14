@@ -36,6 +36,7 @@ from ant.evaluation_suite.document_scope import (
     materialize_documents,
 )
 from ant.indexing import build_worker_cards
+from ant.memory import IndexStore
 
 
 def _sample_documents() -> list[DocumentRecord]:
@@ -402,3 +403,80 @@ def test_run_no_gold_or_reference_metadata_reaches_natural_qa_synthesis(
 
     assert secret not in captured["question"]
     assert secret not in captured["evidence_block"]
+
+
+# =============================================================================
+# _ensure_indexed stale-index guard: a previously-built workers.json is only
+# reused when it still covers exactly the CURRENT environment's own
+# searchable file set -- not merely "does workers.json exist". Diagnosed
+# live: a real multineedle-scaling environment directory was re-materialized
+# with more documents than its own index was originally built against, and
+# the stale index silently made every document added after that point
+# permanently unsearchable (including the one document the gold answer
+# lived in), with no error.
+# =============================================================================
+
+
+def test_ensure_indexed_reuses_the_existing_index_when_nothing_changed(tmp_path: Path) -> None:
+    documents = _sample_documents()
+    materialize_documents(documents, tmp_path)
+    environment = EvalDocumentEnvironment(tmp_path, documents)
+    index_path = tmp_path / ".ant-index"
+    agent = AntDocumentAgent()
+
+    agent._ensure_indexed(environment, index_path)
+    built_at = (index_path / "workers.json").stat().st_mtime
+
+    # Second call, identical environment -- must be a pure no-op (the
+    # whole point of caching at all): the index file is never rewritten.
+    agent._ensure_indexed(environment, index_path)
+    assert (index_path / "workers.json").stat().st_mtime == built_at
+
+
+def test_ensure_indexed_rebuilds_when_the_environment_file_set_changes(tmp_path: Path) -> None:
+    documents_v1 = _sample_documents()[:2]  # doc0, doc1 only
+    materialize_documents(documents_v1, tmp_path)
+    environment_v1 = EvalDocumentEnvironment(tmp_path, documents_v1)
+    index_path = tmp_path / ".ant-index"
+    agent = AntDocumentAgent()
+
+    agent._ensure_indexed(environment_v1, index_path)
+    initial_files = {file for w in IndexStore(index_path).load_workers() for file in w.files}
+    assert initial_files == {"doc_0000.txt", "doc_0001.txt"}
+
+    # The SAME index_path, but the environment's own searchable file set
+    # has since grown (a later re-materialization adding doc2) -- exactly
+    # the real diagnosed scenario: workers.json now covers a strict
+    # subset of the current environment.
+    documents_v2 = _sample_documents()  # doc0, doc1, doc2
+    materialize_documents(documents_v2, tmp_path)
+    environment_v2 = EvalDocumentEnvironment(tmp_path, documents_v2)
+
+    agent._ensure_indexed(environment_v2, index_path)
+    rebuilt_files = {file for w in IndexStore(index_path).load_workers() for file in w.files}
+    assert rebuilt_files == {"doc_0000.txt", "doc_0001.txt", "doc_0002.txt"}
+
+
+def test_ensure_indexed_rebuild_also_updates_the_sqlite_backed_store(tmp_path: Path) -> None:
+    # IndexStore.load_workers() prefers its own sqlite db over the plain
+    # workers.json once one exists -- a rebuild that only rewrote the JSON
+    # file (not the db) would keep silently serving the OLD file set
+    # forever despite workers.json itself being correct. Asserted directly
+    # against the db-backed load path, not just the json file's own
+    # content.
+    documents_v1 = _sample_documents()[:1]  # doc0 only
+    materialize_documents(documents_v1, tmp_path)
+    environment_v1 = EvalDocumentEnvironment(tmp_path, documents_v1)
+    index_path = tmp_path / ".ant-index"
+    agent = AntDocumentAgent()
+
+    agent._ensure_indexed(environment_v1, index_path)
+    assert (index_path / "ant.sqlite3").exists()
+
+    documents_v2 = _sample_documents()  # doc0, doc1, doc2
+    materialize_documents(documents_v2, tmp_path)
+    environment_v2 = EvalDocumentEnvironment(tmp_path, documents_v2)
+    agent._ensure_indexed(environment_v2, index_path)
+
+    db_backed_files = {file for w in IndexStore(index_path).load_workers() for file in w.files}
+    assert db_backed_files == {"doc_0000.txt", "doc_0001.txt", "doc_0002.txt"}

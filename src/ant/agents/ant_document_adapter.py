@@ -137,7 +137,25 @@ class AntDocumentAgent:
     ) -> list[Territory]:
         territories = _document_territories(environment)
         if (index_path / "workers.json").exists():
-            return territories
+            # Stale-index guard: an index built for this same index_path
+            # earlier is only safe to reuse if it still covers exactly the
+            # CURRENT environment's own searchable file set. A prior
+            # index was found, live, to predate a later re-materialization
+            # of the same environment directory with a different (larger)
+            # document set -- IndexStore.load_workers() kept silently
+            # returning the old, smaller file set forever, making every
+            # document added after the index was built permanently
+            # unsearchable, with zero error or warning. Comparing file
+            # SETS (not counts) both catches a mismatched size and stays
+            # correct if the set changed by the same count via different
+            # documents. Deterministic and mechanical -- no LLM call,
+            # no behavior change for the (overwhelmingly common) case
+            # where nothing has actually changed.
+            existing_workers = IndexStore(index_path).load_workers()
+            existing_files = {file for worker in existing_workers for file in worker.files}
+            current_files = {file for territory in territories for file in territory.files}
+            if existing_files == current_files:
+                return territories
         # build_worker_cards is frozen core, called completely unmodified --
         # see module docstring's Category A/B/C classification.
         workers = build_worker_cards(environment.root, territories)
