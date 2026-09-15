@@ -38,6 +38,34 @@ DEFAULT_TIMEOUT_SECONDS = 10.0
 # elsewhere in this suite.
 MAX_PAGE_BYTES = 2_000_000
 
+# Content-Type prefixes/values that are text-ish enough to attempt HTML
+# parsing on. Not an exhaustive MIME registry -- just enough to catch the
+# common non-text cases (images, PDFs, video/audio, generic binary
+# downloads) a real website can serve for a URL that looks like a normal
+# page link.
+_TEXTLIKE_CONTENT_TYPES = ("text/", "application/xhtml+xml", "application/xml", "application/json")
+
+
+def _looks_like_text_content(content_type: str, raw: bytes) -> bool:
+    """Regression guard: confirmed live on a real WebWalkerQA gold source
+    page that a server can respond to a normal-looking link with binary
+    content whose garbled bytes, once decoded with errors="replace" and
+    fed to html.parser, can trip an internal, uncaught AssertionError
+    ("expected name token") deep in _markupbase -- not a clean, catchable
+    parse failure. Two independent signals, either one sufficient to
+    reject: (1) the Content-Type header, when present and unambiguous;
+    (2) a NUL byte in the first 8 KiB (the same heuristic
+    EvalRepoEnvironment._looks_like_text uses for repo files) -- text
+    content essentially never contains a NUL byte, binary formats
+    frequently do near their start.
+    """
+    header = content_type.split(";", 1)[0].strip().lower()
+    if header and not any(header.startswith(prefix) for prefix in _TEXTLIKE_CONTENT_TYPES):
+        return False
+    if b"\x00" in raw[:8192]:
+        return False
+    return True
+
 
 def normalize_url(url: str, *, base_url: str | None = None) -> str:
     """Canonical URL form used as BOTH the cache key and the identity a
@@ -285,6 +313,13 @@ def urllib_fetcher(timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS) -> Fetcher:
                         error=f"page exceeds MAX_PAGE_BYTES ({MAX_PAGE_BYTES})",
                     )
                 content_type = response.headers.get("Content-Type", "")
+                if not _looks_like_text_content(content_type, raw):
+                    return _RawFetch(
+                        http_status=response.status,
+                        redirect_target=redirect_target,
+                        html="",
+                        error=f"non-text content (Content-Type={content_type!r}), not parsed",
+                    )
                 charset = "utf-8"
                 if "charset=" in content_type:
                     charset = (
@@ -416,20 +451,45 @@ class PageCache:
             )
         else:
             effective_url = raw.redirect_target or normalized
-            text, links = extract_text_and_links(raw.html, base_url=effective_url)
-            if self.restrict_to_root and self.root_url is not None:
-                links = [link for link in links if same_site(link, self.root_url)]
-            page = FetchedPage(
-                url=normalized,
-                requested_url=url,
-                status="ok",
-                http_status=raw.http_status,
-                redirect_target=raw.redirect_target,
-                text=text,
-                links=links,
-                error=None,
-                fetched_at=_now(),
-            )
+            try:
+                # Defense in depth on top of urllib_fetcher's own content-
+                # type/NUL-byte screening: html.parser can still raise an
+                # uncaught AssertionError on sufficiently malformed input
+                # (confirmed live -- see _looks_like_text_content's own
+                # docstring). One bad page must degrade to a normal
+                # "error" FetchedPage, never crash the caller.
+                text, links = extract_text_and_links(raw.html, base_url=effective_url)
+                parse_error: str | None = None
+            except Exception as exc:  # noqa: BLE001
+                text, links = "", []
+                parse_error = f"HTML parse failure: {type(exc).__name__}: {exc}"
+
+            if parse_error is not None:
+                page = FetchedPage(
+                    url=normalized,
+                    requested_url=url,
+                    status="error",
+                    http_status=raw.http_status,
+                    redirect_target=raw.redirect_target,
+                    text="",
+                    links=[],
+                    error=parse_error,
+                    fetched_at=_now(),
+                )
+            else:
+                if self.restrict_to_root and self.root_url is not None:
+                    links = [link for link in links if same_site(link, self.root_url)]
+                page = FetchedPage(
+                    url=normalized,
+                    requested_url=url,
+                    status="ok",
+                    http_status=raw.http_status,
+                    redirect_target=raw.redirect_target,
+                    text=text,
+                    links=links,
+                    error=None,
+                    fetched_at=_now(),
+                )
 
         self._memory[normalized] = page
         self.cache_dir.mkdir(parents=True, exist_ok=True)

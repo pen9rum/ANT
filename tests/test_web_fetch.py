@@ -14,6 +14,7 @@ from ant.evaluation_suite.web_fetch import (
     FetchedPage,
     PageCache,
     _ensure_ascii_url,
+    _looks_like_text_content,
     _RawFetch,
     extract_text_and_links,
     normalize_url,
@@ -161,6 +162,70 @@ def test_urllib_fetcher_sends_only_ascii_urls_to_urlopen() -> None:
     assert result.error is None
     sent_request = mock_urlopen.call_args[0][0]
     sent_request.full_url.encode("ascii")  # must not raise -- this is the regression
+
+
+# --- binary/non-text content detection (regression: a real WebWalkerQA
+# gold source page served binary content that crashed html.parser with an
+# uncaught AssertionError instead of a clean, catchable error) ---
+
+
+def test_looks_like_text_content_accepts_plain_html() -> None:
+    assert _looks_like_text_content("text/html; charset=utf-8", b"<p>hello</p>")
+
+
+def test_looks_like_text_content_rejects_image_content_type() -> None:
+    assert not _looks_like_text_content("image/png", b"\x89PNG\r\n\x1a\n")
+
+
+def test_looks_like_text_content_rejects_pdf_content_type() -> None:
+    assert not _looks_like_text_content("application/pdf", b"%PDF-1.4")
+
+
+def test_looks_like_text_content_rejects_nul_byte_even_with_no_content_type() -> None:
+    assert not _looks_like_text_content("", b"garbled\x00binary\x00data")
+
+
+def test_looks_like_text_content_accepts_empty_content_type_with_no_nul_byte() -> None:
+    assert _looks_like_text_content("", b"plain text, no content-type header")
+
+
+def test_urllib_fetcher_rejects_non_text_response_instead_of_crashing() -> None:
+    mock_response = MagicMock()
+    mock_response.geturl.return_value = "https://example.com/file.pdf"
+    mock_response.status = 200
+    mock_response.read.return_value = b"%PDF-1.4 binary garbage"
+    mock_response.headers = {"Content-Type": "application/pdf"}
+    mock_response.__enter__.return_value = mock_response
+    mock_response.__exit__.return_value = False
+
+    with patch("urllib.request.urlopen", return_value=mock_response):
+        fetcher = urllib_fetcher()
+        result = fetcher("https://example.com/file.pdf")
+
+    assert result.error is not None
+    assert "non-text content" in result.error
+    assert result.html == ""
+
+
+def test_page_cache_degrades_to_error_when_html_parsing_itself_raises(tmp_path: Path) -> None:
+    # Simulates the exact live failure: content that passes the
+    # content-type/NUL-byte screen (urllib_fetcher's own check) but still
+    # trips html.parser internally -- PageCache's own defense-in-depth
+    # must catch it, never let it propagate.
+    def _fetcher(url: str) -> _RawFetch:
+        return _RawFetch(
+            http_status=200, redirect_target=None, html="<p>looks fine</p>", error=None
+        )
+
+    cache = PageCache(cache_dir=tmp_path, fetcher=_fetcher, root_url="http://example.com/")
+    with patch(
+        "ant.evaluation_suite.web_fetch.extract_text_and_links",
+        side_effect=AssertionError("expected name token at '<![garbled'"),
+    ):
+        page = cache.get("http://example.com/")
+
+    assert page.status == "error"
+    assert "HTML parse failure" in page.error
 
 
 # --- PageCache ---
