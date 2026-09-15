@@ -186,8 +186,15 @@ class AntWebAgent:
             for r in state.rounds
         )
 
+        # LocalCoordinator.ask() already drains self.synthesizer.drain_usage()
+        # once internally (local.py's own final-synthesis block) and returns
+        # it as state.usage -- since reasoner and synthesizer are the SAME
+        # provider instance here, a second provider.drain_usage() call would
+        # see nothing (already reset to empty). Only drain_call_count() is
+        # safe to read again: ask() never calls it (not part of the
+        # UsageReporter protocol it drains).
         llm_calls = provider.drain_call_count()
-        token_usage = provider.drain_usage()
+        token_usage = state.usage
         elapsed = time.time() - started
 
         return AgentResult(
