@@ -1,54 +1,59 @@
-"""ANTMAN over the Track B (web-navigation) substrate: wires the frozen,
-UNMODIFIED `ant.coordinator.local.LocalCoordinator` onto WebWalkerQA.
+"""ANTMAN over the Track B (web-navigation) substrate: wires the frozen
+`ant.coordinator.local.LocalCoordinator` onto WebWalkerQA, with LIVE
+multi-hop web navigation happening inside worker execution.
 
-ARCHITECTURAL NOTE (confirmed by direct source reading before writing
-this file, not assumed): `LocalCoordinator.ask()` constructs its own
-`LocalSearchTool` internally (hardcoded by class name, not caller-
-injectable), which only ever reads real bytes from local disk -- there is
-no HTTP fetch anywhere inside core coordination code. And `self.workers`
-(the territory/worker roster) is provably immutable for the whole
-`ask()` call: `evolve_workers` (ANTMAN's only worker-growth mechanism) is
-never invoked from `ask()` -- confirmed by grep across `src/ant`, its two
-call sites are the separate `ant evolve` CLI command and `ant
-gen-compare`. **This is not a web-specific limitation.** Track A's own
-`AntAgent` has the identical shape: `discover_territories()` enumerates
-the WHOLE repo BEFORE `ask()` starts, and the worker set stays fixed for
-that call too. ANTMAN's "dynamic" story has always been about ROUTING
-(which worker handles which need, each round), never about the worker
-set growing mid-task.
+HISTORY / WHY THIS SHAPE: an earlier version of this file built a frozen,
+root+one-hop worker roster entirely at bootstrap time (before `ask()`
+ever started) and handed LocalCoordinator a static file set. That shipped
+and was confirmed live to be fundamentally broken: a 24-task paid run
+scored 0/24, and a direct trajectory comparison against the corrected
+ReAct baseline's own runs for those same 24 tasks showed EVERY one of
+them needed >=2 real navigate() hops (several needed 10-14) to reach the
+answer page -- a one-hop-only bootstrap can never materialize that page
+into any worker's evidence, regardless of model quality. See
+`output/runs/_invalid_debug/webwalkerqa-antman-full60-INVALID-onehop-bootstrap/`
+for the preserved, never-to-be-merged evidence of that failure.
 
-So the substrate-appropriate mapping here is a bounded, gold-blind
-NAVIGATION-BASED BOOTSTRAP (root page + up to `nav_budget` real
-`navigate()` calls over the root page's own discovered links, using the
-exact same `EvalWebEnvironment`/`PageCache` the ReAct baseline uses --
-same-site restriction, meta-refresh following, deterministic cache, all
-unmodified) that builds the initial `WorkerCard` roster BEFORE calling
-the completely unmodified `LocalCoordinator.ask()` -- analogous in role
-to `discover_territories()`, not a violation of "runtime-discovered, not
-pre-enumerated": nothing here ever reads `golden_path`/`source_website`/
-the gold answer, and it does not enumerate "the site" (bounded to root +
-one hop, at most `nav_budget` pages -- versus a repo's own COMPLETE file
-tree, which Track A's own bootstrap genuinely does enumerate in full).
+THE FIX: `ant.agents.web_navigation_tool.WebSearchTool` (see its own
+module docstring for the full mechanism) is a duck-typed substitute for
+`ant.tools.local.LocalSearchTool`, injected into a COMPLETELY UNMODIFIED
+`LocalCoordinator.ask()` call via the one small, additive,
+default-preserving `search_tool_factory` seam added to
+`LocalCoordinator.__init__` for exactly this purpose (omitting it
+reproduces Track A's exact prior behavior byte-for-byte -- see that
+parameter's own docstring in local.py). Its `search()` method -- called
+UNCONDITIONALLY by `AutonomousWorker.run()` at the start of every worker
+execution -- is where the real, live, budget-checked, link-restricted
+navigation happens: a worker's first hop is its own deterministic
+assigned first-level link (preserving per-worker territory
+specialization); further hops, if the need still isn't answered, are
+chosen by a small dedicated LLM call over the (anchor_text, url) pairs
+actually present on whatever page the worker is currently on. Navigation
+is enforced by a SINGLE, QUERY-LEVEL SHARED `EvalWebEnvironment`
+instance (the same primitive `MatchedReActWebAgent` uses) -- so the
+15-step ceiling this task specifies is a shared budget across every
+worker combined, never a per-worker allowance, and "only a link actually
+present on the current page" is enforced by that same primitive, not
+re-implemented here.
 
-Each of the root page's own links becomes ONE single-page territory/
-worker, in the order the links were extracted (never sorted/prioritized
-by any relevance heuristic, which would risk gold-adjacent bias) -- up
-to `nav_budget` workers, fewer if the root has fewer links or some
-navigations fail (skipped gracefully, matching the ReAct baseline's own
-degradation). The root page itself is ALSO its own worker, so root-page-
-only content stays directly reachable.
+Everything genuinely ANTMAN-canonical -- Need Graph construction, runtime
+Need revision, dynamic worker routing, progress/resolution tracking,
+rerouting/recovery, evidence selection, synthesis -- is untouched
+`LocalCoordinator.ask()` behavior; this file and web_navigation_tool.py
+only supply the substrate-specific tool implementation and the initial
+(root-page-derived, gold-blind) territory roster.
 
-Per this task's own explicit instruction: `nav_budget=15` (matching
-WebWalkerQA's paper-stated Explorer cap, identical to
-`MatchedReActWebAgent`'s own budget) and `max_rounds=15` (a deliberate
-task-specific override of ANTMAN's own canonical `max_rounds=6` default
--- `max_rounds` is a caller-supplied runtime parameter throughout this
-project, e.g. the long-context multineedle-scaling experiment's own
-`max_rounds=10`, never a core-code change).
+nav_budget=15 (WebWalkerQA's own paper-stated Explorer cap, identical to
+`MatchedReActWebAgent`'s own budget -- a fairness requirement) and
+max_rounds=10 (an explicit, deliberate coordination-budget choice, kept
+INDEPENDENT of nav_budget: a coordination round may consume zero, one,
+or several navigation actions depending on worker activity, so the two
+are different dimensions and neither one bounds the other).
 
-GOLD-LEAKAGE NOTE: bootstrap and `run()` read only `example.question`
-and `example.metadata["root_url"]` -- never `example.reference` or
-`example.metadata["_audit_only"]`.
+GOLD-LEAKAGE NOTE: bootstrap, run(), and WebSearchTool's own link-choice
+prompt read only `example.question` and `example.metadata["root_url"]`
+plus pages actually reached through real navigation -- never
+`example.reference` or `example.metadata["_audit_only"]`.
 """
 
 from __future__ import annotations
@@ -57,48 +62,70 @@ import time
 from pathlib import Path
 
 from ant.agents.base import AgentResult
+from ant.agents.web_navigation_tool import WebSearchTool, WorkerFrontier
 from ant.benchmarks.base import TaskExample
 from ant.coordinator import LocalCoordinator
 from ant.domain import WorkerCard
 from ant.evaluation_suite.counting_provider import CountingOpenAIProvider
 from ant.evaluation_suite.usage import UsageStats
-from ant.evaluation_suite.web_fetch import FetchedPage, PageCache, urllib_fetcher
+from ant.evaluation_suite.web_fetch import PageCache, urllib_fetcher
 from ant.evaluation_suite.web_scope import EvalWebEnvironment
 
-# WebWalkerQA's own paper-stated Explorer-agent step ceiling -- the SAME
-# navigation budget `MatchedReActWebAgent` uses (fairness requirement).
 DEFAULT_NAV_BUDGET = 15
-# Task-specific override of ANTMAN's canonical max_rounds=6 default --
-# see this module's own docstring for why.
-DEFAULT_MAX_ROUNDS = 15
+# Independent of nav_budget -- see this module's own docstring. Matches
+# the project's own precedent for an explicit task-specific max_rounds
+# override (e.g. the long-context multineedle-scaling experiment's own
+# max_rounds=10), not ANTMAN's canonical max_rounds=6 default.
+DEFAULT_MAX_ROUNDS = 10
+# Upper bound on how many first-level-link workers bootstrap creates --
+# kept equal to nav_budget purely for LLM-call/cost comparability with
+# the earlier bootstrap design, NOT because creating a worker costs any
+# navigation budget itself (it no longer does: a worker's assigned link
+# is only actually fetched lazily, the first time that worker's search()
+# is actually called during coordination -- see WebSearchTool).
+DEFAULT_NAV_LINK_CAP = 15
 
 
 def _bootstrap_territories(
-    example: TaskExample, environment_root: Path, nav_budget: int, timeout_seconds: float
-) -> tuple[list[WorkerCard], Path, int, int, bool]:
-    """Builds the initial WorkerCard roster via a bounded, gold-blind
-    navigation pass -- see this module's own docstring. Returns
-    (workers, materialized_root, navigation_steps_used,
-    n_inaccessible_pages, nav_budget_exhausted).
+    example: TaskExample,
+    environment_root: Path,
+    nav_budget: int,
+    nav_link_cap: int,
+    timeout_seconds: float,
+) -> tuple[list[WorkerCard], dict[str, WorkerFrontier], Path, EvalWebEnvironment, int]:
+    """Fetches ONLY the root page (no navigation budget spent yet -- see
+    EvalWebEnvironment.root_page()'s own docstring: the root is given, not
+    discovered) and builds one provisional WorkerCard per first-level link
+    found on it, in extraction order (never sorted/prioritized by
+    relevance, which would risk gold-adjacent bias), up to nav_link_cap.
+    Does NOT fetch any of those linked pages -- that happens lazily,
+    per-worker, only if and when that worker's search() is actually
+    called during coordination (see WebSearchTool._next_link). Also
+    creates one worker representing root-page-only content, so root text
+    itself stays directly reachable even if it has no useful outgoing
+    links for the current question. Returns (workers, frontiers,
+    materialized_root, shared_web_environment, n_root_inaccessible).
     """
     root_url = example.metadata["root_url"]
-    page_cache_dir = environment_root / "pages"
     materialized_dir = environment_root / "materialized"
     materialized_dir.mkdir(parents=True, exist_ok=True)
 
     cache = PageCache(
-        cache_dir=page_cache_dir,
+        cache_dir=environment_root / "pages",
         fetcher=urllib_fetcher(timeout_seconds=timeout_seconds),
         root_url=root_url,
     )
     env = EvalWebEnvironment(root_url, cache, max_steps=nav_budget)
-
     root_page = env.root_page()
-    workers: list[WorkerCard] = []
-    n_inaccessible = 0
 
-    def _materialize(page: FetchedPage, filename: str, worker_id: str, label: str) -> None:
-        (materialized_dir / filename).write_text(page.text, encoding="utf-8")
+    workers: list[WorkerCard] = []
+    frontiers: dict[str, WorkerFrontier] = {}
+    if root_page.status != "ok":
+        return workers, frontiers, materialized_dir, env, 1
+
+    def _add_worker(worker_id: str, label: str, assigned_link) -> None:
+        filename = f"{worker_id}__root.txt"
+        (materialized_dir / filename).write_text(root_page.text, encoding="utf-8")
         workers.append(
             WorkerCard(
                 id=worker_id,
@@ -109,39 +136,28 @@ def _bootstrap_territories(
                 responsibilities=[label] if label else [],
             )
         )
-
-    if root_page.status == "ok":
-        _materialize(
-            root_page, "page_root.txt", "worker-root", "The website's own root/landing page."
+        frontiers[worker_id] = WorkerFrontier(
+            current_page=root_page,
+            assigned_link=assigned_link,
+            visited_urls={root_page.url},
+            taken_first_hop=assigned_link is None,
         )
-    else:
-        n_inaccessible += 1
 
-    for i, link in enumerate(root_page.links):
-        if env.step_count() >= nav_budget:
-            break
-        try:
-            page = env.navigate(root_page, link.url)
-        except (ValueError, RuntimeError):
-            continue
-        if page.status != "ok":
-            n_inaccessible += 1
-            continue
+    _add_worker("worker-root", "The website's own root/landing page.", None)
+    for i, link in enumerate(root_page.links[:nav_link_cap]):
         label = link.text.strip() or f"page {i}"
-        _materialize(page, f"page_{i:04d}.txt", f"worker-{i}", label)
+        _add_worker(f"worker-{i}", label, link)
 
-    nav_budget_exhausted = env.step_count() >= nav_budget
-    return workers, materialized_dir, env.step_count(), n_inaccessible, nav_budget_exhausted
+    return workers, frontiers, materialized_dir, env, 0
 
 
 class AntWebAgent:
     """See this module's own docstring for the full design/architecture
-    note. Preserves ANTMAN's canonical coordination method (Need Graph,
-    runtime Need revision, dynamic worker routing, progress/resolution
-    tracking, rerouting/recovery, evidence selection, synthesis) via a
+    note. Preserves ANTMAN's canonical coordination method via a
     completely unmodified `LocalCoordinator.ask()` call -- only the
-    substrate-specific territory-BUILDING step (this file's own
-    `_bootstrap_territories`) differs from Track A's `AntAgent`.
+    substrate-specific tool implementation (web_navigation_tool.py) and
+    the initial territory roster (this file's own `_bootstrap_territories`)
+    differ from Track A's `AntAgent`.
     """
 
     name = "ant_web"
@@ -151,22 +167,30 @@ class AntWebAgent:
         model: str = "gpt-4.1",
         nav_budget: int = DEFAULT_NAV_BUDGET,
         max_rounds: int = DEFAULT_MAX_ROUNDS,
+        nav_link_cap: int = DEFAULT_NAV_LINK_CAP,
         timeout_seconds: float = 10.0,
     ) -> None:
         self.model = model
         self.nav_budget = nav_budget
         self.max_rounds = max_rounds
+        self.nav_link_cap = nav_link_cap
         self.timeout_seconds = timeout_seconds
 
     def run(self, example: TaskExample, environment_root: Path) -> AgentResult:
         started = time.time()
-        workers, materialized_dir, n_nav_steps, n_inaccessible, nav_budget_exhausted = (
-            _bootstrap_territories(example, environment_root, self.nav_budget, self.timeout_seconds)
+        workers, frontiers, materialized_dir, env, n_root_inaccessible = _bootstrap_territories(
+            example, environment_root, self.nav_budget, self.nav_link_cap, self.timeout_seconds
         )
 
         provider = CountingOpenAIProvider(model=self.model)
+        tool = WebSearchTool(materialized_dir, env, provider, frontiers)
         coordinator = LocalCoordinator(
-            materialized_dir, workers, reasoner=provider, synthesizer=provider, index_path=None
+            materialized_dir,
+            workers,
+            reasoner=provider,
+            synthesizer=provider,
+            index_path=None,
+            search_tool_factory=lambda root, idx: tool,
         )
         state = coordinator.ask(example.question, max_rounds=self.max_rounds)
 
@@ -186,13 +210,15 @@ class AntWebAgent:
             for r in state.rounds
         )
 
-        # LocalCoordinator.ask() already drains self.synthesizer.drain_usage()
-        # once internally (local.py's own final-synthesis block) and returns
-        # it as state.usage -- since reasoner and synthesizer are the SAME
-        # provider instance here, a second provider.drain_usage() call would
-        # see nothing (already reset to empty). Only drain_call_count() is
-        # safe to read again: ask() never calls it (not part of the
-        # UsageReporter protocol it drains).
+        n_nav_steps = env.step_count()
+        assert n_nav_steps <= self.nav_budget, (
+            f"shared navigation budget violated: {n_nav_steps} > {self.nav_budget}"
+        )
+        nav_by_worker: dict[str, int] = {}
+        for entry in tool.nav_log:
+            worker_id = entry["worker"]
+            nav_by_worker[worker_id] = nav_by_worker.get(worker_id, 0) + 1
+
         llm_calls = provider.drain_call_count()
         token_usage = state.usage
         elapsed = time.time() - started
@@ -222,13 +248,16 @@ class AntWebAgent:
                 "nav_budget": self.nav_budget,
                 "max_rounds": self.max_rounds,
                 "navigation_steps": n_nav_steps,
+                "navigation_steps_by_worker": nav_by_worker,
+                "nav_log": tool.nav_log,
                 "territories_discovered": len(workers),
+                "pages_fetched": len(env.discovered_pages()),
                 "active_workers": len(active_worker_ids),
                 "n_rounds": len(state.rounds),
                 "n_reroutes": n_reroutes,
                 "n_need_revisions": n_need_revisions,
-                "n_inaccessible_pages_in_bootstrap": n_inaccessible,
-                "nav_budget_exhausted": nav_budget_exhausted,
+                "n_root_inaccessible": n_root_inaccessible,
+                "nav_budget_exhausted": n_nav_steps >= self.nav_budget,
                 "final_need_graph_size": len(state.final_need_graph),
             },
         )

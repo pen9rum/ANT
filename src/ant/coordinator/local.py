@@ -4,6 +4,7 @@ import logging
 import re
 import warnings
 from collections import defaultdict
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol, cast
@@ -369,6 +370,7 @@ class LocalCoordinator:
         memory_routes: list[MemoryRoute] | None = None,
         index_path: Path | None = None,
         cross_repo_experience: list[str] | None = None,
+        search_tool_factory: Callable[[Path, Path | None], object] | None = None,
     ) -> None:
         self.repo_root = repo_root
         self.workers = workers
@@ -384,6 +386,19 @@ class LocalCoordinator:
         # ColonyMemoryStore before construction rather than this class
         # reaching for either memory store directly.
         self.cross_repo_experience = cross_repo_experience or []
+        # Optional substrate-tool injection seam: defaults to reproducing
+        # today's exact hardcoded `LocalSearchTool(repo_root,
+        # index_path=index_path)` construction byte-for-byte, so every
+        # existing caller (Track A, every test) is provably unaffected.
+        # Exists so a non-repo substrate (e.g. ant.agents.ant_web's web
+        # navigation tool) can supply a duck-typed substitute exposing the
+        # same method surface (search/dense_search/rank_symbols/
+        # resolve_symbol/navigate/references/indexed_callers/callers/
+        # callees/assignments/imports/subclasses/read_region) without this
+        # class needing to know anything about that substrate.
+        self.search_tool_factory = search_tool_factory or (
+            lambda root, idx: LocalSearchTool(root, index_path=idx)
+        )
 
     def ask(
         self,
@@ -444,7 +459,12 @@ class LocalCoordinator:
         # routing/Need-Graph/recovery logic itself.
         evidence: list[Evidence] = list(initial_evidence) if initial_evidence is not None else []
         seen_worker_ids: set[str] = set()
-        search = LocalSearchTool(self.repo_root, index_path=self.index_path)
+        # cast: the factory's declared return type is intentionally the
+        # duck-typed `object` (see __init__'s own docstring on
+        # search_tool_factory) -- every downstream call site here already
+        # expects LocalSearchTool's own method surface, which a substitute
+        # must match structurally, not by inheritance.
+        search = cast(LocalSearchTool, self.search_tool_factory(self.repo_root, self.index_path))
         worker_config = WorkerRunConfig(max_tool_calls=11, search_top_k=search_top_k)
         worker_by_id = {worker.id: worker for worker in self.workers}
         memory_hints = _memory_hints_from_routes(self.memory_routes)
