@@ -1,0 +1,29 @@
+{
+  "name": "matched_react_web_validation20",
+  "status": "frozen_final",
+  "source_manifest": "matched_react_web_n60.json",
+  "selection_rule": "20-question deterministic slice of the frozen N=60: target 7/7/6 Easy/Medium/Hard. Within each difficulty stratum, ALL previously-correct cases from the original 11.7% run are included, then filled to the target count by ascending task_id among previously-incorrect cases. Depends only on each task's own frozen difficulty/hop_type metadata and the ORIGINAL run's own correct/incorrect label as a stratification criterion -- never on gold answers, never used to cherry-pick toward a better-looking result (every original-correct case in a stratum is kept, not a hand-picked subset).",
+  "total_selected": 20,
+  "task_ids": [
+    "webwalkerqa-3c3569ff3f8de906",
+    "webwalkerqa-407803be5357f2c5",
+    "webwalkerqa-47820b539e19fca3",
+    "webwalkerqa-4c52cf5c99d0a6a7",
+    "webwalkerqa-4db7181346b3febb",
+    "webwalkerqa-9905bc4594605003",
+    "webwalkerqa-a826c536734deefc",
+    "webwalkerqa-2cf45e85feaa32dc",
+    "webwalkerqa-2dd38354b10a17be",
+    "webwalkerqa-37023bb24d78d12a",
+    "webwalkerqa-48cba6896dc2fc43",
+    "webwalkerqa-4a8a22a729de32f5",
+    "webwalkerqa-69c48989cc1b631e",
+    "webwalkerqa-f5000b5002d1957a",
+    "webwalkerqa-3b1a5fd2cb7e7cb4",
+    "webwalkerqa-47ebd0f5bd0c6b7b",
+    "webwalkerqa-51666582e2e49c31",
+    "webwalkerqa-5d14caae3c5c9407",
+    "webwalkerqa-5f694b478a35b9ba",
+    "webwalkerqa-c3ec90cfa8c0972c"
+  ]
+}

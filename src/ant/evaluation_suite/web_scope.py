@@ -108,7 +108,7 @@ class EvalWebEnvironment:
         navigations have already happened.
         """
         normalized_target = normalize_url(to_url, base_url=from_page.url)
-        if normalized_target not in from_page.links:
+        if normalized_target not in {link.url for link in from_page.links}:
             raise ValueError(
                 f"{normalized_target!r} was not among the links discovered on "
                 f"{from_page.url!r} -- navigate() only follows links actually "

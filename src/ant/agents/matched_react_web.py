@@ -11,6 +11,37 @@ or finish with an answer -- there is no search() tool, matching
 WebWalkerQA's own paper-audited navigation model ("purely click-based, no
 search function," `docs/webwalkerqa_ant_mapping.md` section 2).
 
+FIDELITY CORRECTIONS (per the post-N=60-run fidelity audit, see
+docs/webwalkerqa_matched_react_fidelity_audit.md): the original version
+of this file diverged from the official WebWalker paper's own ReAct
+formalism (arXiv:2501.07572 §4.1, and the released Explorer code's own
+`_run()` context-accumulation) in three confirmed ways, all corrected
+here:
+
+1. **Links now carry their own visible anchor text**, not a bare URL --
+   see `ant.evaluation_suite.web_fetch.PageLink`. The official environment
+   shows `(button_text, url)` pairs (`app.py::extract_links_with_text`);
+   showing bare URLs made navigation largely blind and was the primary,
+   evidenced driver of the repeated-navigation pathology seen in every
+   step-budget-exhaustion trajectory in the original run.
+2. **Page content is no longer truncated to an arbitrary character cap.**
+   The official paper explicitly chose >=128K-context backbones
+   specifically to avoid truncating page content (§5.1) and the released
+   code contains no truncation logic at all. GPT-4.1's real ~1M-token
+   input window makes the same choice available here. The only remaining
+   cap (`MAX_PROMPT_TOKENS` below) is a genuine API-safety backstop
+   against actually exceeding the model's real input-token ceiling, not a
+   default-path truncation -- see its own docstring.
+3. **Full (Thought, Action, Observation) history is retained across
+   steps**, matching the official formalism's own
+   `ℋₜ=(𝒯₁,𝒜₁,𝒪₁,...,𝒪ₜ₋₁,𝒯ₜ,𝒜ₜ)` (§4.1) and the Explorer's own code
+   (`agent.py::_run`, literally appending `thought + action + observation`
+   to accumulated context every step, never summarized). The prior
+   version kept only a one-line URL+status summary per step, discarding
+   all previously-seen page content -- confirmed to correlate with heavy
+   repeated navigation (the agent had no memory of what a page actually
+   contained, only that it had visited *a* URL).
+
 Uses `ant.evaluation_suite.web_scope.EvalWebEnvironment` unmodified --
 `navigate()` is the sole discovery channel (raises on any link not
 actually present on the current page), `inspect()` re-reads only
@@ -33,6 +64,8 @@ from __future__ import annotations
 import time
 from pathlib import Path
 
+import tiktoken
+
 from ant.agents.base import AgentResult
 from ant.benchmarks.base import TaskExample
 from ant.evaluation_suite.counting_provider import CountingOpenAIProvider
@@ -48,15 +81,25 @@ from ant.providers.openai_provider import _loads_json_object
 # exact budget).
 DEFAULT_MAX_STEPS = 15
 
-# Page text is truncated before entering a prompt (same "bounded evidence
-# window per step" principle Track A's matched_react.py applies to its own
-# tool-result history) -- unlike the OFFICIAL WebWalker method's Critic
-# role (a real context-compression mechanism), this baseline deliberately
-# keeps only a short PER-STEP SUMMARY in history (not full page text) and
-# only the CURRENT page's full (truncated) text in the prompt, so context
-# size stays roughly constant across steps rather than accumulating every
-# page ever visited.
-DEFAULT_MAX_PAGE_CHARS = 3000
+# Same token-counting convention used throughout this project
+# (external_wrappers/longagent.py, evaluation_suite/niah_plus.py, ...) --
+# a consistent, disclosed ESTIMATE (GPT-4.1 itself may tokenize slightly
+# differently), not a claim of byte-exact parity with OpenAI's own
+# tokenizer for this specific model.
+_ENCODING_NAME = "cl100k_base"
+
+# GPT-4.1's real, verified input-token ceiling is 1,047,576 (confirmed via
+# live web search against openai.com's own published limits, not assumed
+# from memory). This is set well below that -- genuine safety headroom
+# for (a) cl100k_base under/over-counting relative to GPT-4.1's actual
+# tokenizer, (b) the fixed prompt scaffolding/question text, and (c) not
+# pushing a real API call right up against a hard documented ceiling --
+# NOT a default-path truncation. In the audited N=60 corpus this ceiling
+# is never approached even once (p99 single-page size was ~36K tokens;
+# 15 steps of accumulated history at that rate is far below this cap) --
+# it exists only for the genuine long tail (one real page in that corpus
+# was over 1 MiB of extracted text on its own).
+MAX_PROMPT_TOKENS = 800_000
 
 _SYSTEM_PROMPT = """You are a single autonomous agent answering a question by navigating \
 one website, starting from its root page. You may ONLY follow links that are actually \
@@ -77,42 +120,36 @@ of navigation steps before declaring a final answer.
 
 Question: {question}
 
-Navigation history:
+Full navigation history:
 {history}
-
-Last page visited:
-{page}
 
 Based on everything you have seen, give your single best final answer now. Respond with \
 ONLY the answer text -- no JSON, no explanation prefix."""
 
 
-def _format_page(page: FetchedPage, max_chars: int) -> str:
+def _format_page(page: FetchedPage) -> str:
     if page.status != "ok":
         return f"[Page inaccessible: {page.error or page.status}]"
-    text = page.text[:max_chars]
-    links_block = "\n".join(f"[{i}] {url}" for i, url in enumerate(page.links))
+    links_block = "\n".join(
+        f"[{i}] {link.text.strip() or '(no visible text)'} -> {link.url}"
+        for i, link in enumerate(page.links)
+    )
     if not links_block:
         links_block = "(no links found on this page)"
-    return f"URL: {page.url}\n\nContent:\n{text}\n\nLinks on this page:\n{links_block}"
+    return f"URL: {page.url}\n\nContent:\n{page.text}\n\nLinks on this page:\n{links_block}"
 
 
-def _format_history(history: list[dict]) -> str:
-    if not history:
-        return "(none yet)"
-    lines = []
-    for entry in history:
-        if entry["action"] == "navigate" and "to_url" in entry:
-            lines.append(
-                f"[{entry['step']}] navigated to {entry['to_url']} (status={entry['status']})"
-            )
-        else:
-            lines.append(f"[{entry['step']}] {entry['action']}: {entry.get('error', '')}")
-    return "\n".join(lines)
+def _token_count(text: str, encoding: tiktoken.Encoding) -> int:
+    return len(encoding.encode(text, disallowed_special=()))
+
+
+def _join_history(blocks: list[str]) -> str:
+    return "\n\n".join(blocks) if blocks else "(none yet)"
 
 
 class MatchedReActWebAgent:
-    """See this module's own docstring for the full design/fairness note."""
+    """See this module's own docstring for the full design/fairness/
+    fidelity-correction notes."""
 
     name = "matched_react_web"
 
@@ -120,13 +157,13 @@ class MatchedReActWebAgent:
         self,
         model: str = "gpt-4.1",
         max_steps: int = DEFAULT_MAX_STEPS,
-        max_page_chars: int = DEFAULT_MAX_PAGE_CHARS,
         timeout_seconds: float = 10.0,
+        max_prompt_tokens: int = MAX_PROMPT_TOKENS,
     ) -> None:
         self.model = model
         self.max_steps = max_steps
-        self.max_page_chars = max_page_chars
         self.timeout_seconds = timeout_seconds
+        self.max_prompt_tokens = max_prompt_tokens
 
     def run(self, example: TaskExample, environment_root: Path) -> AgentResult:
         provider = CountingOpenAIProvider(model=self.model)
@@ -137,30 +174,56 @@ class MatchedReActWebAgent:
             root_url=root_url,
         )
         env = EvalWebEnvironment(root_url, cache, max_steps=self.max_steps)
+        encoding = tiktoken.get_encoding(_ENCODING_NAME)
 
         started = time.time()
-        history: list[dict] = []
+        history: list[
+            dict
+        ] = []  # short, structured log for AgentResult.trajectory/checkpoint reporting
+        history_blocks: list[
+            str
+        ] = []  # full (Thought, Action, Observation) text -- what the prompt actually shows
         final_answer = ""
         termination_reason = "step_budget_exhausted"
         n_inaccessible = 0
+        n_history_blocks_dropped = 0
 
         current_page = env.root_page()
         if current_page.status != "ok":
             n_inaccessible += 1
+        history_blocks.append(f"Initial page (root):\n{_format_page(current_page)}")
 
         budget = self.max_steps
         for step in range(budget):
             prompt = (
                 _SYSTEM_PROMPT.format(budget=budget)
                 + f"\n\nQuestion: {example.question}\n\n"
-                + f"Navigation history so far:\n{_format_history(history)}\n\n"
-                + f"Current page ({step}/{budget} steps used):\n"
-                + f"{_format_page(current_page, self.max_page_chars)}\n\n"
-                + "Decide your next action."
+                + f"Full navigation history so far:\n{_join_history(history_blocks)}\n\n"
+                + f"({step}/{budget} steps used.) Decide your next action."
             )
+            while (
+                _token_count(prompt, encoding) > self.max_prompt_tokens and len(history_blocks) > 1
+            ):
+                # Genuine API-safety fallback (see MAX_PROMPT_TOKENS's own
+                # docstring) -- drop the OLDEST retained block first, never
+                # the current/most-recent page, and never below one block
+                # (there is always at least the initial root page).
+                history_blocks.pop(0)
+                n_history_blocks_dropped += 1
+                prompt = (
+                    _SYSTEM_PROMPT.format(budget=budget)
+                    + f"\n\nQuestion: {example.question}\n\n"
+                    + f"Full navigation history so far:\n{_join_history(history_blocks)}\n\n"
+                    + f"({step}/{budget} steps used.) Decide your next action."
+                )
+
             response = provider.responses_json(prompt, max_output_tokens=400)
             decision = _loads_json_object(response.text)
             action = decision.get("action") if isinstance(decision, dict) else None
+            thought = decision.get("thought") if isinstance(decision, dict) else None
+            thought_text = (
+                thought.strip() if isinstance(thought, str) and thought.strip() else "(none given)"
+            )
 
             if action == "finish":
                 answer = decision.get("answer") if isinstance(decision, dict) else None
@@ -170,6 +233,11 @@ class MatchedReActWebAgent:
                     break
                 history.append(
                     {"step": step, "action": "finish", "error": "empty/malformed answer"}
+                )
+                history_blocks.append(
+                    f"Step {step}:\nThought: {thought_text}\n"
+                    "Action: finish (malformed -- no answer text)\n"
+                    "Observation: [action rejected -- an answer must be provided to finish]"
                 )
                 continue
 
@@ -185,12 +253,23 @@ class MatchedReActWebAgent:
                             "error": f"invalid link_index {link_index!r}",
                         }
                     )
+                    history_blocks.append(
+                        f"Step {step}:\nThought: {thought_text}\n"
+                        f"Action: navigate(link_index={link_index!r})\n"
+                        "Observation: [invalid link_index -- no navigation occurred; "
+                        f"valid indices for the current page are 0-{len(current_page.links) - 1}]"
+                    )
                     continue
-                target_url = current_page.links[link_index]
+                link = current_page.links[link_index]
                 try:
-                    new_page = env.navigate(current_page, target_url)
+                    new_page = env.navigate(current_page, link.url)
                 except (ValueError, RuntimeError) as exc:
                     history.append({"step": step, "action": "navigate", "error": str(exc)})
+                    history_blocks.append(
+                        f"Step {step}:\nThought: {thought_text}\n"
+                        f'Action: navigate to "{link.text}" ({link.url})\n'
+                        f"Observation: [navigation error: {exc}]"
+                    )
                     continue
                 if new_page.status != "ok":
                     n_inaccessible += 1
@@ -200,19 +279,27 @@ class MatchedReActWebAgent:
                         "action": "navigate",
                         "from_url": current_page.url,
                         "to_url": new_page.url,
+                        "link_text": link.text,
                         "status": new_page.status,
                     }
+                )
+                history_blocks.append(
+                    f"Step {step}:\nThought: {thought_text}\n"
+                    f'Action: navigate to "{link.text}" ({link.url})\n'
+                    f"Observation:\n{_format_page(new_page)}"
                 )
                 current_page = new_page
                 continue
 
             history.append({"step": step, "action": str(action), "error": "unrecognized action"})
+            history_blocks.append(
+                f"Step {step}:\nThought: {thought_text}\nAction: {action!r} (unrecognized)\n"
+                'Observation: [action not recognized -- must be "navigate" or "finish"]'
+            )
 
         if not final_answer:
             force_prompt = _FORCE_FINISH_PROMPT.format(
-                question=example.question,
-                history=_format_history(history),
-                page=_format_page(current_page, self.max_page_chars),
+                question=example.question, history=_join_history(history_blocks)
             )
             forced = provider.responses_text(force_prompt, max_output_tokens=300)
             final_answer = forced.text.strip()
@@ -248,6 +335,7 @@ class MatchedReActWebAgent:
                 "n_inaccessible_pages_in_trajectory": n_inaccessible,
                 "step_budget_exhausted": termination_reason
                 == "step_budget_exhausted_forced_finish",
+                "n_history_blocks_dropped": n_history_blocks_dropped,
             },
         )
 

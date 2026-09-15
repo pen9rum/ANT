@@ -100,7 +100,7 @@ def test_navigate_respects_same_site_restriction_via_the_underlying_cache(tmp_pa
 
     # The link was extracted (present in root.links) but same_site filtering
     # inside PageCache.get() already dropped it before it reached root.links.
-    assert "http://evil.com/x" not in root.links
+    assert "http://evil.com/x" not in {link.url for link in root.links}
 
 
 # --- inspect: re-read only, not a second discovery channel ---

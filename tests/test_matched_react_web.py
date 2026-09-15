@@ -291,3 +291,82 @@ def test_agent_is_registered() -> None:
 
     agent = get_agent("matched_react_web")
     assert isinstance(agent, MatchedReActWebAgent)
+
+
+# --- fidelity corrections: link text, full history, no arbitrary truncation ---
+
+
+def test_prompt_shows_link_anchor_text_not_just_a_bare_url(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    pages = {"http://conf.example.com/": "<a href='/speakers'>Meet the Speakers</a>"}
+    provider = _ScriptedProvider(
+        json_responses=[json.dumps({"thought": "done", "action": "finish", "answer": "n/a"})]
+    )
+    result, provider = _run(monkeypatch, tmp_path, pages, provider)
+    assert "Meet the Speakers" in provider.prompts_sent[0]
+
+
+def test_full_history_retains_earlier_page_content_not_just_a_url_summary(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # The step-2 prompt must still contain step-0's own page CONTENT (a
+    # distinctive phrase), not merely a one-line "[0] navigated to <url>"
+    # summary -- this is the fidelity fix for the original run's
+    # discarded-history problem.
+    pages = {
+        "http://conf.example.com/": "<a href='/a'>A</a> DISTINCTIVE_ROOT_PAGE_PHRASE",
+        "http://conf.example.com/a": "<a href='/b'>B</a> distinctive page A phrase",
+        "http://conf.example.com/b": "<p>distinctive page B phrase</p>",
+    }
+    provider = _ScriptedProvider(
+        json_responses=[
+            json.dumps({"thought": "go a", "action": "navigate", "link_index": 0}),
+            json.dumps({"thought": "go b", "action": "navigate", "link_index": 0}),
+            json.dumps({"thought": "done", "action": "finish", "answer": "n/a"}),
+        ]
+    )
+    result, provider = _run(monkeypatch, tmp_path, pages, provider)
+
+    final_prompt = provider.prompts_sent[-1]
+    assert "DISTINCTIVE_ROOT_PAGE_PHRASE" in final_prompt
+    assert "distinctive page A phrase" in final_prompt
+    assert "distinctive page B phrase" in final_prompt
+
+
+def test_large_page_content_is_not_truncated(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # Well beyond the OLD 3000-character cap -- must appear in full now.
+    long_marker = "X" * 50_000
+    pages = {"http://conf.example.com/": f"<p>{long_marker}</p>"}
+    provider = _ScriptedProvider(
+        json_responses=[json.dumps({"thought": "done", "action": "finish", "answer": "n/a"})]
+    )
+    result, provider = _run(monkeypatch, tmp_path, pages, provider)
+    assert long_marker in provider.prompts_sent[0]
+
+
+def test_token_safety_fallback_drops_oldest_history_blocks_first(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # A tiny max_prompt_tokens forces the fallback to trigger deterministically
+    # without needing a genuinely huge page. Oldest-first eviction means the
+    # ROOT page's distinctive phrase should eventually be dropped while the
+    # most recent page's content is kept.
+    pages = {
+        "http://conf.example.com/": "<a href='/a'>A</a> ROOT_MARKER_TEXT " + ("filler " * 200),
+        "http://conf.example.com/a": "<p>PAGE_A_MARKER_TEXT</p>" + ("filler " * 200),
+    }
+    agent = MatchedReActWebAgent(max_prompt_tokens=200)
+    provider = _ScriptedProvider(
+        json_responses=[
+            json.dumps({"thought": "go", "action": "navigate", "link_index": 0}),
+            json.dumps({"thought": "done", "action": "finish", "answer": "n/a"}),
+        ]
+    )
+    result, provider = _run(monkeypatch, tmp_path, pages, provider, agent=agent)
+
+    assert result.metadata["n_history_blocks_dropped"] > 0
+    assert "ROOT_MARKER_TEXT" not in provider.prompts_sent[-1]
+    assert "PAGE_A_MARKER_TEXT" in provider.prompts_sent[-1]

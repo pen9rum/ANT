@@ -13,7 +13,9 @@ from unittest.mock import MagicMock, patch
 from ant.evaluation_suite.web_fetch import (
     FetchedPage,
     PageCache,
+    PageLink,
     _ensure_ascii_url,
+    _extract_meta_refresh_target,
     _looks_like_text_content,
     _RawFetch,
     extract_text_and_links,
@@ -108,7 +110,26 @@ def test_extract_text_and_links_resolves_and_dedupes_links() -> None:
     <a href="mailto:x@example.com">Mail</a>
     """
     text, links = extract_text_and_links(html, base_url="http://example.com/dir/")
-    assert links == ["http://example.com/a", "http://example.com/dir/b"]
+    assert [(link.text, link.url) for link in links] == [
+        ("A", "http://example.com/a"),  # first-seen anchor text kept ("A", not "A again")
+        ("B relative", "http://example.com/dir/b"),
+    ]
+
+
+def test_extract_text_and_links_captures_anchor_text() -> None:
+    html = '<a href="/speakers">Meet the Speakers</a>'
+    _text, links = extract_text_and_links(html, base_url="http://example.com/")
+    assert len(links) == 1
+    assert links[0].text == "Meet the Speakers"
+    assert links[0].url == "http://example.com/speakers"
+
+
+def test_extract_text_and_links_handles_link_with_no_text() -> None:
+    html = '<a href="/icon"><img src="x.png"/></a>'
+    _text, links = extract_text_and_links(html, base_url="http://example.com/")
+    assert len(links) == 1
+    assert links[0].text == ""
+    assert links[0].url == "http://example.com/icon"
 
 
 def test_extract_text_and_links_is_deterministic() -> None:
@@ -207,6 +228,88 @@ def test_urllib_fetcher_rejects_non_text_response_instead_of_crashing() -> None:
     assert result.html == ""
 
 
+# --- meta-refresh client-side redirect (regression: a real WebWalkerQA
+# root URL, ciie.org, serves nothing but a meta-refresh stub -- every
+# major browser follows this automatically, confirmed via caniuse.com;
+# the official WebWalker environment's own Playwright-rendered pipeline
+# would too, so a plain HTTP client not following it is a genuine
+# environment fidelity gap, not a benchmark-specific heuristic) ---
+
+
+def test_extract_meta_refresh_target_finds_url() -> None:
+    html = '<html><head><meta http-equiv="refresh" content="0;url=zbh/index.html"></head></html>'
+    target = _extract_meta_refresh_target(html, base_url="https://www.ciie.org/")
+    assert target == "https://www.ciie.org/zbh/index.html"
+
+
+def test_extract_meta_refresh_target_handles_quoted_url_and_spacing() -> None:
+    html = '<meta http-equiv="refresh" content="5; url=\'/next-page\'" />'
+    target = _extract_meta_refresh_target(html, base_url="https://example.com/")
+    assert target == "https://example.com/next-page"
+
+
+def test_extract_meta_refresh_target_ignores_non_refresh_meta_tags() -> None:
+    html = '<meta charset="utf-8"><meta name="description" content="0;url=/should-not-match">'
+    assert _extract_meta_refresh_target(html, base_url="https://example.com/") is None
+
+
+def test_extract_meta_refresh_target_ignores_refresh_with_no_url() -> None:
+    html = '<meta http-equiv="refresh" content="30">'  # pure timed reload, no redirect
+    assert _extract_meta_refresh_target(html, base_url="https://example.com/") is None
+
+
+def test_urllib_fetcher_follows_meta_refresh_end_to_end() -> None:
+    stub_response = MagicMock()
+    stub_response.geturl.return_value = "https://www.ciie.org/"
+    stub_response.status = 200
+    stub_response.read.return_value = b'<meta http-equiv="refresh" content="0;url=zbh/index.html">'
+    stub_response.headers = {"Content-Type": "text/html; charset=utf-8"}
+    stub_response.__enter__.return_value = stub_response
+    stub_response.__exit__.return_value = False
+
+    final_response = MagicMock()
+    final_response.geturl.return_value = "https://www.ciie.org/zbh/index.html"
+    final_response.status = 200
+    final_response.read.return_value = b"<p>Real page content</p>"
+    final_response.headers = {"Content-Type": "text/html; charset=utf-8"}
+    final_response.__enter__.return_value = final_response
+    final_response.__exit__.return_value = False
+
+    with patch("urllib.request.urlopen", side_effect=[stub_response, final_response]):
+        fetcher = urllib_fetcher()
+        result = fetcher("https://www.ciie.org/")
+
+    assert result.error is None
+    assert "Real page content" in result.html
+    assert result.redirect_target == "https://www.ciie.org/zbh/index.html"
+
+
+def test_urllib_fetcher_meta_refresh_chain_has_a_hop_limit() -> None:
+    # A genuinely alternating A<->B cycle -- a literal self-redirect (A
+    # refreshing to itself) is intentionally treated as "arrived, no
+    # further hop needed" rather than looping, so this uses two distinct
+    # URLs to actually exercise the hop-count limit.
+    def _response_for(url: str):
+        target = "/b" if url.endswith("/a") else "/a"
+        response = MagicMock()
+        response.geturl.return_value = f"https://example.com{'/a' if target == '/b' else '/b'}"
+        response.status = 200
+        response.read.return_value = (
+            f'<meta http-equiv="refresh" content="0;url={target}">'.encode()
+        )
+        response.headers = {"Content-Type": "text/html; charset=utf-8"}
+        response.__enter__.return_value = response
+        response.__exit__.return_value = False
+        return response
+
+    with patch("urllib.request.urlopen", side_effect=lambda req, **k: _response_for(req.full_url)):
+        fetcher = urllib_fetcher()
+        result = fetcher("https://example.com/a")
+
+    assert result.error is not None
+    assert "meta-refresh chain exceeded" in result.error
+
+
 def test_page_cache_degrades_to_error_when_html_parsing_itself_raises(tmp_path: Path) -> None:
     # Simulates the exact live failure: content that passes the
     # content-type/NUL-byte screen (urllib_fetcher's own check) but still
@@ -255,7 +358,7 @@ def test_page_cache_fetches_and_caches_on_disk(tmp_path: Path) -> None:
 
     assert page.status == "ok"
     assert "Root" in page.text
-    assert page.links == ["http://example.com/a"]
+    assert [(link.text, link.url) for link in page.links] == [("A", "http://example.com/a")]
     assert not page.from_cache
     assert len(list(tmp_path.glob("*.json"))) == 1
 
@@ -364,7 +467,7 @@ def test_fetched_page_json_round_trip_preserves_all_fields(tmp_path: Path) -> No
         http_status=200,
         redirect_target=None,
         text="hello",
-        links=["http://example.com/a"],
+        links=[PageLink(text="A", url="http://example.com/a")],
         error=None,
         fetched_at="2026-01-01T00:00:00+00:00",
     )
@@ -372,3 +475,22 @@ def test_fetched_page_json_round_trip_preserves_all_fields(tmp_path: Path) -> No
     assert restored.url == page.url
     assert restored.text == page.text
     assert restored.links == page.links
+
+
+def test_fetched_page_from_json_accepts_legacy_bare_url_links() -> None:
+    # A cache entry written before PageLink existed (e.g. the original
+    # 11.7% run's own on-disk cache) stored links as bare URL strings --
+    # loading it must not crash.
+    data = {
+        "url": "http://example.com/",
+        "requested_url": "http://example.com/",
+        "status": "ok",
+        "http_status": 200,
+        "redirect_target": None,
+        "text": "hello",
+        "links": ["http://example.com/a"],
+        "error": None,
+        "fetched_at": "2026-01-01T00:00:00+00:00",
+    }
+    restored = FetchedPage.from_json(data)
+    assert restored.links == [PageLink(text="", url="http://example.com/a")]
