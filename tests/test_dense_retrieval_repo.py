@@ -214,6 +214,41 @@ def test_index_is_cached_and_reused_across_questions_against_the_same_repo(
     assert n_calls_after_second == n_calls_after_first + 1
 
 
+def test_index_is_cached_even_when_the_repo_contains_an_empty_file(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # Regression test for a real bug found live on RepoProbe-Python: the
+    # cache-hit check used to compare {entry.path for entry in
+    # cached.entries} against the current file set -- but a file that is
+    # empty/whitespace-only (e.g. a package's __init__.py) never produces
+    # any _retrieval_regions chunk, so it never appears as an entry path
+    # even though it legitimately belongs to the file universe. That made
+    # the equality check fail on every single call, silently re-embedding
+    # the whole repo from scratch for every question against it.
+    embed_calls: list[list[str]] = []
+    real_embed = dense_module.DenseEmbedder.embed
+
+    def _counting_embed(self, texts):
+        embed_calls.append(list(texts))
+        return real_embed(self, texts)
+
+    monkeypatch.setattr(dense_module.DenseEmbedder, "embed", _counting_embed)
+    files = {
+        "a.txt": "The feline slept peacefully on the warm windowsill all afternoon.",
+        "pkg/__init__.py": "",  # empty -- zero _retrieval_regions chunks
+    }
+    index_root = tmp_path / ".ant-dense"
+
+    _run(monkeypatch, tmp_path, files, "Where did the cat rest?", index_root=index_root)
+    n_calls_after_first = len(embed_calls)
+    _run(monkeypatch, tmp_path, files, "A completely different question?", index_root=index_root)
+    n_calls_after_second = len(embed_calls)
+
+    assert n_calls_after_second == n_calls_after_first + 1, (
+        "cache was not reused -- the whole repo was re-embedded despite an unchanged file set"
+    )
+
+
 def test_index_cache_rebuilds_when_the_repo_file_set_changes(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

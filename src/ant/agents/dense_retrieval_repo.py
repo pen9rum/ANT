@@ -62,6 +62,7 @@ would no longer isolate what this baseline is meant to isolate.
 
 from __future__ import annotations
 
+import json
 import time
 from pathlib import Path
 
@@ -73,7 +74,7 @@ from ant.domain import Evidence
 from ant.evaluation_suite.counting_provider import CountingOpenAIProvider
 from ant.evaluation_suite.repo_scope import EvalRepoEnvironment
 from ant.evaluation_suite.usage import UsageStats
-from ant.retrieval.dense import DenseEmbedder, EmbeddingEntry, EmbeddingIndex
+from ant.retrieval.dense import DenseEmbedder, EmbeddingEntry, EmbeddingIndex, _embed_entries
 from ant.tools.local import _retrieval_regions
 
 # Same top-k Sparse Retrieval uses (`limit=8` in retrieval.py) -- never
@@ -116,25 +117,54 @@ def _build_repo_dense_index(
     if not entries:
         return EmbeddingIndex(entries=[], vectors=np.zeros((0, 0), dtype=np.float32)), 0
 
-    vectors = np.asarray(embedder.embed(texts), dtype=np.float32)
-    norms = np.linalg.norm(vectors, axis=1, keepdims=True)
-    norms[norms == 0] = 1.0
-    return EmbeddingIndex(entries=entries, vectors=vectors / norms), len(entries)
+    # A full repo checkout, chunked at paragraph granularity (not the much
+    # sparser per-symbol granularity build_embedding_index uses), can
+    # produce many thousands of chunks -- confirmed live that a single
+    # unbatched embedder.embed(texts) call over ~4k texts did not return
+    # within 10 minutes and drove memory to several GB, while the SAME
+    # corpus embedded in _embed_entries' own 256-text batches (with visible
+    # per-batch progress) completed normally. Reusing that helper, not
+    # reimplementing batching here, keeps this file's batch size in sync
+    # with DEFAULT_SCORING_CONFIG.dense.embed_batch_size everywhere else in
+    # the codebase.
+    index = _embed_entries(entries, texts, embedder, verbose=True)
+    return index, len(entries)
+
+
+def _source_files_path(index_dir: Path) -> Path:
+    return index_dir / f"{_CACHE_KEY}.source_files.json"
 
 
 def _ensure_repo_dense_index(
     environment_root: Path, files: list[str], embedder: DenseEmbedder, index_dir: Path
 ) -> tuple[EmbeddingIndex, int]:
     """Disk-cached per-repo dense index. Reuses the cached index ONLY when
-    its own file set exactly equals the current `files` universe -- not
-    merely "a cache file exists at this path" -- the same stale-index
-    guard already found necessary in `AntDocumentAgent._ensure_indexed()`.
+    the exact `files` universe used to BUILD it (persisted separately, in
+    `{key}.source_files.json`) equals the current one -- the same
+    stale-index guard already found necessary in
+    `AntDocumentAgent._ensure_indexed()`.
+
+    Regression note: an earlier version compared `{entry.path for entry in
+    cached.entries}` to `set(files)` instead. That is NOT the same set --
+    `_build_repo_dense_index` only emits an entry for a file whose
+    `_retrieval_regions` produced at least one non-blank chunk, so any
+    file that is empty or whitespace-only (a common, unremarkable case --
+    e.g. a package's `__init__.py`) never appears as an entry path even
+    though it legitimately belongs to the file universe. That made the
+    equality check fail on EVERY call, silently re-embedding the whole
+    repo from scratch for every question against it -- confirmed live on
+    RepoProbe-Python's FieldStation42 repo, which re-ran its full
+    ~4,255-chunk embed multiple times before this was caught.
     """
     cached = EmbeddingIndex.load(index_dir, _CACHE_KEY)
-    if cached is not None and {entry.path for entry in cached.entries} == set(files):
-        return cached, len(cached.entries)
+    source_files_path = _source_files_path(index_dir)
+    if cached is not None and source_files_path.exists():
+        stored_files = json.loads(source_files_path.read_text(encoding="utf-8"))
+        if set(stored_files) == set(files):
+            return cached, len(cached.entries)
     index, n_chunks = _build_repo_dense_index(environment_root, files, embedder)
     index.save(index_dir, _CACHE_KEY)
+    source_files_path.write_text(json.dumps(sorted(files)), encoding="utf-8")
     return index, n_chunks
 
 
