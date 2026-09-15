@@ -127,10 +127,35 @@ class WebSearchTool:
     def search(
         self, query: str, files: list[str], limit: int = 8, context_lines: int = 6
     ) -> list[Evidence]:
-        results = self._local.search(query, files, limit=limit, context_lines=context_lines)
         worker_key = worker_key_from_files(files)
-        frontier = self._frontiers.get(worker_key) if worker_key is not None else None
-        if worker_key is None or frontier is None:
+        if worker_key is None:
+            return self._local.search(query, files, limit=limit, context_lines=context_lines)
+        frontier = self._frontiers.get(worker_key)
+
+        # The worker's own assigned first-level link is its territory
+        # specialization (established at bootstrap) -- it must actually be
+        # visited at least once, UNCONDITIONALLY, the first time this
+        # worker's search() is ever called, regardless of whether root-only
+        # content happens to loosely overlap with whatever need text
+        # triggered this call. Confirmed live (a real paid task: 9 active
+        # workers, 10 rounds, 0 navigation steps) that gating even this
+        # first hop behind a term-overlap check was wrong: root's own
+        # generic navigation text (dates, update names) satisfied that
+        # check for essentially every decomposed sub-need, so every worker
+        # stayed planted on root and its own actual territory was never
+        # reached -- reproducing a milder version of the original one-hop
+        # bootstrap bug this class exists to fix. Only hop 2+ (below) is
+        # gated on whether what's materialized so far actually helps.
+        if frontier is not None and not frontier.taken_first_hop:
+            frontier.taken_first_hop = True  # at most one attempt, ever, regardless of outcome
+            link = frontier.assigned_link
+            if link is not None and self._budget_remaining():
+                page = self._follow(worker_key, frontier, link, query)
+                if page is not None:
+                    self._materialize(worker_key, frontier, page, files)
+
+        results = self._local.search(query, files, limit=limit, context_lines=context_lines)
+        if frontier is None:
             return results
         # LocalSearchTool.search() ranks and returns its top-k over
         # whatever text is indexed even when nothing actually matches the
@@ -138,8 +163,9 @@ class WebSearchTool:
         # `results` being non-empty is not itself proof the need is
         # answered by what's currently materialized. A cheap, honest
         # term-overlap check against the raw materialized text is what
-        # actually decides whether to spend navigation budget looking
-        # further, not the mere presence of low-relevance search hits.
+        # actually decides whether to spend further navigation budget
+        # looking deeper, not the mere presence of low-relevance search
+        # hits.
         if self._term_overlap_with_materialized(query, files):
             return results
         hops = 0
@@ -147,7 +173,7 @@ class WebSearchTool:
         while hops < self._max_hops_per_call and not sufficient:
             if not self._budget_remaining():
                 break
-            link = self._next_link(frontier, query)
+            link = self._choose_link_via_llm(frontier, query)
             if link is None:
                 break
             page = self._follow(worker_key, frontier, link, query)
@@ -186,14 +212,6 @@ class WebSearchTool:
 
     def _budget_remaining(self) -> bool:
         return self._env.max_steps is None or self._env.step_count() < self._env.max_steps
-
-    def _next_link(self, frontier: WorkerFrontier, query: str) -> PageLink | None:
-        if not frontier.taken_first_hop:
-            link = frontier.assigned_link
-            if link is not None and link.url not in frontier.exhausted_links:
-                return link
-            frontier.taken_first_hop = True
-        return self._choose_link_via_llm(frontier, query)
 
     def _follow(
         self, worker_key: str, frontier: WorkerFrontier, link: PageLink, query: str

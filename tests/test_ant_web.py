@@ -177,10 +177,20 @@ class _FixedLinkChoiceProvider:
         return ResponseResult(text=self.reply, usage=TokenUsage(), raw={})
 
 
-def test_search_returns_local_results_without_navigating_when_already_present(
+def test_search_takes_the_mandatory_first_hop_even_when_root_already_matches(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    pages = {"http://x.test/": "<a href='/listing'>Listing</a>"}
+    # Regression test for a real bug found on a live paid run: gating even
+    # the first hop behind a term-overlap check let root's own generic
+    # navigation text satisfy the check for most decomposed sub-needs, so
+    # workers never reached their own assigned territory at all (9 active
+    # workers, 10 rounds, 0 navigation steps in that run). The first hop
+    # must be unconditional, regardless of whether root-only content
+    # happens to already overlap with the query.
+    pages = {
+        "http://x.test/": "<a href='/listing'>Listing</a>",
+        "http://x.test/listing": "more about the keynote speaker",
+    }
     env = _env(tmp_path, monkeypatch, pages, "http://x.test/")
     root = env.root_page()
     materialized = tmp_path / "materialized"
@@ -193,8 +203,30 @@ def test_search_returns_local_results_without_navigating_when_already_present(
 
     results = tool.search("keynote speaker", ["worker-0__root.txt"])
 
-    assert results  # found locally
-    assert env.step_count() == 0  # never navigated
+    assert results
+    assert env.step_count() == 1  # the mandatory first hop still happened
+    assert frontiers["worker-0"].taken_first_hop is True
+
+
+def test_search_does_not_repeat_the_first_hop_on_a_later_call(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    pages = {"http://x.test/": "<a href='/listing'>Listing</a>"}
+    env = _env(tmp_path, monkeypatch, pages, "http://x.test/")
+    root = env.root_page()
+    materialized = tmp_path / "materialized"
+    materialized.mkdir()
+    (materialized / "worker-0__root.txt").write_text(
+        "the keynote speaker is Dr. Jane Smith", encoding="utf-8"
+    )
+    frontier = WorkerFrontier(current_page=root, assigned_link=root.links[0], taken_first_hop=True)
+    frontiers = {"worker-0": frontier}
+    tool = WebSearchTool(materialized, env, _FixedLinkChoiceProvider("NONE"), frontiers)
+
+    results = tool.search("keynote speaker", ["worker-0__root.txt"])
+
+    assert results
+    assert env.step_count() == 0  # already taken in an earlier call -- not repeated
     assert tool.nav_log == []
 
 
