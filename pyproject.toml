@@ -41,7 +41,17 @@ testpaths = ["tests"]
 [tool.ruff]
 line-length = 100
 target-version = "py312"
-exclude = ["repos", "output", ".ant"]
+# `third_party` holds artifacts VENDORED BYTE-FOR-BYTE from each
+# benchmark's own official repository (RepoProbe's prompt templates,
+# GAIA's scorer.py). They are deliberately not ours to reformat: linting
+# them reports 17 findings that must never be "fixed", and an actual
+# `ruff --fix` over them would silently break fidelity -- GAIA's scorer
+# is SHA-256-pinned at import (see ant.evaluation_suite.gaia_scorer), so
+# a reformat there fails every GAIA run outright. Excluded rather than
+# per-file-ignored because the rule is categorical: nothing under
+# `third_party` is authored here. (`[tool.pyright]` already scopes itself
+# to src/tests for the same reason.)
+exclude = ["repos", "output", ".ant", "third_party"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]

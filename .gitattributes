@@ -1,0 +1,7 @@
+# Vendored third-party artifacts (e.g. third_party/manifests/gaia/scorer.py)
+# must be preserved byte-for-byte -- some are verified against a pinned
+# SHA-256 at import/load time (see third_party/manifests/gaia/PROVENANCE.md).
+# Disable git's line-ending normalization for this tree so a fresh clone or
+# checkout on a CRLF-default platform (core.autocrlf=true) can't silently
+# rewrite line endings and invalidate those hashes.
+third_party/** -text
