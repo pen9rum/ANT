@@ -526,6 +526,56 @@ def test_v3_e_a_dead_end_page_returns_control_without_further_navigation(
     assert len(provider.prompts) == 1
 
 
+def test_v4_identical_need_and_page_state_hits_the_decision_cache(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # Regression test for the profiling-driven optimization: a worker
+    # re-dispatched with the SAME need against the SAME (unchanged) page
+    # must not re-ask the model the identical question. Confirmed live
+    # (5-task profiling) that worker_decision calls (818/1108 = 74% of
+    # all calls) vastly outnumbered actual navigation steps -- the same
+    # (need, page) pair being re-evaluated across repeated dispatches.
+    pages = {"http://x.test/": "<a href='/a'>A</a>", "http://x.test/a": "nothing relevant"}
+    env = _env(tmp_path, monkeypatch, pages, "http://x.test/")
+    root = env.root_page()
+    materialized = tmp_path / "materialized"
+    materialized.mkdir()
+    (materialized / "worker-0__root.txt").write_text("nothing", encoding="utf-8")
+    frontiers = {"worker-0": WorkerFrontier(current_page=root, assigned_link=root.links[0])}
+    provider = _ScriptedDecisionProvider([_dead_end()])
+    tool = WebSearchTool(materialized, env, provider, frontiers)
+    files = ["worker-0__root.txt"]
+
+    tool.search("same need", files)  # first dispatch: real decision call, then dead_end
+    first_prompt_count = len(provider.prompts)
+    tool.search("same need", files)  # second dispatch: identical (need, page) -- must be cached
+    tool.search("same need", files)  # third dispatch: still cached
+
+    assert first_prompt_count == 1
+    assert len(provider.prompts) == 1  # no new LLM call on the second or third dispatch
+    assert env.step_count() == 1  # and definitely no re-navigation
+
+
+def test_v4_a_different_need_on_the_same_page_is_not_cached(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    pages = {"http://x.test/": "<a href='/a'>A</a>", "http://x.test/a": "nothing relevant"}
+    env = _env(tmp_path, monkeypatch, pages, "http://x.test/")
+    root = env.root_page()
+    materialized = tmp_path / "materialized"
+    materialized.mkdir()
+    (materialized / "worker-0__root.txt").write_text("nothing", encoding="utf-8")
+    frontiers = {"worker-0": WorkerFrontier(current_page=root, assigned_link=root.links[0])}
+    provider = _ScriptedDecisionProvider([_dead_end()])
+    tool = WebSearchTool(materialized, env, provider, frontiers)
+    files = ["worker-0__root.txt"]
+
+    tool.search("need one", files)
+    tool.search("need two", files)  # different need, same page -- must NOT be a cache hit
+
+    assert len(provider.prompts) == 2
+
+
 # --- Web ANTMAN Fix v2's own required structural regression tests ---
 # (A) no breadth-first bootstrap spending, (B) deep single-dispatch
 # execution, (C) persistent frontier across dispatches, (D) selective

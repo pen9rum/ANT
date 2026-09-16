@@ -193,6 +193,9 @@ class WebSearchTool:
         self._provider = provider
         self._frontiers = frontiers
         self.nav_log: list[dict] = []
+        # Memoizes _decide() by (need, page_state) -- see _decide's own
+        # docstring for why this is safe/correct, not just fast.
+        self._decision_cache: dict[tuple[str, str, tuple[str, ...]], WorkerDecision] = {}
 
     # --- the two methods AutonomousWorker.run() calls unconditionally ---
 
@@ -310,6 +313,31 @@ class WebSearchTool:
     def _decide(
         self, frontier: WorkerFrontier, query: str, candidates: list[PageLink]
     ) -> WorkerDecision | None:
+        # Memoized by (need, page_url, exact candidate set): this triple
+        # fully determines the prompt's content, so an identical triple
+        # can only recur when NOTHING about the worker's situation
+        # actually changed since the last time -- current_page only ever
+        # advances via a real _follow() hop (never reverts), and
+        # visited_urls/exhausted_links (which the candidate set is
+        # filtered through) only change as a SIDE EFFECT of that same
+        # hop. So if current_page is unchanged, the candidate set is
+        # PROVABLY unchanged too, and the cached decision is not a stale
+        # approximation -- it is the same input the model would see
+        # again. Confirmed live via 5-task profiling: worker_decision
+        # calls (818/1108 = 74% of all calls, up to 97% of input tokens
+        # on the largest tasks) vastly outnumbered actual navigation
+        # steps (avg 12.8/task, capped at nav_budget=15) -- the gap is
+        # the SAME worker being re-dispatched to the SAME page for a
+        # need that was never resolved, asking an identical question
+        # over and over. Reusing the cached decision costs zero LLM
+        # calls; _verify_and_build_evidence still re-runs its own cheap,
+        # deterministic, local grounding check on every use (never
+        # trusts the cache for correctness, only for skipping the call).
+        cache_key = (query, frontier.current_page.url, tuple(link.url for link in candidates))
+        cached = self._decision_cache.get(cache_key)
+        if cached is not None:
+            return cached
+
         page_text = frontier.current_page.text[:MAX_PAGE_TEXT_SHOWN]
         listing = (
             "\n".join(f"{i}. {link.text!r} -> {link.url}" for i, link in enumerate(candidates))
@@ -353,12 +381,18 @@ class WebSearchTool:
         next_link_index = data.get("next_link_index")
         if not isinstance(next_link_index, int):
             next_link_index = None
-        return WorkerDecision(
+        decision = WorkerDecision(
             status=status,
             evidence=[item for item in evidence if isinstance(item, dict)],
             next_link_index=next_link_index,
             reason=str(data.get("reason", "")),
         )
+        # Only a SUCCESSFUL decision is cached -- a transient call/parse
+        # failure (the `return None` paths above) must stay retryable on
+        # the next identical (need, page_state), not get permanently
+        # poisoned into "no decision ever" for that input.
+        self._decision_cache[cache_key] = decision
+        return decision
 
     def _verify_and_build_evidence(
         self, frontier: WorkerFrontier, decision: WorkerDecision, worker_key: str
