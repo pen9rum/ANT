@@ -186,6 +186,7 @@ class WebSearchTool:
         env: EvalWebEnvironment,
         provider,
         frontiers: dict[str, WorkerFrontier],
+        cache_enabled: bool = True,
     ) -> None:
         self._local = LocalSearchTool(materialized_dir, index_path=None)
         self._materialized_dir = materialized_dir
@@ -193,9 +194,21 @@ class WebSearchTool:
         self._provider = provider
         self._frontiers = frontiers
         self.nav_log: list[dict] = []
-        # Memoizes _decide() by (need, page_state) -- see _decide's own
-        # docstring for why this is safe/correct, not just fast.
+        # cache_enabled=False is a forensic/ablation knob only (see
+        # _decide's own docstring on why the cache is semantically sound
+        # by construction) -- prompts, grounding, and navigation
+        # semantics are completely unaffected either way; this only
+        # controls whether an identical (need, page_state) triple skips
+        # the LLM call or asks it again.
+        self._cache_enabled = cache_enabled
         self._decision_cache: dict[tuple[str, str, tuple[str, ...]], WorkerDecision] = {}
+        # Forensic instrumentation: one entry per _decide() call (cache
+        # hit or fresh), independent of nav_log (which only records
+        # actual navigations -- a dead_end/invalid/resolved-without-a-hop
+        # decision never appears there at all). n_evidence_grounded is
+        # filled in by search() after _verify_and_build_evidence runs,
+        # since grounding happens outside _decide() itself.
+        self.decision_log: list[dict] = []
 
     # --- the two methods AutonomousWorker.run() calls unconditionally ---
 
@@ -229,11 +242,12 @@ class WebSearchTool:
         # failure, or budget exhaustion.
         while True:
             candidates = self._candidates_for(frontier)
-            decision = self._decide(frontier, query, candidates)
+            decision = self._decide(frontier, query, candidates, worker_key)
             if decision is None:
                 break
             if decision.status == "resolved" and decision.evidence:
                 grounded = self._verify_and_build_evidence(frontier, decision, worker_key)
+                self.decision_log[-1]["n_evidence_grounded"] = len(grounded) if grounded else 0
                 if grounded:
                     return grounded
                 # Grounding failed: never mark this resolved. Fall through
@@ -311,7 +325,7 @@ class WebSearchTool:
         return candidates[index]
 
     def _decide(
-        self, frontier: WorkerFrontier, query: str, candidates: list[PageLink]
+        self, frontier: WorkerFrontier, query: str, candidates: list[PageLink], worker_key: str
     ) -> WorkerDecision | None:
         # Memoized by (need, page_url, exact candidate set): this triple
         # fully determines the prompt's content, so an identical triple
@@ -334,9 +348,26 @@ class WebSearchTool:
         # deterministic, local grounding check on every use (never
         # trusts the cache for correctness, only for skipping the call).
         cache_key = (query, frontier.current_page.url, tuple(link.url for link in candidates))
-        cached = self._decision_cache.get(cache_key)
-        if cached is not None:
-            return cached
+
+        def _log(*, status: str, cache_hit: bool, decision: WorkerDecision | None) -> None:
+            self.decision_log.append(
+                {
+                    "worker": worker_key,
+                    "need": query,
+                    "page_url": frontier.current_page.url,
+                    "cache_hit": cache_hit,
+                    "status": status,
+                    "n_evidence_proposed": len(decision.evidence) if decision else 0,
+                    "n_evidence_grounded": None,  # filled in by search() after verification
+                    "next_link_index": decision.next_link_index if decision else None,
+                }
+            )
+
+        if self._cache_enabled:
+            cached = self._decision_cache.get(cache_key)
+            if cached is not None:
+                _log(status=cached.status, cache_hit=True, decision=cached)
+                return cached
 
         page_text = frontier.current_page.text[:MAX_PAGE_TEXT_SHOWN]
         listing = (
@@ -368,12 +399,15 @@ class WebSearchTool:
         try:
             result = self._provider.responses_text(prompt, max_output_tokens=500)
         except Exception:  # noqa: BLE001 -- a decision-call failure must not crash the worker
+            _log(status="invalid", cache_hit=False, decision=None)
             return None
         data = _parse_json_object(result.text)
         if data is None:
+            _log(status="invalid", cache_hit=False, decision=None)
             return None
         status = data.get("status")
         if status not in ("resolved", "continue", "dead_end"):
+            _log(status="invalid", cache_hit=False, decision=None)
             return None
         evidence = data.get("evidence")
         if not isinstance(evidence, list):
@@ -387,11 +421,13 @@ class WebSearchTool:
             next_link_index=next_link_index,
             reason=str(data.get("reason", "")),
         )
+        _log(status=status, cache_hit=False, decision=decision)
         # Only a SUCCESSFUL decision is cached -- a transient call/parse
         # failure (the `return None` paths above) must stay retryable on
         # the next identical (need, page_state), not get permanently
         # poisoned into "no decision ever" for that input.
-        self._decision_cache[cache_key] = decision
+        if self._cache_enabled:
+            self._decision_cache[cache_key] = decision
         return decision
 
     def _verify_and_build_evidence(

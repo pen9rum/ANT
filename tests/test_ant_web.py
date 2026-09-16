@@ -576,6 +576,59 @@ def test_v4_a_different_need_on_the_same_page_is_not_cached(
     assert len(provider.prompts) == 2
 
 
+def test_v4_b_cache_enabled_false_disables_the_cache(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # Forensic/ablation knob: cache_enabled=False must reproduce exactly
+    # what happened before the cache existed -- an identical (need, page)
+    # triple asks the model again every time, never reusing a stored
+    # decision.
+    pages = {"http://x.test/": "<a href='/a'>A</a>", "http://x.test/a": "nothing relevant"}
+    env = _env(tmp_path, monkeypatch, pages, "http://x.test/")
+    root = env.root_page()
+    materialized = tmp_path / "materialized"
+    materialized.mkdir()
+    (materialized / "worker-0__root.txt").write_text("nothing", encoding="utf-8")
+    frontiers = {"worker-0": WorkerFrontier(current_page=root, assigned_link=root.links[0])}
+    provider = _ScriptedDecisionProvider([_dead_end()])
+    tool = WebSearchTool(materialized, env, provider, frontiers, cache_enabled=False)
+    files = ["worker-0__root.txt"]
+
+    tool.search("same need", files)
+    tool.search("same need", files)
+    tool.search("same need", files)
+
+    assert len(provider.prompts) == 3  # every dispatch re-asked the model
+    assert tool._decision_cache == {}  # nothing was ever stored
+    assert all(not entry["cache_hit"] for entry in tool.decision_log)
+
+
+def test_decision_log_records_status_and_grounding_outcome(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    pages = {
+        "http://x.test/": "<a href='/a'>A</a>",
+        "http://x.test/a": "the exact answer is here",
+    }
+    env = _env(tmp_path, monkeypatch, pages, "http://x.test/")
+    root = env.root_page()
+    materialized = tmp_path / "materialized"
+    materialized.mkdir()
+    (materialized / "worker-0__root.txt").write_text("nothing", encoding="utf-8")
+    frontiers = {"worker-0": WorkerFrontier(current_page=root, assigned_link=root.links[0])}
+    provider = _ScriptedDecisionProvider([_resolved("claim", "the exact answer is here")])
+    tool = WebSearchTool(materialized, env, provider, frontiers)
+
+    tool.search("find the answer", ["worker-0__root.txt"])
+
+    assert len(tool.decision_log) == 1
+    entry = tool.decision_log[0]
+    assert entry["status"] == "resolved"
+    assert entry["cache_hit"] is False
+    assert entry["n_evidence_proposed"] == 1
+    assert entry["n_evidence_grounded"] == 1  # the quote is real, grounding succeeds
+
+
 # --- Web ANTMAN Fix v2's own required structural regression tests ---
 # (A) no breadth-first bootstrap spending, (B) deep single-dispatch
 # execution, (C) persistent frontier across dispatches, (D) selective

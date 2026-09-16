@@ -176,12 +176,18 @@ class AntWebAgent:
         max_rounds: int = DEFAULT_MAX_ROUNDS,
         max_candidate_workers: int = DEFAULT_MAX_CANDIDATE_WORKERS,
         timeout_seconds: float = 10.0,
+        cache_enabled: bool = True,
     ) -> None:
         self.model = model
         self.nav_budget = nav_budget
         self.max_rounds = max_rounds
         self.max_candidate_workers = max_candidate_workers
         self.timeout_seconds = timeout_seconds
+        # Forensic/ablation knob only -- see WebSearchTool's own docstring
+        # on cache_enabled. Default True (normal operation); a caller
+        # sets False to isolate the worker-decision cache's effect on
+        # behavior/accuracy from everything else, unchanged.
+        self.cache_enabled = cache_enabled
 
     def run(self, example: TaskExample, environment_root: Path) -> AgentResult:
         started = time.time()
@@ -194,7 +200,9 @@ class AntWebAgent:
         )
 
         provider = CountingOpenAIProvider(model=self.model)
-        tool = WebSearchTool(materialized_dir, env, provider, frontiers)
+        tool = WebSearchTool(
+            materialized_dir, env, provider, frontiers, cache_enabled=self.cache_enabled
+        )
         coordinator = LocalCoordinator(
             materialized_dir,
             workers,
@@ -261,6 +269,8 @@ class AntWebAgent:
                 "navigation_steps": n_nav_steps,
                 "navigation_steps_by_worker": nav_by_worker,
                 "nav_log": tool.nav_log,
+                "decision_log": tool.decision_log,
+                "cache_enabled": self.cache_enabled,
                 "territories_discovered": len(workers),
                 "pages_fetched": len(env.discovered_pages()),
                 "active_workers": len(active_worker_ids),
