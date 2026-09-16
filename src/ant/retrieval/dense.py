@@ -104,7 +104,31 @@ class DenseEmbedder:
             )
             raise RuntimeError(msg) from exc
         self.model_name = model_name or os.getenv("ANT_EMBEDDING_MODEL", DEFAULT_EMBEDDING_MODEL)
-        self._model = TextEmbedding(model_name=self.model_name)
+        # onnxruntime's default CPU arena strategy (kNextPowerOfTwo) rounds
+        # every new allocation up to the next power of two and never shrinks
+        # -- fine for fixed-shape inference, but code-chunk text batches have
+        # widely varying token lengths, so each new max-shape-so-far batch
+        # can jump the arena to a much larger block it then never releases.
+        # Confirmed live: embedding ~25 sequential 256-text batches of
+        # variable-length text ballooned RSS from ~190MB to ~7.8GB within the
+        # first two batches under the default strategy (isolated repro, no
+        # other process competing), matching the "bad allocation" crashes
+        # seen embedding real repos (adk-python, sqlfluff, ...) at this
+        # corpus scale. kSameAsRequested allocates only what each call
+        # actually asks for instead of rounding up, which keeps the arena's
+        # peak close to what the batch genuinely needs.
+        # Unset by default (fastembed's own default: use every logical
+        # core) -- ANT_EMBEDDING_THREADS lets a caller running a long batch
+        # job alongside interactive use (browser, IDE, ...) cap onnxruntime's
+        # intra-op thread pool so it doesn't oversubscribe every core and
+        # starve everything else of scheduling time.
+        threads_env = os.getenv("ANT_EMBEDDING_THREADS")
+        threads = int(threads_env) if threads_env else None
+        self._model = TextEmbedding(
+            model_name=self.model_name,
+            threads=threads,
+            providers=[("CPUExecutionProvider", {"arena_extend_strategy": "kSameAsRequested"})],
+        )
 
     def embed(self, texts: list[str]) -> list[list[float]]:
         if not texts:
