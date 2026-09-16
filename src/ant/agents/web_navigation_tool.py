@@ -3,46 +3,64 @@ into an unmodified `LocalCoordinator` via its `search_tool_factory` seam
 (see `LocalCoordinator.__init__`'s own docstring on that parameter).
 
 WHY THIS EXISTS / HISTORY: the first version of `AntWebAgent` built a
-frozen, root+one-hop worker roster at bootstrap time and handed
-`LocalCoordinator` a static file set -- confirmed live (a 24-task paid
-run, 0/24 correct) that WebWalkerQA answers are essentially always 2+
-hops deep, so a frozen one-hop roster can never reach them. The next
-version added live navigation gated behind a per-call hop cap plus a
-crude "does any query term appear as a substring anywhere in the
-materialized text" sufficiency check -- confirmed live (a 10-task
-validation, 1/10) that both were wrong in different ways: the hop cap
-capped depth even when budget remained, and separately, removing the cap
-alone still left every worker stopping after exactly one hop, because a
-generic entity name (e.g. the game's own title) trivially substring-
-matches almost every page on a site, so the crude check called nearly
-anything "sufficient" immediately.
+frozen, root+one-hop worker roster at bootstrap time -- confirmed live
+(24-task run, 0/24) that answers are essentially always 2+ hops deep. The
+next version added live navigation gated behind a per-call hop cap plus a
+crude term-overlap sufficiency check -- confirmed live (10-task
+validation, 1/10) both were wrong: the cap capped depth even when budget
+remained, and the crude check called nearly anything "sufficient"
+immediately (a generic entity name substring-matches almost every page).
+The version after that replaced term-overlap with a single grounded
+resolved/continue/dead_end decision per hop -- confirmed live via a
+5-task forensic ablation (decision_log audit, see this module's own git
+history) that THIS was also wrong in a different way: the schema
+conflated "how much progress was made" with "what to do next" into one
+status field, so a worker that found a genuinely useful but incomplete
+fact had only two bad options -- overclaim "resolved" (rejected by
+grounding more than half the time it was tried) or say "continue" (79%
+of all decisions across the suite), with no way to report "I found
+something real, it's not enough, here it is anyway." The forensic audit
+also found an evidence-provenance leak: when the decision loop ended
+without a grounded resolve, search() fell back to plain ungrounded local
+BM25 results, which is how tasks with ZERO grounded spans still had
+dozens of items reach the coordinator and several reach final synthesis.
 
-THE FIX (this version): term-overlap is gone entirely as a stopping
-signal. Resolution is now semantic and evidence-grounded: for each page
-a worker actually reaches, ONE structured decision call
-(`_decide`/`WorkerDecision`) jointly asks the model (a) does this page's
-own content contain text that actually, directly resolves the Need --
-and if it claims yes, it must quote that text verbatim, which is then
-DETERMINISTICALLY verified (`_verify_and_build_evidence`) against the
-real page content before ever being accepted, never taken on the model's
-word alone -- and (b) if not resolved, which link (if any) on this page
-is worth following next. This costs exactly the same one call per hop
-the earlier link-choice-only design already made -- richer response
-schema on the same call, not an extra call.
+THE FIX (this version): two orthogonal fields replace the single status.
+`progress` ("none" | "partial" | "resolved") is how much the CURRENT
+PAGE's own content contributes toward the Need, always verified by
+`_verify_and_build_evidence` against real page text before being
+trusted -- never taken on the model's word. `action` ("continue" |
+"return" | "dead_end") is what happens next, independent of how much
+progress was made. Valid combinations: (none, continue), (partial,
+continue), (partial, return), (resolved, return), (none, dead_end) --
+"resolved" is never paired with "continue". The ungrounded local-search
+fallback is gone entirely: search() now returns exactly the grounded
+evidence accumulated this dispatch (across every hop it took, chained
+within one call -- "preserved across later hops"), nothing else, even if
+that is an empty list. This costs exactly the same one call per hop the
+earlier single-status design already made -- a richer response schema on
+the same call, not an extra one.
+
+Once grounded evidence flows cleanly (no ungrounded noise, correctly
+need-scoped via LocalCoordinator's own need_ids stamping), ANTMAN's
+existing, UNTOUCHED core machinery does the rest: `check_need_resolution`
+already has a resolved/partial/unresolved judgment
+(src/ant/providers/base.py) that operates on the CUMULATIVE evidence
+pool for a need across every round that has touched it -- runtime Need
+revision/rerouting was already built to consume exactly this. This file
+supplies clean grounded evidence; it does not need to (and does not)
+reimplement any of that.
 
 HOW: `AutonomousWorker.run()` (src/ant/workers/autonomous.py) calls
 `self.tools.search(...)` and `.dense_search(...)` UNCONDITIONALLY at the
-start of every worker execution, before any reasoner-driven tool
-planning happens. This class's own `search()` exploits exactly that
-call. A worker's first hop into its own assigned first-level link (its
-territory specialization, established at bootstrap) is unconditional and
-deterministic, never LLM-chosen -- confirmed live that gating even this
-first hop behind any "is it needed" heuristic left workers stuck on root.
-From there, the structured decision loop takes over, chaining as many
-further hops as the shared budget and available links allow -- no
-per-call depth cap (see the constant note below) -- until grounded
-evidence is found, the page is judged a dead end, no link remains, or
-the budget runs out.
+start of every worker execution. A worker's first hop into its own
+assigned first-level link (its territory specialization, established at
+bootstrap) is unconditional and deterministic, never LLM-chosen --
+confirmed live that gating even this first hop behind any "is it needed"
+heuristic left workers stuck on root. From there, the structured
+decision loop chains as many further hops as the shared budget and
+available links allow -- no per-call depth cap -- until the model
+chooses to stop (`return`/`dead_end`) or the budget runs out.
 
 Every real navigation goes through the SAME `EvalWebEnvironment`
 instance for the whole query (shared across every worker), so its
@@ -57,11 +75,12 @@ references/indexed_callers/callers/callees/assignments/imports/
 subclasses/read_region) is delegated unchanged to a wrapped
 LocalSearchTool over the materialized-pages directory: those pages are
 plain local .txt files once fetched, so the existing code-oriented tool
-implementation already reads them correctly. Real web pages essentially
-never contain literal `class `/`def ` tokens, so `AutonomousWorker`'s own
-mechanical candidate-symbol extraction typically yields nothing for
-these calls to act on -- expected and harmless; all real work for this
-substrate happens inside search()/dense_search() above.
+implementation already reads them correctly. `dense_search()` also
+delegates, but is a genuine no-op for this substrate: AntWebAgent never
+supplies an `index_path`, and `LocalSearchTool.dense_search` returns []
+immediately whenever `self.index_path` is falsy -- confirmed by direct
+reading of that method, not assumed, so this delegation is NOT a second
+evidence-provenance leak.
 """
 
 from __future__ import annotations
@@ -70,6 +89,7 @@ import json
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import cast
 
 from ant.domain import Evidence
 from ant.evaluation_suite.web_fetch import FetchedPage, PageLink
@@ -78,8 +98,8 @@ from ant.tools.local import LocalSearchTool
 
 # Deliberately NO cap on how many hops one search() call may chase -- a
 # worker must be able to go anchor -> child -> grandchild -> ... within a
-# single dispatch, stopping only on grounded evidence, a dead end, no
-# remaining link, or the shared nav_budget running out. No infinite-loop
+# single dispatch, stopping only when the model itself chooses to (action
+# "return"/"dead_end") or the shared nav_budget runs out. No infinite-loop
 # risk: frontier.visited_urls/exhausted_links only grow, so a page's own
 # (finite) link list monotonically shrinks as candidates, and
 # EvalWebEnvironment's own step budget is a hard, finite ceiling anyway.
@@ -95,6 +115,18 @@ MAX_LINK_CANDIDATES_SHOWN = 40
 # regression on top of it: the full, untruncated page is still what gets
 # materialized and BM25-searched elsewhere.
 MAX_PAGE_TEXT_SHOWN = 6000
+
+# The only (progress, action) pairs a decision may legally report.
+# "resolved" is never paired with "continue" -- once the model claims
+# full resolution it must hand back to the coordinator, not keep
+# wandering with an unresolved Need it just claimed to have closed.
+VALID_PROGRESS_ACTION_PAIRS = {
+    ("none", "continue"),
+    ("partial", "continue"),
+    ("partial", "return"),
+    ("resolved", "return"),
+    ("none", "dead_end"),
+}
 
 
 @dataclass
@@ -117,7 +149,8 @@ class WorkerFrontier:
 
 @dataclass
 class WorkerDecision:
-    status: str  # "resolved" | "continue" | "dead_end"
+    progress: str  # "none" | "partial" | "resolved"
+    action: str  # "continue" | "return" | "dead_end"
     evidence: list[dict]
     next_link_index: int | None
     reason: str
@@ -217,10 +250,10 @@ class WebSearchTool:
     ) -> list[Evidence]:
         worker_key = worker_key_from_files(files)
         if worker_key is None:
-            return self._local.search(query, files, limit=limit, context_lines=context_lines)
+            return []
         frontier = self._frontiers.get(worker_key)
         if frontier is None:
-            return self._local.search(query, files, limit=limit, context_lines=context_lines)
+            return []
 
         # The worker's own assigned first-level link is its territory
         # specialization (established at bootstrap) -- it must actually be
@@ -235,27 +268,32 @@ class WebSearchTool:
                     self._materialize(worker_key, frontier, page, files)
 
         # Grounded, LLM-mediated resolution loop: each iteration makes ONE
-        # structured decision call about whatever page the worker is
-        # currently on (see this module's own top docstring for why this
-        # replaced a cheap-but-wrong term-overlap heuristic). Stops on
-        # grounded evidence, a dead end, no remaining link, a decision-call
-        # failure, or budget exhaustion.
+        # structured (progress, action) decision call about whatever page
+        # the worker is currently on (see this module's own top docstring
+        # for the full design rationale). Grounding verification governs
+        # ONLY whether an iteration's claimed evidence is accepted into
+        # `accumulated` -- it never overrides the model's own `action`,
+        # so a worker that (rightly or wrongly) decides to keep going
+        # still gets to try the next page even if this page's claim
+        # didn't pan out. Accumulates across every hop this dispatch
+        # takes ("partial evidence preserved across later hops"); no
+        # ungrounded fallback -- an empty return is a legitimate, honest
+        # outcome, not something to paper over with noisy BM25 hits.
+        accumulated: list[Evidence] = []
         while True:
             candidates = self._candidates_for(frontier)
             decision = self._decide(frontier, query, candidates, worker_key)
             if decision is None:
                 break
-            if decision.status == "resolved" and decision.evidence:
-                grounded = self._verify_and_build_evidence(frontier, decision, worker_key)
-                self.decision_log[-1]["n_evidence_grounded"] = len(grounded) if grounded else 0
-                if grounded:
-                    return grounded
-                # Grounding failed: never mark this resolved. Fall through
-                # to the local-search fallback below rather than making a
-                # second decision call for this same page.
+            if decision.evidence:
+                grounded = self._verify_and_build_evidence(frontier, decision, worker_key) or []
+                self.decision_log[-1]["n_evidence_grounded"] = len(grounded)
+                accumulated.extend(grounded)
+            if decision.action == "return":
+                return accumulated
+            if decision.action == "dead_end":
                 break
-            if decision.status == "dead_end":
-                break
+            # action == "continue"
             if not self._budget_remaining():
                 break
             link = self._resolve_link_index(candidates, decision.next_link_index)
@@ -266,19 +304,18 @@ class WebSearchTool:
                 continue
             self._materialize(worker_key, frontier, page, files)
 
-        # Fallback: a plain local BM25 search over everything materialized
-        # so far -- covers dead ends, decision-call failures, grounding
-        # failures, and budget exhaustion, so a dispatch never returns
-        # nothing just because the structured loop ended without an
-        # explicit grounded "resolved".
-        return self._local.search(query, files, limit=limit, context_lines=context_lines)
+        return accumulated
 
     def dense_search(self, query: str, files: list[str], limit: int = 4) -> list[Evidence]:
         # No live-navigation side effect here: search() (called first,
         # unconditionally, every round -- autonomous.py:83 before :100)
         # already had the chance to navigate for this exact need. A
         # second independent navigation attempt from dense_search would
-        # double-spend the shared budget for no new decision basis.
+        # double-spend the shared budget for no new decision basis. Also
+        # a genuine no-op for this substrate (see this module's own top
+        # docstring): index_path=None means LocalSearchTool.dense_search
+        # returns [] immediately, so this delegation is not a second
+        # evidence-provenance leak.
         return self._local.dense_search(query, files, limit=limit)
 
     # --- navigation + grounded-decision internals ---
@@ -337,26 +374,23 @@ class WebSearchTool:
         # hop. So if current_page is unchanged, the candidate set is
         # PROVABLY unchanged too, and the cached decision is not a stale
         # approximation -- it is the same input the model would see
-        # again. Confirmed live via 5-task profiling: worker_decision
-        # calls (818/1108 = 74% of all calls, up to 97% of input tokens
-        # on the largest tasks) vastly outnumbered actual navigation
-        # steps (avg 12.8/task, capped at nav_budget=15) -- the gap is
-        # the SAME worker being re-dispatched to the SAME page for a
-        # need that was never resolved, asking an identical question
-        # over and over. Reusing the cached decision costs zero LLM
-        # calls; _verify_and_build_evidence still re-runs its own cheap,
-        # deterministic, local grounding check on every use (never
-        # trusts the cache for correctness, only for skipping the call).
+        # again. _verify_and_build_evidence still re-runs its own cheap,
+        # deterministic, local grounding check on every use regardless of
+        # cache hit or miss (never trusts the cache for correctness, only
+        # for skipping the call).
         cache_key = (query, frontier.current_page.url, tuple(link.url for link in candidates))
 
-        def _log(*, status: str, cache_hit: bool, decision: WorkerDecision | None) -> None:
+        def _log(
+            *, progress: str, action: str, cache_hit: bool, decision: WorkerDecision | None
+        ) -> None:
             self.decision_log.append(
                 {
                     "worker": worker_key,
                     "need": query,
                     "page_url": frontier.current_page.url,
                     "cache_hit": cache_hit,
-                    "status": status,
+                    "progress": progress,
+                    "action": action,
                     "n_evidence_proposed": len(decision.evidence) if decision else 0,
                     "n_evidence_grounded": None,  # filled in by search() after verification
                     "next_link_index": decision.next_link_index if decision else None,
@@ -366,7 +400,9 @@ class WebSearchTool:
         if self._cache_enabled:
             cached = self._decision_cache.get(cache_key)
             if cached is not None:
-                _log(status=cached.status, cache_hit=True, decision=cached)
+                _log(
+                    progress=cached.progress, action=cached.action, cache_hit=True, decision=cached
+                )
                 return cached
 
         page_text = frontier.current_page.text[:MAX_PAGE_TEXT_SHOWN]
@@ -381,47 +417,69 @@ class WebSearchTool:
             f"Current page ({frontier.current_page.url}) content:\n---\n{page_text}\n---\n\n"
             "Available links on this page you may follow next (index. anchor text -> URL):\n"
             f"{listing}\n\n"
-            "Decide:\n"
-            "1. Does the CURRENT PAGE's own content above contain text that directly and "
-            "materially resolves the Need? Only answer yes if you can quote EXACT text copied "
-            "from the page above as support -- never invent, paraphrase, or infer evidence that "
-            "is not literally present in the page content shown.\n"
-            "2. If not resolved, is this path still worth continuing (pick the single most "
-            "promising link), or is it a dead end (no reachable link here looks relevant)?\n\n"
-            'Reply with ONLY a single JSON object, no other text: {"status": "resolved" | '
-            '"continue" | "dead_end", "evidence": [{"claim": "...", "supporting_text": "...exact '
-            'text copied from the page above..."}], "next_link_index": <integer or null>, '
-            '"reason": "..."}\n'
-            '"evidence" must be an empty list unless status is "resolved". "next_link_index" '
-            "must be an integer index from the links list above, or null, and must be null "
-            'unless status is "continue".'
+            "Decide TWO separate things:\n\n"
+            "1. PROGRESS -- how much does the CURRENT PAGE's own content above contribute "
+            "toward resolving the Need?\n"
+            '   - "none": nothing on this page usefully supports the Need.\n'
+            '   - "partial": this page contains a genuine, exactly-quotable fact that supports '
+            "the Need, but does not by itself fully answer it.\n"
+            '   - "resolved": this page\'s own content, on its own, is sufficient to fully '
+            "answer the Need.\n"
+            '   Only claim "partial" or "resolved" if you can quote EXACT text copied from the '
+            "page above as support -- never invent, paraphrase, or infer evidence that is not "
+            "literally present in the page content shown.\n\n"
+            "2. ACTION -- what should happen next?\n"
+            '   - "continue": follow one more link from this page (pick the single most '
+            "promising).\n"
+            '   - "return": stop searching from here and report back now.\n'
+            '   - "dead_end": no evidence here and no further link looks worth trying.\n\n'
+            "Valid (progress, action) combinations ONLY:\n"
+            '  ("none", "continue") -- nothing found yet, this path still looks promising.\n'
+            '  ("partial", "continue") -- found a useful fact, but still want to explore '
+            "further from here for more.\n"
+            '  ("partial", "return") -- found a useful fact, but this local path is not worth '
+            "deepening further -- hand back what you have.\n"
+            '  ("resolved", "return") -- found everything needed to fully answer the Need.\n'
+            '  ("none", "dead_end") -- nothing found and no further link here looks relevant.\n'
+            'Never combine "resolved" with "continue".\n\n'
+            'Reply with ONLY a single JSON object, no other text: {"progress": "none" | '
+            '"partial" | "resolved", "action": "continue" | "return" | "dead_end", "evidence": '
+            '[{"claim": "...", "supporting_text": "...exact text copied from the page above..."}], '
+            '"next_link_index": <integer or null>, "reason": "..."}\n'
+            '"evidence" must be an empty list when progress is "none". "next_link_index" must be '
+            'an integer index from the links list above when action is "continue", and null '
+            "otherwise."
         )
         try:
             result = self._provider.responses_text(prompt, max_output_tokens=500)
         except Exception:  # noqa: BLE001 -- a decision-call failure must not crash the worker
-            _log(status="invalid", cache_hit=False, decision=None)
+            _log(progress="invalid", action="invalid", cache_hit=False, decision=None)
             return None
         data = _parse_json_object(result.text)
         if data is None:
-            _log(status="invalid", cache_hit=False, decision=None)
+            _log(progress="invalid", action="invalid", cache_hit=False, decision=None)
             return None
-        status = data.get("status")
-        if status not in ("resolved", "continue", "dead_end"):
-            _log(status="invalid", cache_hit=False, decision=None)
+        raw_progress = data.get("progress")
+        raw_action = data.get("action")
+        if (raw_progress, raw_action) not in VALID_PROGRESS_ACTION_PAIRS:
+            _log(progress="invalid", action="invalid", cache_hit=False, decision=None)
             return None
+        progress = cast(str, raw_progress)
+        action = cast(str, raw_action)
         evidence = data.get("evidence")
-        if not isinstance(evidence, list):
+        if not isinstance(evidence, list) or progress == "none":
             evidence = []
         next_link_index = data.get("next_link_index")
-        if not isinstance(next_link_index, int):
+        if not isinstance(next_link_index, int) or action != "continue":
             next_link_index = None
         decision = WorkerDecision(
-            status=status,
+            progress=progress,
+            action=action,
             evidence=[item for item in evidence if isinstance(item, dict)],
             next_link_index=next_link_index,
             reason=str(data.get("reason", "")),
         )
-        _log(status=status, cache_hit=False, decision=decision)
+        _log(progress=progress, action=action, cache_hit=False, decision=decision)
         # Only a SUCCESSFUL decision is cached -- a transient call/parse
         # failure (the `return None` paths above) must stay retryable on
         # the next identical (need, page_state), not get permanently
@@ -433,6 +491,17 @@ class WebSearchTool:
     def _verify_and_build_evidence(
         self, frontier: WorkerFrontier, decision: WorkerDecision, worker_key: str
     ) -> list[Evidence] | None:
+        """Deterministically re-checks every claimed span against the real
+        page text -- called regardless of whether `decision` came from a
+        fresh call or a cache hit, so a cache hit is never trusted for
+        correctness, only for skipping the LLM call. A span that fails
+        this check is silently dropped (not inserted into worker
+        evidence, never propagated, never reaches synthesis) -- this IS
+        the "downgrade progress rather than pretending progress occurred"
+        behavior: a claimed partial/resolved decision whose evidence
+        fails grounding simply contributes nothing, regardless of what
+        the model claimed.
+        """
         page_text = frontier.current_page.text
         path = frontier.current_filename or ""
         built: list[Evidence] = []

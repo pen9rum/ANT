@@ -162,23 +162,62 @@ def test_bootstrap_never_touches_gold_metadata(
 
 
 # --- WebSearchTool: the actual multi-hop, grounded-decision navigation
-# mechanism. term-overlap is gone entirely as a stopping signal (see
-# web_navigation_tool.py's own module docstring for why); resolution is
-# now a structured, per-page decision the model must ground with a
-# verbatim quote before it's ever accepted. ---
+# mechanism. Decisions carry two ORTHOGONAL fields -- progress ("none" |
+# "partial" | "resolved") and action ("continue" | "return" | "dead_end")
+# -- see web_navigation_tool.py's own module docstring for the full
+# rationale (a single conflated status field was confirmed live, via a
+# 5-task forensic ablation, to force a worker with genuinely useful but
+# incomplete evidence into either overclaiming "resolved" or silently
+# discarding what it found). Grounding verification governs ONLY which
+# evidence gets accepted, never the model's own chosen action. There is
+# no ungrounded fallback: search() returns exactly the grounded evidence
+# accumulated this dispatch, possibly empty. ---
 
 
-def _continue(index: int) -> dict:
-    return {"status": "continue", "evidence": [], "next_link_index": index, "reason": ""}
+def _none_continue(index: int) -> dict:
+    return {
+        "progress": "none",
+        "action": "continue",
+        "evidence": [],
+        "next_link_index": index,
+        "reason": "",
+    }
 
 
 def _dead_end() -> dict:
-    return {"status": "dead_end", "evidence": [], "next_link_index": None, "reason": ""}
+    return {
+        "progress": "none",
+        "action": "dead_end",
+        "evidence": [],
+        "next_link_index": None,
+        "reason": "",
+    }
+
+
+def _partial_continue(index: int, claim: str, supporting_text: str) -> dict:
+    return {
+        "progress": "partial",
+        "action": "continue",
+        "evidence": [{"claim": claim, "supporting_text": supporting_text}],
+        "next_link_index": index,
+        "reason": "",
+    }
+
+
+def _partial_return(claim: str, supporting_text: str) -> dict:
+    return {
+        "progress": "partial",
+        "action": "return",
+        "evidence": [{"claim": claim, "supporting_text": supporting_text}],
+        "next_link_index": None,
+        "reason": "",
+    }
 
 
 def _resolved(claim: str, supporting_text: str) -> dict:
     return {
-        "status": "resolved",
+        "progress": "resolved",
+        "action": "return",
         "evidence": [{"claim": claim, "supporting_text": supporting_text}],
         "next_link_index": None,
         "reason": "",
@@ -187,7 +226,7 @@ def _resolved(claim: str, supporting_text: str) -> dict:
 
 class _ScriptedDecisionProvider:
     """Deterministic test double for WebSearchTool's own direct
-    responses_text() calls (the merged link-choice + grounded-sufficiency
+    responses_text() calls (the merged link-choice + grounded-progress
     decision call). `decisions` is consumed in order, one entry per call;
     each entry is either a dict (auto-serialized to the JSON schema
     _decide() expects) or a raw string (used as-is, e.g. to simulate a
@@ -232,7 +271,10 @@ def test_search_takes_the_mandatory_first_hop_even_when_root_already_matches(
 
     results = tool.search("keynote speaker", ["worker-0__root.txt"])
 
-    assert results  # the local fallback still finds root.txt's own match
+    # No ungrounded fallback exists anymore: none+dead_end with no
+    # grounded evidence returns nothing, even though root.txt's own text
+    # would have matched a plain keyword search.
+    assert results == []
     assert env.step_count() == 1  # the mandatory first hop still happened
     assert frontiers["worker-0"].taken_first_hop is True
 
@@ -255,7 +297,7 @@ def test_search_does_not_repeat_the_first_hop_on_a_later_call(
 
     results = tool.search("keynote speaker", ["worker-0__root.txt"])
 
-    assert results
+    assert results == []
     assert env.step_count() == 0  # already taken in an earlier call -- not repeated
     assert tool.nav_log == []
 
@@ -305,7 +347,7 @@ def test_search_continues_to_an_llm_chosen_second_hop_when_first_page_unresolved
     (materialized / "worker-0__root.txt").write_text("nothing relevant", encoding="utf-8")
     frontiers = {"worker-0": WorkerFrontier(current_page=root, assigned_link=root.links[0])}
     provider = _ScriptedDecisionProvider(
-        [_continue(0), _resolved("keynote speaker", "the keynote speaker is Dr. Jane Smith")]
+        [_none_continue(0), _resolved("keynote speaker", "the keynote speaker is Dr. Jane Smith")]
     )
     tool = WebSearchTool(materialized, env, provider, frontiers)
     files = ["worker-0__root.txt"]
@@ -331,15 +373,16 @@ def test_search_respects_no_arbitrary_jump_on_out_of_range_choice(
     materialized.mkdir()
     (materialized / "worker-0__root.txt").write_text("nothing", encoding="utf-8")
     frontiers = {"worker-0": WorkerFrontier(current_page=root, assigned_link=root.links[0])}
-    provider = _ScriptedDecisionProvider([_continue(99)])  # out of range
+    provider = _ScriptedDecisionProvider([_none_continue(99)])  # out of range
     tool = WebSearchTool(materialized, env, provider, frontiers)
     files = ["worker-0__root.txt"]
 
-    tool.search("keynote speaker", files)
+    results = tool.search("keynote speaker", files)
 
     # The out-of-range index must not cause any navigation beyond the one
     # deterministic first hop -- _resolve_link_index rejects it and
     # returns None, so the loop stops rather than jumping anywhere.
+    assert results == []
     assert env.step_count() == 1
     assert len(tool.nav_log) == 1
     assert tool.nav_log[0]["url"] == "http://x.test/listing"
@@ -385,7 +428,7 @@ def test_dense_search_never_triggers_navigation(
     materialized.mkdir()
     (materialized / "worker-0__root.txt").write_text("nothing", encoding="utf-8")
     frontiers = {"worker-0": WorkerFrontier(current_page=root, assigned_link=root.links[0])}
-    provider = _ScriptedDecisionProvider([_continue(0)])
+    provider = _ScriptedDecisionProvider([_none_continue(0)])
     tool = WebSearchTool(materialized, env, provider, frontiers)
 
     tool.dense_search("q", ["worker-0__root.txt"])
@@ -402,12 +445,12 @@ def test_v3_a_generic_entity_repetition_alone_does_not_stop_the_worker(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     # A page that merely repeats the question's own entity name (the kind
-    # of text that trivially "term-overlapped" under the old, removed
+    # of text that trivially "term-overlapped" under an earlier, removed
     # heuristic) must NOT be treated as sufficient just because the
     # decision call could easily rationalize it -- only an explicit,
-    # grounded "resolved" from the model (verified against real page
-    # text) can stop navigation. Here the model is scripted to correctly
-    # recognize the generic page is not enough and continue.
+    # grounded claim (verified against real page text) can add evidence.
+    # Here the model is scripted to correctly recognize the generic page
+    # is not enough and continue.
     pages = {
         "http://x.test/": "<a href='/landing'>Landing</a>",
         "http://x.test/landing": (
@@ -424,7 +467,7 @@ def test_v3_a_generic_entity_repetition_alone_does_not_stop_the_worker(
     frontiers = {"worker-0": WorkerFrontier(current_page=root, assigned_link=root.links[0])}
     provider = _ScriptedDecisionProvider(
         [
-            _continue(0),  # correctly judges the generic landing page insufficient
+            _none_continue(0),  # correctly judges the generic landing page insufficient
             _resolved(
                 "Lipizzaner Cavalry effect",
                 "Lipizzaner Cavalry increases attack and hitpoints by 20%.",
@@ -495,12 +538,12 @@ def test_v3_d_a_hallucinated_supporting_span_cannot_resolve_the_need(
 
     results = tool.search("percentage increase", ["worker-0__root.txt"])
 
-    # Grounding verification must reject the hallucinated span -- the
-    # Need must never be marked resolved from it. The fallback local
-    # search may still return something (root.txt's own generic match),
-    # but it must never be the hallucinated text.
-    assert not any("99%" in r.quote for r in results)
-    assert not any("never actually said" in r.quote for r in results)
+    # Grounding verification must reject the hallucinated span, and there
+    # is no ungrounded fallback anymore -- the Need must never be marked
+    # resolved from it, and the dispatch returns nothing at all (action
+    # was "return", so the loop stops immediately with zero accumulated
+    # grounded evidence).
+    assert results == []
 
 
 def test_v3_e_a_dead_end_page_returns_control_without_further_navigation(
@@ -531,10 +574,7 @@ def test_v4_identical_need_and_page_state_hits_the_decision_cache(
 ) -> None:
     # Regression test for the profiling-driven optimization: a worker
     # re-dispatched with the SAME need against the SAME (unchanged) page
-    # must not re-ask the model the identical question. Confirmed live
-    # (5-task profiling) that worker_decision calls (818/1108 = 74% of
-    # all calls) vastly outnumbered actual navigation steps -- the same
-    # (need, page) pair being re-evaluated across repeated dispatches.
+    # must not re-ask the model the identical question.
     pages = {"http://x.test/": "<a href='/a'>A</a>", "http://x.test/a": "nothing relevant"}
     env = _env(tmp_path, monkeypatch, pages, "http://x.test/")
     root = env.root_page()
@@ -603,7 +643,7 @@ def test_v4_b_cache_enabled_false_disables_the_cache(
     assert all(not entry["cache_hit"] for entry in tool.decision_log)
 
 
-def test_decision_log_records_status_and_grounding_outcome(
+def test_decision_log_records_progress_action_and_grounding_outcome(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     pages = {
@@ -623,7 +663,8 @@ def test_decision_log_records_status_and_grounding_outcome(
 
     assert len(tool.decision_log) == 1
     entry = tool.decision_log[0]
-    assert entry["status"] == "resolved"
+    assert entry["progress"] == "resolved"
+    assert entry["action"] == "return"
     assert entry["cache_hit"] is False
     assert entry["n_evidence_proposed"] == 1
     assert entry["n_evidence_grounded"] == 1  # the quote is real, grounding succeeds
@@ -670,8 +711,8 @@ def test_v2_b_one_dispatch_can_traverse_a_full_deep_chain(
     frontiers = {"worker-0": WorkerFrontier(current_page=root, assigned_link=root.links[0])}
     provider = _ScriptedDecisionProvider(
         [
-            _continue(0),  # evaluating "section": not resolved, follow "listing"
-            _continue(0),  # evaluating "listing": not resolved, follow "article"
+            _none_continue(0),  # evaluating "section": not resolved, follow "listing"
+            _none_continue(0),  # evaluating "listing": not resolved, follow "article"
             _resolved("evidence", "the answer contains rare_evidence_token here"),
         ]
     )
@@ -707,13 +748,13 @@ def test_v2_c_a_later_dispatch_resumes_from_the_saved_frontier(
     # First dispatch: continues past "section" to "listing", then the
     # decision call evaluating "listing" itself comes back malformed
     # (simulating a transient failure) -- the dispatch ends there, NOT
-    # because of any resolved/dead_end judgment, with the frontier saved
+    # because of any progress/action judgment, with the frontier saved
     # at "listing".
     provider = _ScriptedDecisionProvider(
         [
-            _continue(0),  # evaluating "section": follow "listing"
+            _none_continue(0),  # evaluating "section": follow "listing"
             "not valid json -- simulated decision-call failure",
-            _continue(0),  # second dispatch, evaluating "listing" again: follow "article"
+            _none_continue(0),  # second dispatch, evaluating "listing" again: follow "article"
             _resolved("evidence", "the real evidence is here"),
         ]
     )
@@ -780,7 +821,7 @@ def test_v2_e_global_budget_never_exceeded_across_many_workers(
         worker_id = f"worker-{i}"
         (materialized / f"{worker_id}__root.txt").write_text("nothing", encoding="utf-8")
         frontiers[worker_id] = WorkerFrontier(current_page=root, assigned_link=link)
-    provider = _ScriptedDecisionProvider([_continue(0)])  # always tries to keep navigating
+    provider = _ScriptedDecisionProvider([_none_continue(0)])  # always tries to keep navigating
     tool = WebSearchTool(materialized, env, provider, frontiers)
 
     for worker_id in list(frontiers):
@@ -789,6 +830,258 @@ def test_v2_e_global_budget_never_exceeded_across_many_workers(
 
     assert env.step_count() == 15
     assert len(tool.nav_log) == 15
+
+
+# --- Web ANTMAN Fix v5's own required structural tests: the two-field
+# progress/action schema (see web_navigation_tool.py's own module
+# docstring). ---
+
+
+def test_v5_a_no_useful_evidence_yields_none_continue(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    pages = {
+        "http://x.test/": "<a href='/a'>A</a>",
+        "http://x.test/a": "nothing relevant here at all",
+    }
+    env = _env(tmp_path, monkeypatch, pages, "http://x.test/")
+    root = env.root_page()
+    materialized = tmp_path / "materialized"
+    materialized.mkdir()
+    (materialized / "worker-0__root.txt").write_text("nothing", encoding="utf-8")
+    frontiers = {"worker-0": WorkerFrontier(current_page=root, assigned_link=root.links[0])}
+    provider = _ScriptedDecisionProvider([_dead_end()])  # ends the dispatch so we can inspect
+    tool = WebSearchTool(materialized, env, provider, frontiers)
+
+    tool.search("irrelevant need", ["worker-0__root.txt"])
+
+    # The mandatory hop reaches "/a" with nothing useful -- the decision
+    # for evaluating "/a" (the only real LLM call here) must have been
+    # none+continue/dead_end, never claiming any evidence.
+    assert tool.decision_log[0]["progress"] == "none"
+    assert tool.decision_log[0]["n_evidence_proposed"] == 0
+
+
+def test_v5_b_one_useful_but_insufficient_fact_yields_partial_continue(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    pages = {
+        "http://x.test/": "<a href='/a'>A</a>",
+        "http://x.test/a": "<a href='/b'>B</a>the update happened in October 2024",
+        "http://x.test/b": "the exact percentage is 20%",
+    }
+    env = _env(tmp_path, monkeypatch, pages, "http://x.test/")
+    root = env.root_page()
+    materialized = tmp_path / "materialized"
+    materialized.mkdir()
+    (materialized / "worker-0__root.txt").write_text("nothing", encoding="utf-8")
+    frontiers = {"worker-0": WorkerFrontier(current_page=root, assigned_link=root.links[0])}
+    provider = _ScriptedDecisionProvider(
+        [
+            _partial_continue(0, "update timing", "the update happened in October 2024"),
+            _resolved("percentage", "the exact percentage is 20%"),
+        ]
+    )
+    tool = WebSearchTool(materialized, env, provider, frontiers)
+
+    results = tool.search("what percentage and when", ["worker-0__root.txt"])
+
+    assert tool.decision_log[0]["progress"] == "partial"
+    assert tool.decision_log[0]["action"] == "continue"
+    assert tool.decision_log[0]["n_evidence_grounded"] == 1
+    # The partial fact from hop 1 must survive into the final result
+    # alongside hop 2's resolved fact -- "preserved across later hops".
+    quotes = {r.quote for r in results}
+    assert "the update happened in October 2024" in quotes
+    assert "the exact percentage is 20%" in quotes
+
+
+def test_v5_c_partial_evidence_preserved_across_later_hops(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # Three hops, each contributing one grounded partial fact, none of
+    # them individually resolving the Need -- the worker eventually
+    # judges the local path exhausted and returns everything it found.
+    pages = {
+        "http://x.test/": "<a href='/a'>A</a>",
+        "http://x.test/a": "<a href='/b'>B</a>fact one is here",
+        "http://x.test/b": "<a href='/c'>C</a>fact two is here",
+        "http://x.test/c": "fact three is here",
+    }
+    env = _env(tmp_path, monkeypatch, pages, "http://x.test/")
+    root = env.root_page()
+    materialized = tmp_path / "materialized"
+    materialized.mkdir()
+    (materialized / "worker-0__root.txt").write_text("nothing", encoding="utf-8")
+    frontiers = {"worker-0": WorkerFrontier(current_page=root, assigned_link=root.links[0])}
+    provider = _ScriptedDecisionProvider(
+        [
+            _partial_continue(0, "fact one", "fact one is here"),
+            _partial_continue(0, "fact two", "fact two is here"),
+            _partial_return("fact three", "fact three is here"),
+        ]
+    )
+    tool = WebSearchTool(materialized, env, provider, frontiers)
+
+    results = tool.search("gather all three facts", ["worker-0__root.txt"])
+
+    assert env.step_count() == 3
+    quotes = {r.quote for r in results}
+    assert quotes == {"fact one is here", "fact two is here", "fact three is here"}
+
+
+def test_v5_d_partial_return_stops_without_claiming_full_resolution(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    pages = {"http://x.test/": "<a href='/a'>A</a>", "http://x.test/a": "the venue is Boston"}
+    env = _env(tmp_path, monkeypatch, pages, "http://x.test/")
+    root = env.root_page()
+    materialized = tmp_path / "materialized"
+    materialized.mkdir()
+    (materialized / "worker-0__root.txt").write_text("nothing", encoding="utf-8")
+    frontiers = {"worker-0": WorkerFrontier(current_page=root, assigned_link=root.links[0])}
+    provider = _ScriptedDecisionProvider([_partial_return("venue", "the venue is Boston")])
+    tool = WebSearchTool(materialized, env, provider, frontiers)
+
+    results = tool.search("what venue and what date", ["worker-0__root.txt"])
+
+    assert env.step_count() == 1  # returned immediately, did not keep navigating
+    assert len(results) == 1
+    assert results[0].quote == "the venue is Boston"
+    assert results[0].claim == "venue"
+    # The tool itself never claims full resolution here -- that judgment
+    # belongs to ANTMAN's own existing check_need_resolution, operating
+    # on this grounded partial evidence plus whatever else accumulates
+    # for this Need across later rounds/dispatches (untouched core
+    # machinery, not re-implemented here).
+    assert tool.decision_log[-1]["progress"] == "partial"
+
+
+def test_v5_e_multiple_grounded_partial_pieces_accumulate(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    pages = {
+        "http://x.test/": "<a href='/a'>A</a>",
+        "http://x.test/a": "<a href='/b'>B</a>speaker is Dr. Jane Smith",
+        "http://x.test/b": "the session starts at 9am",
+    }
+    env = _env(tmp_path, monkeypatch, pages, "http://x.test/")
+    root = env.root_page()
+    materialized = tmp_path / "materialized"
+    materialized.mkdir()
+    (materialized / "worker-0__root.txt").write_text("nothing", encoding="utf-8")
+    frontiers = {"worker-0": WorkerFrontier(current_page=root, assigned_link=root.links[0])}
+    provider = _ScriptedDecisionProvider(
+        [
+            _partial_continue(0, "speaker", "speaker is Dr. Jane Smith"),
+            _partial_return("time", "the session starts at 9am"),
+        ]
+    )
+    tool = WebSearchTool(materialized, env, provider, frontiers)
+
+    results = tool.search("who is speaking and when", ["worker-0__root.txt"])
+
+    assert len(results) == 2
+    claims = {r.claim for r in results}
+    assert claims == {"speaker", "time"}
+
+
+def test_v5_f_fully_sufficient_evidence_yields_resolved_return(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    pages = {
+        "http://x.test/": "<a href='/a'>A</a>",
+        "http://x.test/a": "the full answer: percentage is 20% for attack and hitpoints",
+    }
+    env = _env(tmp_path, monkeypatch, pages, "http://x.test/")
+    root = env.root_page()
+    materialized = tmp_path / "materialized"
+    materialized.mkdir()
+    (materialized / "worker-0__root.txt").write_text("nothing", encoding="utf-8")
+    frontiers = {"worker-0": WorkerFrontier(current_page=root, assigned_link=root.links[0])}
+    provider = _ScriptedDecisionProvider(
+        [_resolved("full answer", "the full answer: percentage is 20% for attack and hitpoints")]
+    )
+    tool = WebSearchTool(materialized, env, provider, frontiers)
+
+    tool.search("percentage for attack and hitpoints", ["worker-0__root.txt"])
+
+    assert tool.decision_log[0]["progress"] == "resolved"
+    assert tool.decision_log[0]["action"] == "return"
+    assert tool.decision_log[0]["n_evidence_grounded"] == 1
+
+
+def test_v5_g_hallucinated_partial_evidence_fails_verification_but_navigation_continues(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    pages = {
+        "http://x.test/": "<a href='/a'>A</a>",
+        "http://x.test/a": "<a href='/b'>B</a>this page never mentions any percentage",
+        "http://x.test/b": "the real percentage is 20%",
+    }
+    env = _env(tmp_path, monkeypatch, pages, "http://x.test/")
+    root = env.root_page()
+    materialized = tmp_path / "materialized"
+    materialized.mkdir()
+    (materialized / "worker-0__root.txt").write_text("nothing", encoding="utf-8")
+    frontiers = {"worker-0": WorkerFrontier(current_page=root, assigned_link=root.links[0])}
+    provider = _ScriptedDecisionProvider(
+        [
+            # Claims partial progress with a HALLUCINATED quote (not
+            # actually on the page) but still chooses to continue.
+            _partial_continue(0, "percentage", "the percentage is definitely 99% (invented)"),
+            _resolved("percentage", "the real percentage is 20%"),
+        ]
+    )
+    tool = WebSearchTool(materialized, env, provider, frontiers)
+
+    results = tool.search("what percentage", ["worker-0__root.txt"])
+
+    # The hallucinated span must never appear in the final evidence...
+    assert not any("99%" in r.quote or "invented" in r.quote for r in results)
+    # ...but the model's own chosen action ("continue") is still honored
+    # independently of whether its evidence grounded -- grounding governs
+    # evidence inclusion only, never navigation control flow -- so hop 2
+    # still happens and its real, grounded fact is captured.
+    assert env.step_count() == 2
+    assert any(r.quote == "the real percentage is 20%" for r in results)
+    assert tool.decision_log[0]["n_evidence_proposed"] == 1
+    assert tool.decision_log[0]["n_evidence_grounded"] == 0
+
+
+def test_v5_h_no_evidence_bypasses_grounding_via_local_fallback(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # The old ungrounded local-BM25 fallback is gone entirely: even when
+    # the materialized files contain text that would trivially match the
+    # query via plain keyword search, a dead_end/no-evidence decision
+    # must return nothing -- local search may still exist as a tool
+    # (used by rank_symbols/resolve_symbol/etc., unrelated pass-throughs)
+    # but nothing it finds may enter search()'s own returned evidence
+    # pool without passing through the grounded decision + verification
+    # path.
+    pages = {"http://x.test/": "<a href='/a'>A</a>", "http://x.test/a": "irrelevant"}
+    env = _env(tmp_path, monkeypatch, pages, "http://x.test/")
+    root = env.root_page()
+    materialized = tmp_path / "materialized"
+    materialized.mkdir()
+    (materialized / "worker-0__root.txt").write_text(
+        "the exact keyword the query is looking for", encoding="utf-8"
+    )
+    frontiers = {"worker-0": WorkerFrontier(current_page=root, assigned_link=root.links[0])}
+    provider = _ScriptedDecisionProvider([_dead_end()])
+    tool = WebSearchTool(materialized, env, provider, frontiers)
+
+    results = tool.search("the exact keyword the query is looking for", ["worker-0__root.txt"])
+
+    assert results == []
+    # Confirm the local tool itself, if called directly, WOULD have found
+    # a match -- proving this is a genuine provenance guarantee, not a
+    # coincidence of the fixture having no matching text at all.
+    direct_local_hits = tool._local.search(
+        "the exact keyword the query is looking for", ["worker-0__root.txt"]
+    )
+    assert direct_local_hits  # the old code path would have returned this
 
 
 # --- full run() wiring, deterministic end-to-end (no API key) ---
@@ -916,7 +1209,9 @@ def test_shared_navigation_budget_is_never_exceeded_in_a_full_run(
     pages = {"http://conf.example.com/": links}
     pages.update({f"http://conf.example.com/p{i}": f"<a href='/p{i}b'>more</a>" for i in range(20)})
     agent = AntWebAgent(nav_budget=5, max_rounds=3, max_candidate_workers=20)
-    result = _run(monkeypatch, tmp_path, pages, agent=agent, decide_fn=lambda prompt: _continue(0))
+    result = _run(
+        monkeypatch, tmp_path, pages, agent=agent, decide_fn=lambda prompt: _none_continue(0)
+    )
     assert result.metadata["navigation_steps"] <= 5
 
 
@@ -967,7 +1262,7 @@ def test_multi_hop_answer_unreachable_at_bootstrap_is_reachable_during_run(
         # shows, never a shared queue position.
         if answer_text in prompt:
             return _resolved("percentage", answer_text)
-        return _continue(0)
+        return _none_continue(0)
 
     monkeypatch.setattr(
         ant_web_module, "CountingOpenAIProvider", lambda model: _StubProvider(_decide_fn)
