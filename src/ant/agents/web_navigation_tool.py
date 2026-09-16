@@ -2,41 +2,55 @@
 into an unmodified `LocalCoordinator` via its `search_tool_factory` seam
 (see `LocalCoordinator.__init__`'s own docstring on that parameter).
 
-WHY THIS EXISTS: the first version of `AntWebAgent` built a frozen,
-root+one-hop worker roster at bootstrap time and handed `LocalCoordinator`
-a static file set -- confirmed live (a 24-task paid run, 0/24 correct)
-that this makes WebWalkerQA answer pages structurally unreachable,
-because those answers are essentially always 2+ hops deep (confirmed:
-100% of a 24-task sample of the corrected ReAct baseline's own
-trajectories needed >=2 navigate() calls, several needed 10-14). A
-worker therefore needs to be able to click into NEW pages, live, during
-its own reasoning -- not be frozen to whatever bootstrap pre-fetched.
+WHY THIS EXISTS / HISTORY: the first version of `AntWebAgent` built a
+frozen, root+one-hop worker roster at bootstrap time and handed
+`LocalCoordinator` a static file set -- confirmed live (a 24-task paid
+run, 0/24 correct) that WebWalkerQA answers are essentially always 2+
+hops deep, so a frozen one-hop roster can never reach them. The next
+version added live navigation gated behind a per-call hop cap plus a
+crude "does any query term appear as a substring anywhere in the
+materialized text" sufficiency check -- confirmed live (a 10-task
+validation, 1/10) that both were wrong in different ways: the hop cap
+capped depth even when budget remained, and separately, removing the cap
+alone still left every worker stopping after exactly one hop, because a
+generic entity name (e.g. the game's own title) trivially substring-
+matches almost every page on a site, so the crude check called nearly
+anything "sufficient" immediately.
+
+THE FIX (this version): term-overlap is gone entirely as a stopping
+signal. Resolution is now semantic and evidence-grounded: for each page
+a worker actually reaches, ONE structured decision call
+(`_decide`/`WorkerDecision`) jointly asks the model (a) does this page's
+own content contain text that actually, directly resolves the Need --
+and if it claims yes, it must quote that text verbatim, which is then
+DETERMINISTICALLY verified (`_verify_and_build_evidence`) against the
+real page content before ever being accepted, never taken on the model's
+word alone -- and (b) if not resolved, which link (if any) on this page
+is worth following next. This costs exactly the same one call per hop
+the earlier link-choice-only design already made -- richer response
+schema on the same call, not an extra call.
 
 HOW: `AutonomousWorker.run()` (src/ant/workers/autonomous.py) calls
 `self.tools.search(...)` and `.dense_search(...)` UNCONDITIONALLY at the
 start of every worker execution, before any reasoner-driven tool
 planning happens. This class's own `search()` exploits exactly that
-call: it first tries a plain local BM25 search over whatever pages are
-already materialized for that worker; only when that comes back empty
-does it spend real navigation budget -- one deterministic hop into the
-worker's own assigned first-level link (its territory specialization,
-established at bootstrap, never LLM-chosen, so a worker's identity stays
-tied to the section it was created for), then, if still unresolved,
-further LLM-mediated hops chosen from whatever page it's currently on,
-by asking a plain (anchor_text, url) "which of these looks most likely
-to help" question -- never seeing the question's reference answer,
-golden_path, or source_websites (those never reach this class at all).
+call. A worker's first hop into its own assigned first-level link (its
+territory specialization, established at bootstrap) is unconditional and
+deterministic, never LLM-chosen -- confirmed live that gating even this
+first hop behind any "is it needed" heuristic left workers stuck on root.
+From there, the structured decision loop takes over, chaining as many
+further hops as the shared budget and available links allow -- no
+per-call depth cap (see the constant note below) -- until grounded
+evidence is found, the page is judged a dead end, no link remains, or
+the budget runs out.
 
 Every real navigation goes through the SAME `EvalWebEnvironment`
 instance for the whole query (shared across every worker), so its
-`max_steps` budget is enforced globally, not per-worker: once any
-worker's navigation has used up the shared ceiling,
-`EvalWebEnvironment.navigate()` itself raises and every subsequent
-worker's own navigation attempts simply stop trying, whatever their own
-individual round/need history looks like. `EvalWebEnvironment.navigate()`
-also independently enforces "only a link actually present on the current
+`max_steps` budget is enforced globally, not per-worker. It also
+independently enforces "only a link actually present on the current
 page" (raises ValueError otherwise) -- this class relies on that
-enforcement rather than re-implementing it.
+enforcement rather than re-implementing it. Nothing here ever reads a
+question's reference answer, golden_path, or source_websites.
 
 Everything else (rank_symbols/resolve_symbol/navigate[symbol]/
 references/indexed_callers/callers/callees/assignments/imports/
@@ -52,6 +66,7 @@ substrate happens inside search()/dense_search() above.
 
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -59,29 +74,27 @@ from pathlib import Path
 from ant.domain import Evidence
 from ant.evaluation_suite.web_fetch import FetchedPage, PageLink
 from ant.evaluation_suite.web_scope import EvalWebEnvironment
-from ant.retrieval.relevance import extract_terms
 from ant.tools.local import LocalSearchTool
 
-# Deliberately NO cap on how many hops one search() call may chase --
-# a worker must be able to go anchor -> child -> grandchild -> ... within
-# a single dispatch, stopping only on sufficient evidence, no remaining
-# relevant link (_choose_link_via_llm returns None), or the shared
-# nav_budget running out (all three checked every iteration below). No
-# infinite-loop risk: frontier.visited_urls/exhausted_links only grow, so
-# a page's own (finite) link list monotonically shrinks as candidates,
-# and EvalWebEnvironment's own step budget is a hard, finite ceiling
-# regardless. Confirmed live (10-task validation, see this module's own
-# git history): an earlier, arbitrary per-call hop cap of 3 caused the
-# shared budget to be spent mostly as many workers' single mandatory hops
-# rather than a few promising workers going deep -- concretely, task
-# webwalkerqa-37023bb2's worker-0 reached the exact parent page of the
-# answer and then stopped there, while the remaining budget went to
-# unrelated workers' own first hops instead of letting worker-0 continue.
-# How many of a page's own links get shown to the link-choice LLM call --
-# a prompt-size guard, not a relevance filter (candidates beyond this cap
+# Deliberately NO cap on how many hops one search() call may chase -- a
+# worker must be able to go anchor -> child -> grandchild -> ... within a
+# single dispatch, stopping only on grounded evidence, a dead end, no
+# remaining link, or the shared nav_budget running out. No infinite-loop
+# risk: frontier.visited_urls/exhausted_links only grow, so a page's own
+# (finite) link list monotonically shrinks as candidates, and
+# EvalWebEnvironment's own step budget is a hard, finite ceiling anyway.
+# How many of a page's own links get shown to the decision call -- a
+# prompt-size guard, not a relevance filter (candidates beyond this cap
 # are simply never offered, in extraction order, the same "never sort by
 # relevance" discipline the bootstrap link roster itself uses).
 MAX_LINK_CANDIDATES_SHOWN = 40
+# How much of the current page's own text gets shown to the decision
+# call -- a prompt-size guard only, consistent with this codebase's own
+# existing convention of bounding an individual evidence quote/region
+# (e.g. LocalSearchTool.read_region's own [:2400] cap), not a fidelity
+# regression on top of it: the full, untruncated page is still what gets
+# materialized and BM25-searched elsewhere.
+MAX_PAGE_TEXT_SHOWN = 6000
 
 
 @dataclass
@@ -95,10 +108,19 @@ class WorkerFrontier:
 
     current_page: FetchedPage
     assigned_link: PageLink | None
+    current_filename: str | None = None  # materialized file backing current_page, for Evidence.path
     visited_urls: set[str] = field(default_factory=set)
     exhausted_links: set[str] = field(default_factory=set)
     taken_first_hop: bool = False
     next_file_index: int = 0
+
+
+@dataclass
+class WorkerDecision:
+    status: str  # "resolved" | "continue" | "dead_end"
+    evidence: list[dict]
+    next_link_index: int | None
+    reason: str
 
 
 def worker_key_from_files(files: list[str]) -> str | None:
@@ -112,6 +134,49 @@ def worker_key_from_files(files: list[str]) -> str | None:
         if "__" in name:
             return name.split("__", 1)[0]
     return None
+
+
+def _normalize_for_grounding(text: str) -> str:
+    return re.sub(r"\s+", " ", text).strip().lower()
+
+
+def _find_grounded_span(page_text: str, supporting_text: str) -> tuple[int, int] | None:
+    """Deterministically checks that `supporting_text` is actually present
+    in (or a whitespace/case-normalized match of) `page_text`, and if so
+    returns its (1-indexed) line span. A small growing-window line search
+    rather than a single exact substring check: tolerates a claim quoted
+    with different whitespace/line-wrapping than the source without
+    requiring a full normalized-offset remapping of the whole page.
+    Returns None if the claim cannot be located -- the caller must then
+    treat it as unverified/hallucinated, never as grounded.
+    """
+    normalized_target = _normalize_for_grounding(supporting_text)
+    if not normalized_target:
+        return None
+    lines = page_text.splitlines()
+    for start in range(len(lines)):
+        for end in range(start, min(start + 8, len(lines))):
+            window = " ".join(lines[start : end + 1])
+            if normalized_target in _normalize_for_grounding(window):
+                return start + 1, end + 1
+    return None
+
+
+def _parse_json_object(text: str) -> dict | None:
+    text = text.strip()
+    try:
+        parsed = json.loads(text)
+        return parsed if isinstance(parsed, dict) else None
+    except (json.JSONDecodeError, ValueError):
+        pass
+    match = re.search(r"\{.*\}", text, re.DOTALL)
+    if not match:
+        return None
+    try:
+        parsed = json.loads(match.group())
+        return parsed if isinstance(parsed, dict) else None
+    except (json.JSONDecodeError, ValueError):
+        return None
 
 
 class WebSearchTool:
@@ -138,22 +203,14 @@ class WebSearchTool:
         if worker_key is None:
             return self._local.search(query, files, limit=limit, context_lines=context_lines)
         frontier = self._frontiers.get(worker_key)
+        if frontier is None:
+            return self._local.search(query, files, limit=limit, context_lines=context_lines)
 
         # The worker's own assigned first-level link is its territory
         # specialization (established at bootstrap) -- it must actually be
-        # visited at least once, UNCONDITIONALLY, the first time this
-        # worker's search() is ever called, regardless of whether root-only
-        # content happens to loosely overlap with whatever need text
-        # triggered this call. Confirmed live (a real paid task: 9 active
-        # workers, 10 rounds, 0 navigation steps) that gating even this
-        # first hop behind a term-overlap check was wrong: root's own
-        # generic navigation text (dates, update names) satisfied that
-        # check for essentially every decomposed sub-need, so every worker
-        # stayed planted on root and its own actual territory was never
-        # reached -- reproducing a milder version of the original one-hop
-        # bootstrap bug this class exists to fix. Only hop 2+ (below) is
-        # gated on whether what's materialized so far actually helps.
-        if frontier is not None and not frontier.taken_first_hop:
+        # visited at least once, unconditionally, the first time this
+        # worker's search() is ever called.
+        if not frontier.taken_first_hop:
             frontier.taken_first_hop = True  # at most one attempt, ever, regardless of outcome
             link = frontier.assigned_link
             if link is not None and self._budget_remaining():
@@ -161,54 +218,43 @@ class WebSearchTool:
                 if page is not None:
                     self._materialize(worker_key, frontier, page, files)
 
-        results = self._local.search(query, files, limit=limit, context_lines=context_lines)
-        if frontier is None:
-            return results
-        # LocalSearchTool.search() ranks and returns its top-k over
-        # whatever text is indexed even when nothing actually matches the
-        # query (it has no relevance THRESHOLD, only a ranking) -- so
-        # `results` being non-empty is not itself proof the need is
-        # answered by what's currently materialized. A cheap, honest
-        # term-overlap check against the raw materialized text is what
-        # actually decides whether to spend further navigation budget
-        # looking deeper, not the mere presence of low-relevance search
-        # hits.
-        if self._term_overlap_with_materialized(query, files):
-            return results
-        # Persistent deep navigation, no per-call hop cap (see this
-        # module's own top-of-file note): keep following LLM-chosen links
-        # from wherever this worker currently sits until evidence is
-        # sufficient, no relevant link remains, or the shared budget runs
-        # out -- any one of the three can fire on any iteration.
-        sufficient = False
-        while not sufficient:
+        # Grounded, LLM-mediated resolution loop: each iteration makes ONE
+        # structured decision call about whatever page the worker is
+        # currently on (see this module's own top docstring for why this
+        # replaced a cheap-but-wrong term-overlap heuristic). Stops on
+        # grounded evidence, a dead end, no remaining link, a decision-call
+        # failure, or budget exhaustion.
+        while True:
+            candidates = self._candidates_for(frontier)
+            decision = self._decide(frontier, query, candidates)
+            if decision is None:
+                break
+            if decision.status == "resolved" and decision.evidence:
+                grounded = self._verify_and_build_evidence(frontier, decision, worker_key)
+                if grounded:
+                    return grounded
+                # Grounding failed: never mark this resolved. Fall through
+                # to the local-search fallback below rather than making a
+                # second decision call for this same page.
+                break
+            if decision.status == "dead_end":
+                break
             if not self._budget_remaining():
                 break
-            link = self._choose_link_via_llm(frontier, query)
+            link = self._resolve_link_index(candidates, decision.next_link_index)
             if link is None:
                 break
             page = self._follow(worker_key, frontier, link, query)
             if page is None:
                 continue
             self._materialize(worker_key, frontier, page, files)
-            results = self._local.search(query, files, limit=limit, context_lines=context_lines)
-            sufficient = self._term_overlap_with_materialized(query, files)
-        return results
 
-    def _term_overlap_with_materialized(self, query: str, files: list[str]) -> bool:
-        terms = extract_terms(query)
-        if not terms:
-            return True  # nothing to match against -- don't navigate on an empty need
-        combined = []
-        for name in files:
-            try:
-                combined.append(
-                    (self._materialized_dir / name).read_text(encoding="utf-8", errors="replace")
-                )
-            except OSError:
-                continue
-        haystack = " ".join(combined).lower()
-        return any(term.lower() in haystack for term in terms)
+        # Fallback: a plain local BM25 search over everything materialized
+        # so far -- covers dead ends, decision-call failures, grounding
+        # failures, and budget exhaustion, so a dispatch never returns
+        # nothing just because the structured loop ended without an
+        # explicit grounded "resolved".
+        return self._local.search(query, files, limit=limit, context_lines=context_lines)
 
     def dense_search(self, query: str, files: list[str], limit: int = 4) -> list[Evidence]:
         # No live-navigation side effect here: search() (called first,
@@ -218,7 +264,7 @@ class WebSearchTool:
         # double-spend the shared budget for no new decision basis.
         return self._local.dense_search(query, files, limit=limit)
 
-    # --- navigation internals ---
+    # --- navigation + grounded-decision internals ---
 
     def _budget_remaining(self) -> bool:
         return self._env.max_steps is None or self._env.step_count() < self._env.max_steps
@@ -245,41 +291,102 @@ class WebSearchTool:
         filename = f"{worker_key}__hop{frontier.next_file_index}.txt"
         frontier.next_file_index += 1
         (self._materialized_dir / filename).write_text(page.text, encoding="utf-8")
+        frontier.current_filename = filename
         if filename not in files:
             files.append(filename)
 
-    def _choose_link_via_llm(self, frontier: WorkerFrontier, query: str) -> PageLink | None:
-        candidates = [
+    def _candidates_for(self, frontier: WorkerFrontier) -> list[PageLink]:
+        return [
             link
             for link in frontier.current_page.links
             if link.url not in frontier.visited_urls and link.url not in frontier.exhausted_links
         ][:MAX_LINK_CANDIDATES_SHOWN]
-        if not candidates:
+
+    def _resolve_link_index(self, candidates: list[PageLink], index: int | None) -> PageLink | None:
+        if index is None or not (0 <= index < len(candidates)):
             return None
-        listing = "\n".join(
-            f"{i}. {link.text!r} -> {link.url}" for i, link in enumerate(candidates)
+        return candidates[index]
+
+    def _decide(
+        self, frontier: WorkerFrontier, query: str, candidates: list[PageLink]
+    ) -> WorkerDecision | None:
+        page_text = frontier.current_page.text[:MAX_PAGE_TEXT_SHOWN]
+        listing = (
+            "\n".join(f"{i}. {link.text!r} -> {link.url}" for i, link in enumerate(candidates))
+            if candidates
+            else "(no further links available on this page)"
         )
         prompt = (
-            "You are navigating a website's own real pages to gather evidence for a "
-            "research need. You may only follow a link that is actually listed below.\n\n"
-            f"Need: {query}\n"
-            f"Current page: {frontier.current_page.url}\n"
-            f"Available links on the current page (index. anchor text -> URL):\n{listing}\n\n"
-            "Reply with ONLY the index number of the single most promising link to follow "
-            "next, or reply NONE if nothing listed looks relevant."
+            "You are gathering evidence from a real website to resolve a research need.\n\n"
+            f"Need: {query}\n\n"
+            f"Current page ({frontier.current_page.url}) content:\n---\n{page_text}\n---\n\n"
+            "Available links on this page you may follow next (index. anchor text -> URL):\n"
+            f"{listing}\n\n"
+            "Decide:\n"
+            "1. Does the CURRENT PAGE's own content above contain text that directly and "
+            "materially resolves the Need? Only answer yes if you can quote EXACT text copied "
+            "from the page above as support -- never invent, paraphrase, or infer evidence that "
+            "is not literally present in the page content shown.\n"
+            "2. If not resolved, is this path still worth continuing (pick the single most "
+            "promising link), or is it a dead end (no reachable link here looks relevant)?\n\n"
+            'Reply with ONLY a single JSON object, no other text: {"status": "resolved" | '
+            '"continue" | "dead_end", "evidence": [{"claim": "...", "supporting_text": "...exact '
+            'text copied from the page above..."}], "next_link_index": <integer or null>, '
+            '"reason": "..."}\n'
+            '"evidence" must be an empty list unless status is "resolved". "next_link_index" '
+            "must be an integer index from the links list above, or null, and must be null "
+            'unless status is "continue".'
         )
         try:
-            result = self._provider.responses_text(prompt, max_output_tokens=16)
-        except Exception:  # noqa: BLE001 -- a link-choice failure must not crash the worker
+            result = self._provider.responses_text(prompt, max_output_tokens=500)
+        except Exception:  # noqa: BLE001 -- a decision-call failure must not crash the worker
             return None
-        text = result.text.strip().upper()
-        if "NONE" in text:
+        data = _parse_json_object(result.text)
+        if data is None:
             return None
-        match = re.search(r"\d+", text)
-        if not match:
+        status = data.get("status")
+        if status not in ("resolved", "continue", "dead_end"):
             return None
-        index = int(match.group())
-        return candidates[index] if 0 <= index < len(candidates) else None
+        evidence = data.get("evidence")
+        if not isinstance(evidence, list):
+            evidence = []
+        next_link_index = data.get("next_link_index")
+        if not isinstance(next_link_index, int):
+            next_link_index = None
+        return WorkerDecision(
+            status=status,
+            evidence=[item for item in evidence if isinstance(item, dict)],
+            next_link_index=next_link_index,
+            reason=str(data.get("reason", "")),
+        )
+
+    def _verify_and_build_evidence(
+        self, frontier: WorkerFrontier, decision: WorkerDecision, worker_key: str
+    ) -> list[Evidence] | None:
+        page_text = frontier.current_page.text
+        path = frontier.current_filename or ""
+        built: list[Evidence] = []
+        for item in decision.evidence:
+            supporting_text = str(item.get("supporting_text", "")).strip()
+            claim = str(item.get("claim", "")).strip()
+            if not supporting_text or not path:
+                continue
+            span = _find_grounded_span(page_text, supporting_text)
+            if span is None:
+                continue  # hallucinated / not actually present on the page -- reject
+            line_start, line_end = span
+            built.append(
+                Evidence(
+                    path=path,
+                    line_start=line_start,
+                    line_end=line_end,
+                    quote=supporting_text[:2400],
+                    reason=claim or "Grounded worker decision.",
+                    claim=claim,
+                    worker_id=worker_key,
+                )
+            )
+        return built or None
 
     # --- pure passthrough: already-materialized pages are plain local
     # files, so the existing code-oriented tool implementation is correct

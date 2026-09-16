@@ -145,6 +145,7 @@ def _bootstrap_territories(
         frontiers[worker_id] = WorkerFrontier(
             current_page=root_page,
             assigned_link=assigned_link,
+            current_filename=filename,
             visited_urls={root_page.url},
             taken_first_hop=assigned_link is None,
         )

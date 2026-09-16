@@ -8,6 +8,7 @@ structural smoke test before paid inference" requirement.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -160,35 +161,60 @@ def test_bootstrap_never_touches_gold_metadata(
         assert SECRET_ANSWER not in f.read_text(encoding="utf-8")
 
 
-# --- WebSearchTool: the actual multi-hop navigation mechanism ---
+# --- WebSearchTool: the actual multi-hop, grounded-decision navigation
+# mechanism. term-overlap is gone entirely as a stopping signal (see
+# web_navigation_tool.py's own module docstring for why); resolution is
+# now a structured, per-page decision the model must ground with a
+# verbatim quote before it's ever accepted. ---
 
 
-class _FixedLinkChoiceProvider:
-    """Deterministic test double for the raw responses_text() call
-    WebSearchTool makes directly for link-choice -- returns a fixed index
-    (or "NONE") regardless of prompt content."""
+def _continue(index: int) -> dict:
+    return {"status": "continue", "evidence": [], "next_link_index": index, "reason": ""}
 
-    def __init__(self, reply: str) -> None:
-        self.reply = reply
+
+def _dead_end() -> dict:
+    return {"status": "dead_end", "evidence": [], "next_link_index": None, "reason": ""}
+
+
+def _resolved(claim: str, supporting_text: str) -> dict:
+    return {
+        "status": "resolved",
+        "evidence": [{"claim": claim, "supporting_text": supporting_text}],
+        "next_link_index": None,
+        "reason": "",
+    }
+
+
+class _ScriptedDecisionProvider:
+    """Deterministic test double for WebSearchTool's own direct
+    responses_text() calls (the merged link-choice + grounded-sufficiency
+    decision call). `decisions` is consumed in order, one entry per call;
+    each entry is either a dict (auto-serialized to the JSON schema
+    _decide() expects) or a raw string (used as-is, e.g. to simulate a
+    malformed/unparseable model reply). The last entry repeats if more
+    calls happen than were scripted."""
+
+    def __init__(self, decisions: list[dict | str]) -> None:
+        self._decisions = [d if isinstance(d, str) else json.dumps(d) for d in decisions]
         self.prompts: list[str] = []
+        self._index = 0
 
     def responses_text(self, prompt: str, max_output_tokens: int = 16):
         from ant.providers.openai_provider import ResponseResult
 
         self.prompts.append(prompt)
-        return ResponseResult(text=self.reply, usage=TokenUsage(), raw={})
+        text = self._decisions[min(self._index, len(self._decisions) - 1)]
+        self._index += 1
+        return ResponseResult(text=text, usage=TokenUsage(), raw={})
 
 
 def test_search_takes_the_mandatory_first_hop_even_when_root_already_matches(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     # Regression test for a real bug found on a live paid run: gating even
-    # the first hop behind a term-overlap check let root's own generic
-    # navigation text satisfy the check for most decomposed sub-needs, so
-    # workers never reached their own assigned territory at all (9 active
-    # workers, 10 rounds, 0 navigation steps in that run). The first hop
-    # must be unconditional, regardless of whether root-only content
-    # happens to already overlap with the query.
+    # the first hop behind a stopping heuristic left workers stuck on
+    # root (9 active workers, 10 rounds, 0 navigation steps in that run).
+    # The first hop must be unconditional.
     pages = {
         "http://x.test/": "<a href='/listing'>Listing</a>",
         "http://x.test/listing": "more about the keynote speaker",
@@ -201,11 +227,12 @@ def test_search_takes_the_mandatory_first_hop_even_when_root_already_matches(
         "the keynote speaker is Dr. Jane Smith", encoding="utf-8"
     )
     frontiers = {"worker-0": WorkerFrontier(current_page=root, assigned_link=root.links[0])}
-    tool = WebSearchTool(materialized, env, _FixedLinkChoiceProvider("NONE"), frontiers)
+    provider = _ScriptedDecisionProvider([_dead_end()])
+    tool = WebSearchTool(materialized, env, provider, frontiers)
 
     results = tool.search("keynote speaker", ["worker-0__root.txt"])
 
-    assert results
+    assert results  # the local fallback still finds root.txt's own match
     assert env.step_count() == 1  # the mandatory first hop still happened
     assert frontiers["worker-0"].taken_first_hop is True
 
@@ -223,7 +250,8 @@ def test_search_does_not_repeat_the_first_hop_on_a_later_call(
     )
     frontier = WorkerFrontier(current_page=root, assigned_link=root.links[0], taken_first_hop=True)
     frontiers = {"worker-0": frontier}
-    tool = WebSearchTool(materialized, env, _FixedLinkChoiceProvider("NONE"), frontiers)
+    provider = _ScriptedDecisionProvider([_dead_end()])
+    tool = WebSearchTool(materialized, env, provider, frontiers)
 
     results = tool.search("keynote speaker", ["worker-0__root.txt"])
 
@@ -232,7 +260,7 @@ def test_search_does_not_repeat_the_first_hop_on_a_later_call(
     assert tool.nav_log == []
 
 
-def test_search_takes_deterministic_first_hop_when_local_empty(
+def test_search_takes_deterministic_first_hop_then_makes_one_decision_call(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     pages = {
@@ -245,20 +273,23 @@ def test_search_takes_deterministic_first_hop_when_local_empty(
     materialized.mkdir()
     (materialized / "worker-0__root.txt").write_text("nothing relevant here", encoding="utf-8")
     frontiers = {"worker-0": WorkerFrontier(current_page=root, assigned_link=root.links[0])}
-    provider = _FixedLinkChoiceProvider("NONE")
+    provider = _ScriptedDecisionProvider(
+        [_resolved("keynote speaker", "the keynote speaker is Dr. Jane Smith")]
+    )
     tool = WebSearchTool(materialized, env, provider, frontiers)
     files = ["worker-0__root.txt"]
 
     results = tool.search("keynote speaker", files)
 
     assert results
-    assert env.step_count() == 1  # exactly one deterministic hop, no LLM call needed for it
-    assert provider.prompts == []  # first hop is deterministic, never asks the LLM
+    assert env.step_count() == 1  # the hop itself is deterministic, no LLM call needed for it
+    assert len(provider.prompts) == 1  # exactly one decision call, evaluating the new page
     assert "worker-0__hop0.txt" in files
     assert tool.nav_log[0]["worker"] == "worker-0"
+    assert results[0].quote == "the keynote speaker is Dr. Jane Smith"
 
 
-def test_search_follows_llm_chosen_second_hop_when_first_hop_insufficient(
+def test_search_continues_to_an_llm_chosen_second_hop_when_first_page_unresolved(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     pages = {
@@ -273,16 +304,18 @@ def test_search_follows_llm_chosen_second_hop_when_first_hop_insufficient(
     materialized.mkdir()
     (materialized / "worker-0__root.txt").write_text("nothing relevant", encoding="utf-8")
     frontiers = {"worker-0": WorkerFrontier(current_page=root, assigned_link=root.links[0])}
-    provider = _FixedLinkChoiceProvider("0")  # always picks the first offered link
+    provider = _ScriptedDecisionProvider(
+        [_continue(0), _resolved("keynote speaker", "the keynote speaker is Dr. Jane Smith")]
+    )
     tool = WebSearchTool(materialized, env, provider, frontiers)
     files = ["worker-0__root.txt"]
 
     results = tool.search("keynote speaker", files)
 
     assert results
-    assert env.step_count() == 2  # deterministic hop 1 (listing) + LLM-chosen hop 2 (article)
-    assert len(provider.prompts) == 1  # only the second hop needed an LLM call
-    assert "article" in provider.prompts[0] or "Update 19" in provider.prompts[0]
+    assert env.step_count() == 2  # deterministic hop 1 (listing) + decision-chosen hop 2 (article)
+    assert len(provider.prompts) == 2  # one decision call per page visited
+    assert results[0].quote == "the keynote speaker is Dr. Jane Smith"
 
 
 def test_search_respects_no_arbitrary_jump_on_out_of_range_choice(
@@ -298,14 +331,14 @@ def test_search_respects_no_arbitrary_jump_on_out_of_range_choice(
     materialized.mkdir()
     (materialized / "worker-0__root.txt").write_text("nothing", encoding="utf-8")
     frontiers = {"worker-0": WorkerFrontier(current_page=root, assigned_link=root.links[0])}
-    provider = _FixedLinkChoiceProvider("99")  # out of range -- must not navigate anywhere
+    provider = _ScriptedDecisionProvider([_continue(99)])  # out of range
     tool = WebSearchTool(materialized, env, provider, frontiers)
     files = ["worker-0__root.txt"]
 
     tool.search("keynote speaker", files)
 
-    # The out-of-range index must not cause any navigation beyond the
-    # one deterministic first hop -- _choose_link_via_llm rejects it and
+    # The out-of-range index must not cause any navigation beyond the one
+    # deterministic first hop -- _resolve_link_index rejects it and
     # returns None, so the loop stops rather than jumping anywhere.
     assert env.step_count() == 1
     assert len(tool.nav_log) == 1
@@ -332,7 +365,7 @@ def test_shared_nav_budget_stops_a_second_worker_once_exhausted(
         "worker-0": WorkerFrontier(current_page=root, assigned_link=root.links[0]),
         "worker-1": WorkerFrontier(current_page=root, assigned_link=root.links[1]),
     }
-    provider = _FixedLinkChoiceProvider("NONE")
+    provider = _ScriptedDecisionProvider([_dead_end()])
     tool = WebSearchTool(materialized, env, provider, frontiers)
 
     tool.search("keynote speaker", ["worker-0__root.txt"])
@@ -352,12 +385,145 @@ def test_dense_search_never_triggers_navigation(
     materialized.mkdir()
     (materialized / "worker-0__root.txt").write_text("nothing", encoding="utf-8")
     frontiers = {"worker-0": WorkerFrontier(current_page=root, assigned_link=root.links[0])}
-    tool = WebSearchTool(materialized, env, _FixedLinkChoiceProvider("0"), frontiers)
+    provider = _ScriptedDecisionProvider([_continue(0)])
+    tool = WebSearchTool(materialized, env, provider, frontiers)
 
     tool.dense_search("q", ["worker-0__root.txt"])
 
     assert env.step_count() == 0
     assert tool.nav_log == []
+
+
+# --- Web ANTMAN Fix v3's own required structural tests: term-overlap is
+# no longer a stopping signal at all; resolution is grounded/verified. ---
+
+
+def test_v3_a_generic_entity_repetition_alone_does_not_stop_the_worker(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # A page that merely repeats the question's own entity name (the kind
+    # of text that trivially "term-overlapped" under the old, removed
+    # heuristic) must NOT be treated as sufficient just because the
+    # decision call could easily rationalize it -- only an explicit,
+    # grounded "resolved" from the model (verified against real page
+    # text) can stop navigation. Here the model is scripted to correctly
+    # recognize the generic page is not enough and continue.
+    pages = {
+        "http://x.test/": "<a href='/landing'>Landing</a>",
+        "http://x.test/landing": (
+            "Age of Empires Age of Empires Age of Empires -- welcome to the site! "
+            "<a href='/patchnotes'>Patch Notes</a>"
+        ),
+        "http://x.test/patchnotes": "Lipizzaner Cavalry increases attack and hitpoints by 20%.",
+    }
+    env = _env(tmp_path, monkeypatch, pages, "http://x.test/")
+    root = env.root_page()
+    materialized = tmp_path / "materialized"
+    materialized.mkdir()
+    (materialized / "worker-0__root.txt").write_text("nothing", encoding="utf-8")
+    frontiers = {"worker-0": WorkerFrontier(current_page=root, assigned_link=root.links[0])}
+    provider = _ScriptedDecisionProvider(
+        [
+            _continue(0),  # correctly judges the generic landing page insufficient
+            _resolved(
+                "Lipizzaner Cavalry effect",
+                "Lipizzaner Cavalry increases attack and hitpoints by 20%.",
+            ),
+        ]
+    )
+    tool = WebSearchTool(materialized, env, provider, frontiers)
+
+    results = tool.search("Age of Empires Lipizzaner Cavalry percentage", ["worker-0__root.txt"])
+
+    assert env.step_count() == 2  # continued past the generic page to patchnotes
+    assert results
+    assert "20%" in results[0].quote
+
+
+def test_v3_c_a_genuinely_sufficient_page_stops_and_returns_grounded_evidence(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    pages = {
+        "http://x.test/": "<a href='/answer'>Answer</a>",
+        "http://x.test/answer": ("Lipizzaner Cavalry increases attack and hitpoints by 20%."),
+    }
+    env = _env(tmp_path, monkeypatch, pages, "http://x.test/")
+    root = env.root_page()
+    materialized = tmp_path / "materialized"
+    materialized.mkdir()
+    (materialized / "worker-0__root.txt").write_text("nothing", encoding="utf-8")
+    frontiers = {"worker-0": WorkerFrontier(current_page=root, assigned_link=root.links[0])}
+    provider = _ScriptedDecisionProvider(
+        [_resolved("percentage", "Lipizzaner Cavalry increases attack and hitpoints by 20%.")]
+    )
+    tool = WebSearchTool(materialized, env, provider, frontiers)
+
+    results = tool.search("percentage increase", ["worker-0__root.txt"])
+
+    assert env.step_count() == 1  # stopped right after the mandatory hop -- no further navigation
+    assert len(provider.prompts) == 1
+    assert len(results) == 1
+    assert results[0].quote == "Lipizzaner Cavalry increases attack and hitpoints by 20%."
+    assert results[0].claim == "percentage"
+
+
+def test_v3_d_a_hallucinated_supporting_span_cannot_resolve_the_need(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    pages = {
+        "http://x.test/": "<a href='/page'>Page</a>",
+        "http://x.test/page": "this page talks about something else entirely",
+    }
+    env = _env(tmp_path, monkeypatch, pages, "http://x.test/")
+    root = env.root_page()
+    materialized = tmp_path / "materialized"
+    materialized.mkdir()
+    (materialized / "worker-0__root.txt").write_text(
+        "percentage increase mentioned here", encoding="utf-8"
+    )
+    frontiers = {"worker-0": WorkerFrontier(current_page=root, assigned_link=root.links[0])}
+    # The model CLAIMS resolution with a quote that does not actually
+    # appear anywhere on the page -- a hallucination.
+    provider = _ScriptedDecisionProvider(
+        [
+            _resolved(
+                "percentage", "Lipizzaner Cavalry increases attack by 99% (never actually said)"
+            )
+        ]
+    )
+    tool = WebSearchTool(materialized, env, provider, frontiers)
+
+    results = tool.search("percentage increase", ["worker-0__root.txt"])
+
+    # Grounding verification must reject the hallucinated span -- the
+    # Need must never be marked resolved from it. The fallback local
+    # search may still return something (root.txt's own generic match),
+    # but it must never be the hallucinated text.
+    assert not any("99%" in r.quote for r in results)
+    assert not any("never actually said" in r.quote for r in results)
+
+
+def test_v3_e_a_dead_end_page_returns_control_without_further_navigation(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    pages = {
+        "http://x.test/": "<a href='/deadend'>Dead End</a>",
+        "http://x.test/deadend": "<a href='/more'>More</a>",
+        "http://x.test/more": "the real answer is here",
+    }
+    env = _env(tmp_path, monkeypatch, pages, "http://x.test/")
+    root = env.root_page()
+    materialized = tmp_path / "materialized"
+    materialized.mkdir()
+    (materialized / "worker-0__root.txt").write_text("nothing", encoding="utf-8")
+    frontiers = {"worker-0": WorkerFrontier(current_page=root, assigned_link=root.links[0])}
+    provider = _ScriptedDecisionProvider([_dead_end()])  # judges "deadend" unproductive
+    tool = WebSearchTool(materialized, env, provider, frontiers)
+
+    tool.search("the real answer", ["worker-0__root.txt"])
+
+    assert env.step_count() == 1  # only the mandatory hop -- dead_end stopped further navigation
+    assert len(provider.prompts) == 1
 
 
 # --- Web ANTMAN Fix v2's own required structural regression tests ---
@@ -399,7 +565,13 @@ def test_v2_b_one_dispatch_can_traverse_a_full_deep_chain(
     materialized.mkdir()
     (materialized / "worker-0__root.txt").write_text("nothing", encoding="utf-8")
     frontiers = {"worker-0": WorkerFrontier(current_page=root, assigned_link=root.links[0])}
-    provider = _FixedLinkChoiceProvider("0")  # always follows the first offered link
+    provider = _ScriptedDecisionProvider(
+        [
+            _continue(0),  # evaluating "section": not resolved, follow "listing"
+            _continue(0),  # evaluating "listing": not resolved, follow "article"
+            _resolved("evidence", "the answer contains rare_evidence_token here"),
+        ]
+    )
     tool = WebSearchTool(materialized, env, provider, frontiers)
 
     results = tool.search("rare_evidence_token", ["worker-0__root.txt"])
@@ -411,19 +583,17 @@ def test_v2_b_one_dispatch_can_traverse_a_full_deep_chain(
         "http://x.test/listing",
         "http://x.test/article",
     ]
+    assert results[0].quote == "the answer contains rare_evidence_token here"
 
 
 def test_v2_c_a_later_dispatch_resumes_from_the_saved_frontier(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    # Marker tokens are deliberately unrelated to any anchor text (e.g.
-    # NOT "listing_stopword", which would trivially overlap the "Listing"
-    # anchor label itself and stop navigation one hop too early).
     pages = {
         "http://x.test/": "<a href='/section'>Section</a>",
         "http://x.test/section": "<a href='/listing'>Listing</a>",
-        "http://x.test/listing": "zzqqmarkerone <a href='/article'>Article</a>",
-        "http://x.test/article": "zzqqmarkertwo is the real evidence",
+        "http://x.test/listing": "<a href='/article'>Article</a>",
+        "http://x.test/article": "the real evidence is here",
     }
     env = _env(tmp_path, monkeypatch, pages, "http://x.test/")
     root = env.root_page()
@@ -431,13 +601,23 @@ def test_v2_c_a_later_dispatch_resumes_from_the_saved_frontier(
     materialized.mkdir()
     (materialized / "worker-0__root.txt").write_text("nothing", encoding="utf-8")
     frontiers = {"worker-0": WorkerFrontier(current_page=root, assigned_link=root.links[0])}
-    provider = _FixedLinkChoiceProvider("0")
+    # First dispatch: continues past "section" to "listing", then the
+    # decision call evaluating "listing" itself comes back malformed
+    # (simulating a transient failure) -- the dispatch ends there, NOT
+    # because of any resolved/dead_end judgment, with the frontier saved
+    # at "listing".
+    provider = _ScriptedDecisionProvider(
+        [
+            _continue(0),  # evaluating "section": follow "listing"
+            "not valid json -- simulated decision-call failure",
+            _continue(0),  # second dispatch, evaluating "listing" again: follow "article"
+            _resolved("evidence", "the real evidence is here"),
+        ]
+    )
     tool = WebSearchTool(materialized, env, provider, frontiers)
     files = ["worker-0__root.txt"]
 
-    # First dispatch: reaches root -> section -> listing (zzqqmarkerone
-    # satisfies the overlap check there, so it naturally stops).
-    tool.search("zzqqmarkerone", files)
+    tool.search("q", files)
     assert env.step_count() == 2
     assert frontiers["worker-0"].current_page.url == "http://x.test/listing"
 
@@ -445,13 +625,14 @@ def test_v2_c_a_later_dispatch_resumes_from_the_saved_frontier(
     # continue from "listing", NOT restart at root -- it should never
     # re-navigate to section or listing again, and must reach article.
     provider.prompts.clear()
-    tool.search("zzqqmarkertwo", files)
+    results = tool.search("q", files)
 
     assert env.step_count() == 3  # exactly one more hop, not a restart
     urls = [e["url"] for e in tool.nav_log]
     assert urls == ["http://x.test/section", "http://x.test/listing", "http://x.test/article"]
-    assert provider.prompts  # the second dispatch's own LLM link-choice call
+    assert provider.prompts  # the second dispatch's own decision call(s)
     assert "listing" in provider.prompts[0]  # offered from the SAVED current page
+    assert results[0].quote == "the real evidence is here"
 
 
 def test_v2_d_only_activated_workers_ever_consume_navigation(
@@ -467,7 +648,7 @@ def test_v2_d_only_activated_workers_ever_consume_navigation(
         worker_id = f"worker-{i}"
         (materialized / f"{worker_id}__root.txt").write_text("nothing", encoding="utf-8")
         frontiers[worker_id] = WorkerFrontier(current_page=root, assigned_link=link)
-    tool = WebSearchTool(materialized, env, _FixedLinkChoiceProvider("NONE"), frontiers)
+    tool = WebSearchTool(materialized, env, _ScriptedDecisionProvider([_dead_end()]), frontiers)
 
     # Coordinator "activates" only worker-0 and worker-5.
     tool.search("q", ["worker-0__root.txt"])
@@ -496,7 +677,7 @@ def test_v2_e_global_budget_never_exceeded_across_many_workers(
         worker_id = f"worker-{i}"
         (materialized / f"{worker_id}__root.txt").write_text("nothing", encoding="utf-8")
         frontiers[worker_id] = WorkerFrontier(current_page=root, assigned_link=link)
-    provider = _FixedLinkChoiceProvider("0")  # always tries to keep navigating
+    provider = _ScriptedDecisionProvider([_continue(0)])  # always tries to keep navigating
     tool = WebSearchTool(materialized, env, provider, frontiers)
 
     for worker_id in list(frontiers):
@@ -516,10 +697,24 @@ class _StubProvider(MockLLMProvider):
     synthesize/synthesize_coalition (MockLLMProvider itself only
     implements the reasoner side), drain_call_count/drain_usage/
     drain_retry_log (the CountingOpenAIProvider surface), and
-    responses_text (WebSearchTool's own direct link-choice call)."""
+    responses_text (WebSearchTool's own direct grounded-decision call).
 
-    def __init__(self, link_choice_reply: str = "NONE") -> None:
-        self.link_choice_reply = link_choice_reply
+    A full agent.run() dispatches MULTIPLE workers, each independently
+    entering the decision loop -- which worker's search() gets called
+    first, second, etc. is Need-Graph/routing-determined, not something a
+    test controls. A shared position-based script (like
+    _ScriptedDecisionProvider, fine for single-worker WebSearchTool-level
+    tests) is therefore the wrong tool here: entry N could get consumed
+    by evaluating the WRONG worker's page. `decide_fn` instead is a pure
+    function of the PROMPT TEXT itself (which embeds the current page's
+    own content), so the right decision is returned no matter which
+    worker or what order asks for it. Defaults to always dead_end -- the
+    safest minimal-navigation default for tests that don't care about the
+    exact decision.
+    """
+
+    def __init__(self, decide_fn=None) -> None:
+        self._decide_fn = decide_fn or (lambda prompt: _dead_end())
         self.responses_text_calls = 0
 
     def synthesize(self, *, question, evidence, **kwargs):
@@ -532,7 +727,9 @@ class _StubProvider(MockLLMProvider):
         from ant.providers.openai_provider import ResponseResult
 
         self.responses_text_calls += 1
-        return ResponseResult(text=self.link_choice_reply, usage=TokenUsage(), raw={})
+        decision = self._decide_fn(prompt)
+        text = decision if isinstance(decision, str) else json.dumps(decision)
+        return ResponseResult(text=text, usage=TokenUsage(), raw={})
 
     def drain_call_count(self) -> int:
         return self.responses_text_calls
@@ -544,11 +741,19 @@ class _StubProvider(MockLLMProvider):
         return []
 
 
-def _run(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, pages: dict[str, str], agent=None):
+def _run(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    pages: dict[str, str],
+    agent=None,
+    decide_fn=None,
+):
     monkeypatch.setattr(
         ant_web_module, "urllib_fetcher", lambda timeout_seconds=10.0: _mock_fetcher(pages)
     )
-    monkeypatch.setattr(ant_web_module, "CountingOpenAIProvider", lambda model: _StubProvider())
+    monkeypatch.setattr(
+        ant_web_module, "CountingOpenAIProvider", lambda model: _StubProvider(decide_fn)
+    )
     agent = agent or AntWebAgent()
     return agent.run(_example(), tmp_path)
 
@@ -601,14 +806,14 @@ def test_shared_navigation_budget_is_never_exceeded_in_a_full_run(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     # A root with many links and a provider that always tries to keep
-    # navigating (never says NONE) -- the assertion inside
+    # navigating (never says dead_end) -- the assertion inside
     # AntWebAgent.run() itself (env.step_count() <= nav_budget) is the
     # real guard; this test just exercises a path likely to stress it.
     links = "".join(f"<a href='/p{i}'>P{i}</a>" for i in range(20))
     pages = {"http://conf.example.com/": links}
     pages.update({f"http://conf.example.com/p{i}": f"<a href='/p{i}b'>more</a>" for i in range(20)})
     agent = AntWebAgent(nav_budget=5, max_rounds=3, max_candidate_workers=20)
-    result = _run(monkeypatch, tmp_path, pages, agent=agent)
+    result = _run(monkeypatch, tmp_path, pages, agent=agent, decide_fn=lambda prompt: _continue(0))
     assert result.metadata["navigation_steps"] <= 5
 
 
@@ -649,8 +854,20 @@ def test_multi_hop_answer_unreachable_at_bootstrap_is_reachable_during_run(
     monkeypatch.setattr(
         ant_web_module, "urllib_fetcher", lambda timeout_seconds=10.0: _mock_fetcher(pages)
     )
+    answer_text = "Lipizzaner Cavalry increases attack and hitpoints of Uhlans by 20%."
+
+    def _decide_fn(prompt: str) -> dict:
+        # Content-aware, not order-based: multiple workers (worker-root,
+        # worker-0) independently enter the decision loop in an order
+        # this test does not control, so the right decision must be a
+        # pure function of which page's content the prompt actually
+        # shows, never a shared queue position.
+        if answer_text in prompt:
+            return _resolved("percentage", answer_text)
+        return _continue(0)
+
     monkeypatch.setattr(
-        ant_web_module, "CountingOpenAIProvider", lambda model: _StubProvider(link_choice_reply="0")
+        ant_web_module, "CountingOpenAIProvider", lambda model: _StubProvider(_decide_fn)
     )
     agent = AntWebAgent()
     result = agent.run(_example(), tmp_path)
