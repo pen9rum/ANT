@@ -62,12 +62,21 @@ from ant.evaluation_suite.web_scope import EvalWebEnvironment
 from ant.retrieval.relevance import extract_terms
 from ant.tools.local import LocalSearchTool
 
-# Per-search()-call cap on how many NEW hops one call will chase before
-# giving up and returning whatever it has -- independent of the shared
-# query-level nav budget (which EvalWebEnvironment itself enforces), this
-# just bounds how much one single tool call can do so a pathologically
-# link-rich page can't silently turn one search() into the whole budget.
-DEFAULT_MAX_HOPS_PER_CALL = 3
+# Deliberately NO cap on how many hops one search() call may chase --
+# a worker must be able to go anchor -> child -> grandchild -> ... within
+# a single dispatch, stopping only on sufficient evidence, no remaining
+# relevant link (_choose_link_via_llm returns None), or the shared
+# nav_budget running out (all three checked every iteration below). No
+# infinite-loop risk: frontier.visited_urls/exhausted_links only grow, so
+# a page's own (finite) link list monotonically shrinks as candidates,
+# and EvalWebEnvironment's own step budget is a hard, finite ceiling
+# regardless. Confirmed live (10-task validation, see this module's own
+# git history): an earlier, arbitrary per-call hop cap of 3 caused the
+# shared budget to be spent mostly as many workers' single mandatory hops
+# rather than a few promising workers going deep -- concretely, task
+# webwalkerqa-37023bb2's worker-0 reached the exact parent page of the
+# answer and then stopped there, while the remaining budget went to
+# unrelated workers' own first hops instead of letting worker-0 continue.
 # How many of a page's own links get shown to the link-choice LLM call --
 # a prompt-size guard, not a relevance filter (candidates beyond this cap
 # are simply never offered, in extraction order, the same "never sort by
@@ -112,14 +121,12 @@ class WebSearchTool:
         env: EvalWebEnvironment,
         provider,
         frontiers: dict[str, WorkerFrontier],
-        max_hops_per_call: int = DEFAULT_MAX_HOPS_PER_CALL,
     ) -> None:
         self._local = LocalSearchTool(materialized_dir, index_path=None)
         self._materialized_dir = materialized_dir
         self._env = env
         self._provider = provider
         self._frontiers = frontiers
-        self._max_hops_per_call = max_hops_per_call
         self.nav_log: list[dict] = []
 
     # --- the two methods AutonomousWorker.run() calls unconditionally ---
@@ -168,9 +175,13 @@ class WebSearchTool:
         # hits.
         if self._term_overlap_with_materialized(query, files):
             return results
-        hops = 0
+        # Persistent deep navigation, no per-call hop cap (see this
+        # module's own top-of-file note): keep following LLM-chosen links
+        # from wherever this worker currently sits until evidence is
+        # sufficient, no relevant link remains, or the shared budget runs
+        # out -- any one of the three can fire on any iteration.
         sufficient = False
-        while hops < self._max_hops_per_call and not sufficient:
+        while not sufficient:
             if not self._budget_remaining():
                 break
             link = self._choose_link_via_llm(frontier, query)
@@ -179,7 +190,6 @@ class WebSearchTool:
             page = self._follow(worker_key, frontier, link, query)
             if page is None:
                 continue
-            hops += 1
             self._materialize(worker_key, frontier, page, files)
             results = self._local.search(query, files, limit=limit, context_lines=context_lines)
             sufficient = self._term_overlap_with_materialized(query, files)

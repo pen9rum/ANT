@@ -98,7 +98,7 @@ def test_bootstrap_creates_one_worker_per_link_plus_root_without_fetching_them(
         ant_web_module, "urllib_fetcher", lambda timeout_seconds=10.0: _mock_fetcher(pages)
     )
     workers, frontiers, materialized_dir, env, n_inaccessible = _bootstrap_territories(
-        _example(), tmp_path, nav_budget=15, nav_link_cap=15, timeout_seconds=10.0
+        _example(), tmp_path, nav_budget=15, max_candidate_workers=15, timeout_seconds=10.0
     )
 
     assert len(workers) == 3  # root + speakers + schedule
@@ -114,13 +114,15 @@ def test_bootstrap_creates_one_worker_per_link_plus_root_without_fetching_them(
     assert frontiers["worker-root"].taken_first_hop is True  # no assigned link to chase
 
 
-def test_bootstrap_respects_nav_link_cap(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_bootstrap_respects_max_candidate_workers(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     pages = {"http://conf.example.com/": "".join(f"<a href='/p{i}'>P{i}</a>" for i in range(10))}
     monkeypatch.setattr(
         ant_web_module, "urllib_fetcher", lambda timeout_seconds=10.0: _mock_fetcher(pages)
     )
     workers, frontiers, materialized_dir, env, n_inaccessible = _bootstrap_territories(
-        _example(), tmp_path, nav_budget=15, nav_link_cap=3, timeout_seconds=10.0
+        _example(), tmp_path, nav_budget=15, max_candidate_workers=3, timeout_seconds=10.0
     )
     assert len(workers) == 4  # root + 3 (capped)
 
@@ -132,7 +134,7 @@ def test_bootstrap_handles_inaccessible_root(
         ant_web_module, "urllib_fetcher", lambda timeout_seconds=10.0: _mock_fetcher({})
     )
     workers, frontiers, materialized_dir, env, n_inaccessible = _bootstrap_territories(
-        _example(), tmp_path, nav_budget=15, nav_link_cap=15, timeout_seconds=10.0
+        _example(), tmp_path, nav_budget=15, max_candidate_workers=15, timeout_seconds=10.0
     )
     assert workers == []
     assert n_inaccessible == 1
@@ -149,7 +151,7 @@ def test_bootstrap_never_touches_gold_metadata(
         ant_web_module, "urllib_fetcher", lambda timeout_seconds=10.0: _mock_fetcher(pages)
     )
     workers, frontiers, materialized_dir, env, _ = _bootstrap_territories(
-        _example(), tmp_path, nav_budget=15, nav_link_cap=15, timeout_seconds=10.0
+        _example(), tmp_path, nav_budget=15, max_candidate_workers=15, timeout_seconds=10.0
     )
     for w in workers:
         assert SECRET_ANSWER not in " ".join(w.responsibilities)
@@ -358,6 +360,153 @@ def test_dense_search_never_triggers_navigation(
     assert tool.nav_log == []
 
 
+# --- Web ANTMAN Fix v2's own required structural regression tests ---
+# (A) no breadth-first bootstrap spending, (B) deep single-dispatch
+# execution, (C) persistent frontier across dispatches, (D) selective
+# activation, (E) global budget -- see this file's own module docstring.
+
+
+def test_v2_a_bootstrap_creates_many_candidates_with_zero_navigation(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    pages = {"http://conf.example.com/": "".join(f"<a href='/p{i}'>P{i}</a>" for i in range(20))}
+    monkeypatch.setattr(
+        ant_web_module, "urllib_fetcher", lambda timeout_seconds=10.0: _mock_fetcher(pages)
+    )
+    workers, frontiers, materialized_dir, env, _ = _bootstrap_territories(
+        _example(), tmp_path, nav_budget=15, max_candidate_workers=40, timeout_seconds=10.0
+    )
+    assert len(workers) == 21  # root + all 20 candidates -- creation is free
+    assert env.step_count() == 0
+    assert all(not f.taken_first_hop for wid, f in frontiers.items() if wid != "worker-root")
+
+
+def test_v2_b_one_dispatch_can_traverse_a_full_deep_chain(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # root -> section -> listing -> article -- the answer ("evidence") only
+    # lives on article, 3 hops from root. A single search() call for one
+    # worker must be able to reach it without any artificial hop cap.
+    pages = {
+        "http://x.test/": "<a href='/section'>Section</a>",
+        "http://x.test/section": "<a href='/listing'>Listing</a>",
+        "http://x.test/listing": "<a href='/article'>Article</a>",
+        "http://x.test/article": "the answer contains rare_evidence_token here",
+    }
+    env = _env(tmp_path, monkeypatch, pages, "http://x.test/")
+    root = env.root_page()
+    materialized = tmp_path / "materialized"
+    materialized.mkdir()
+    (materialized / "worker-0__root.txt").write_text("nothing", encoding="utf-8")
+    frontiers = {"worker-0": WorkerFrontier(current_page=root, assigned_link=root.links[0])}
+    provider = _FixedLinkChoiceProvider("0")  # always follows the first offered link
+    tool = WebSearchTool(materialized, env, provider, frontiers)
+
+    results = tool.search("rare_evidence_token", ["worker-0__root.txt"])
+
+    assert results
+    assert env.step_count() == 3  # section, listing, article -- all in ONE dispatch
+    assert [e["url"] for e in tool.nav_log] == [
+        "http://x.test/section",
+        "http://x.test/listing",
+        "http://x.test/article",
+    ]
+
+
+def test_v2_c_a_later_dispatch_resumes_from_the_saved_frontier(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # Marker tokens are deliberately unrelated to any anchor text (e.g.
+    # NOT "listing_stopword", which would trivially overlap the "Listing"
+    # anchor label itself and stop navigation one hop too early).
+    pages = {
+        "http://x.test/": "<a href='/section'>Section</a>",
+        "http://x.test/section": "<a href='/listing'>Listing</a>",
+        "http://x.test/listing": "zzqqmarkerone <a href='/article'>Article</a>",
+        "http://x.test/article": "zzqqmarkertwo is the real evidence",
+    }
+    env = _env(tmp_path, monkeypatch, pages, "http://x.test/")
+    root = env.root_page()
+    materialized = tmp_path / "materialized"
+    materialized.mkdir()
+    (materialized / "worker-0__root.txt").write_text("nothing", encoding="utf-8")
+    frontiers = {"worker-0": WorkerFrontier(current_page=root, assigned_link=root.links[0])}
+    provider = _FixedLinkChoiceProvider("0")
+    tool = WebSearchTool(materialized, env, provider, frontiers)
+    files = ["worker-0__root.txt"]
+
+    # First dispatch: reaches root -> section -> listing (zzqqmarkerone
+    # satisfies the overlap check there, so it naturally stops).
+    tool.search("zzqqmarkerone", files)
+    assert env.step_count() == 2
+    assert frontiers["worker-0"].current_page.url == "http://x.test/listing"
+
+    # Second dispatch (a later round, same worker, different need): must
+    # continue from "listing", NOT restart at root -- it should never
+    # re-navigate to section or listing again, and must reach article.
+    provider.prompts.clear()
+    tool.search("zzqqmarkertwo", files)
+
+    assert env.step_count() == 3  # exactly one more hop, not a restart
+    urls = [e["url"] for e in tool.nav_log]
+    assert urls == ["http://x.test/section", "http://x.test/listing", "http://x.test/article"]
+    assert provider.prompts  # the second dispatch's own LLM link-choice call
+    assert "listing" in provider.prompts[0]  # offered from the SAVED current page
+
+
+def test_v2_d_only_activated_workers_ever_consume_navigation(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    pages = {"http://x.test/": "".join(f"<a href='/p{i}'>P{i}</a>" for i in range(20))}
+    env = _env(tmp_path, monkeypatch, pages, "http://x.test/")
+    root = env.root_page()
+    materialized = tmp_path / "materialized"
+    materialized.mkdir()
+    frontiers = {}
+    for i, link in enumerate(root.links):
+        worker_id = f"worker-{i}"
+        (materialized / f"{worker_id}__root.txt").write_text("nothing", encoding="utf-8")
+        frontiers[worker_id] = WorkerFrontier(current_page=root, assigned_link=link)
+    tool = WebSearchTool(materialized, env, _FixedLinkChoiceProvider("NONE"), frontiers)
+
+    # Coordinator "activates" only worker-0 and worker-5.
+    tool.search("q", ["worker-0__root.txt"])
+    tool.search("q", ["worker-5__root.txt"])
+
+    assert env.step_count() == 2
+    activated = {"worker-0", "worker-5"}
+    for worker_id, frontier in frontiers.items():
+        if worker_id in activated:
+            assert frontier.taken_first_hop is True
+        else:
+            assert frontier.taken_first_hop is False
+
+
+def test_v2_e_global_budget_never_exceeded_across_many_workers(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    pages = {"http://x.test/": "".join(f"<a href='/p{i}'>P{i}</a>" for i in range(20))}
+    pages.update({f"http://x.test/p{i}": f"<a href='/p{i}b'>more</a>" for i in range(20)})
+    env = _env(tmp_path, monkeypatch, pages, "http://x.test/", max_steps=15)
+    root = env.root_page()
+    materialized = tmp_path / "materialized"
+    materialized.mkdir()
+    frontiers = {}
+    for i, link in enumerate(root.links):
+        worker_id = f"worker-{i}"
+        (materialized / f"{worker_id}__root.txt").write_text("nothing", encoding="utf-8")
+        frontiers[worker_id] = WorkerFrontier(current_page=root, assigned_link=link)
+    provider = _FixedLinkChoiceProvider("0")  # always tries to keep navigating
+    tool = WebSearchTool(materialized, env, provider, frontiers)
+
+    for worker_id in list(frontiers):
+        tool.search("q", [f"{worker_id}__root.txt"])
+        assert env.step_count() <= 15
+
+    assert env.step_count() == 15
+    assert len(tool.nav_log) == 15
+
+
 # --- full run() wiring, deterministic end-to-end (no API key) ---
 
 
@@ -458,7 +607,7 @@ def test_shared_navigation_budget_is_never_exceeded_in_a_full_run(
     links = "".join(f"<a href='/p{i}'>P{i}</a>" for i in range(20))
     pages = {"http://conf.example.com/": links}
     pages.update({f"http://conf.example.com/p{i}": f"<a href='/p{i}b'>more</a>" for i in range(20)})
-    agent = AntWebAgent(nav_budget=5, max_rounds=3, nav_link_cap=20)
+    agent = AntWebAgent(nav_budget=5, max_rounds=3, max_candidate_workers=20)
     result = _run(monkeypatch, tmp_path, pages, agent=agent)
     assert result.metadata["navigation_steps"] <= 5
 

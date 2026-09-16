@@ -77,34 +77,40 @@ DEFAULT_NAV_BUDGET = 15
 # override (e.g. the long-context multineedle-scaling experiment's own
 # max_rounds=10), not ANTMAN's canonical max_rounds=6 default.
 DEFAULT_MAX_ROUNDS = 10
-# Upper bound on how many first-level-link workers bootstrap creates --
-# kept equal to nav_budget purely for LLM-call/cost comparability with
-# the earlier bootstrap design, NOT because creating a worker costs any
-# navigation budget itself (it no longer does: a worker's assigned link
+# Upper bound on how many first-level-link CANDIDATE workers bootstrap
+# creates. Deliberately NOT tied to nav_budget: creating a candidate
+# WorkerCard costs no navigation budget at all (a worker's assigned link
 # is only actually fetched lazily, the first time that worker's search()
-# is actually called during coordination -- see WebSearchTool).
-DEFAULT_NAV_LINK_CAP = 15
+# is actually called during real coordination -- see WebSearchTool), so
+# there is no reason to cap candidate-worker count at the navigation
+# ceiling. This is a generous safety bound against a pathologically
+# link-heavy root page, not a scarce resource -- "many territories may
+# exist; only the few an unresolved Need actually selects ever consume
+# navigation."
+DEFAULT_MAX_CANDIDATE_WORKERS = 40
 
 
 def _bootstrap_territories(
     example: TaskExample,
     environment_root: Path,
     nav_budget: int,
-    nav_link_cap: int,
+    max_candidate_workers: int,
     timeout_seconds: float,
 ) -> tuple[list[WorkerCard], dict[str, WorkerFrontier], Path, EvalWebEnvironment, int]:
     """Fetches ONLY the root page (no navigation budget spent yet -- see
     EvalWebEnvironment.root_page()'s own docstring: the root is given, not
     discovered) and builds one provisional WorkerCard per first-level link
     found on it, in extraction order (never sorted/prioritized by
-    relevance, which would risk gold-adjacent bias), up to nav_link_cap.
-    Does NOT fetch any of those linked pages -- that happens lazily,
+    relevance, which would risk gold-adjacent bias), up to
+    max_candidate_workers -- a generous safety bound, not a navigation
+    budget concern (creating a candidate worker costs no navigation at
+    all). Does NOT fetch any of those linked pages -- that happens lazily,
     per-worker, only if and when that worker's search() is actually
-    called during coordination (see WebSearchTool._next_link). Also
-    creates one worker representing root-page-only content, so root text
-    itself stays directly reachable even if it has no useful outgoing
-    links for the current question. Returns (workers, frontiers,
-    materialized_root, shared_web_environment, n_root_inaccessible).
+    called during coordination (see WebSearchTool.search()). Also creates
+    one worker representing root-page-only content, so root text itself
+    stays directly reachable even if it has no useful outgoing links for
+    the current question. Returns (workers, frontiers, materialized_root,
+    shared_web_environment, n_root_inaccessible).
     """
     root_url = example.metadata["root_url"]
     materialized_dir = environment_root / "materialized"
@@ -144,7 +150,7 @@ def _bootstrap_territories(
         )
 
     _add_worker("worker-root", "The website's own root/landing page.", None)
-    for i, link in enumerate(root_page.links[:nav_link_cap]):
+    for i, link in enumerate(root_page.links[:max_candidate_workers]):
         label = link.text.strip() or f"page {i}"
         _add_worker(f"worker-{i}", label, link)
 
@@ -167,19 +173,23 @@ class AntWebAgent:
         model: str = "gpt-4.1",
         nav_budget: int = DEFAULT_NAV_BUDGET,
         max_rounds: int = DEFAULT_MAX_ROUNDS,
-        nav_link_cap: int = DEFAULT_NAV_LINK_CAP,
+        max_candidate_workers: int = DEFAULT_MAX_CANDIDATE_WORKERS,
         timeout_seconds: float = 10.0,
     ) -> None:
         self.model = model
         self.nav_budget = nav_budget
         self.max_rounds = max_rounds
-        self.nav_link_cap = nav_link_cap
+        self.max_candidate_workers = max_candidate_workers
         self.timeout_seconds = timeout_seconds
 
     def run(self, example: TaskExample, environment_root: Path) -> AgentResult:
         started = time.time()
         workers, frontiers, materialized_dir, env, n_root_inaccessible = _bootstrap_territories(
-            example, environment_root, self.nav_budget, self.nav_link_cap, self.timeout_seconds
+            example,
+            environment_root,
+            self.nav_budget,
+            self.max_candidate_workers,
+            self.timeout_seconds,
         )
 
         provider = CountingOpenAIProvider(model=self.model)
