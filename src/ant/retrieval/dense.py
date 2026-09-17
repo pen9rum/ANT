@@ -84,6 +84,47 @@ class EmbeddingEntry:
     quote: str
 
 
+# GPU execution providers to try, in priority order, when this onnxruntime
+# install actually has them compiled in -- CUDA (NVIDIA, including
+# DeltaAI's GH200 nodes), ROCm (AMD), DirectML (Windows integrated/
+# discrete GPUs). Requesting a provider onnxruntime doesn't recognize as
+# available makes it warn and fall through to the next one in the list,
+# not raise -- so listing GPU providers unconditionally is safe even on a
+# CPU-only install (e.g. this project's own dev machine).
+_GPU_PROVIDER_PRIORITY = ("CUDAExecutionProvider", "ROCMExecutionProvider", "DmlExecutionProvider")
+
+
+def _resolve_onnx_providers() -> list:
+    """Auto-detect a GPU execution provider if this onnxruntime install
+    actually has one, falling back to CPU otherwise -- the same
+    DenseEmbedder code path runs unmodified on a GPU cluster node and a
+    CPU-only laptop; nothing in this codebase forks embedding logic by
+    machine.
+
+    ANT_EMBEDDING_PROVIDER overrides the auto-detection: "cpu" forces CPU
+    even when a GPU provider is available (a controlled comparison, or
+    sidestepping a GPU provider that's installed but misbehaving); any
+    other value is tried as an explicit onnxruntime provider name instead
+    of whichever one auto-detection would have picked. CPUExecutionProvider
+    is always appended last regardless of the path taken, so a requested
+    GPU provider that fails to initialize at runtime still has a working
+    fallback instead of crashing the whole embed call.
+    """
+    import onnxruntime
+
+    cpu_provider = ("CPUExecutionProvider", {"arena_extend_strategy": "kSameAsRequested"})
+    override = os.getenv("ANT_EMBEDDING_PROVIDER", "auto").strip()
+
+    if override.lower() == "cpu":
+        return [cpu_provider]
+    if override and override.lower() != "auto":
+        return [override, cpu_provider]
+
+    available = set(onnxruntime.get_available_providers())
+    gpu_providers = [p for p in _GPU_PROVIDER_PRIORITY if p in available]
+    return [*gpu_providers, cpu_provider]
+
+
 class DenseEmbedder:
     """Thin wrapper around a local text-embedding model.
 
@@ -116,18 +157,23 @@ class DenseEmbedder:
         # seen embedding real repos (adk-python, sqlfluff, ...) at this
         # corpus scale. kSameAsRequested allocates only what each call
         # actually asks for instead of rounding up, which keeps the arena's
-        # peak close to what the batch genuinely needs.
+        # peak close to what the batch genuinely needs -- see
+        # _resolve_onnx_providers for when this CPU provider is even the
+        # one actually selected (a GPU provider, when available, takes
+        # priority and isn't subject to this CPU-arena-specific tuning).
         # Unset by default (fastembed's own default: use every logical
         # core) -- ANT_EMBEDDING_THREADS lets a caller running a long batch
         # job alongside interactive use (browser, IDE, ...) cap onnxruntime's
         # intra-op thread pool so it doesn't oversubscribe every core and
-        # starve everything else of scheduling time.
+        # starve everything else of scheduling time. Only meaningful for
+        # the CPU provider; a GPU provider's own device parallelism isn't
+        # affected by this thread-pool setting.
         threads_env = os.getenv("ANT_EMBEDDING_THREADS")
         threads = int(threads_env) if threads_env else None
         self._model = TextEmbedding(
             model_name=self.model_name,
             threads=threads,
-            providers=[("CPUExecutionProvider", {"arena_extend_strategy": "kSameAsRequested"})],
+            providers=_resolve_onnx_providers(),
         )
 
     def embed(self, texts: list[str]) -> list[list[float]]:

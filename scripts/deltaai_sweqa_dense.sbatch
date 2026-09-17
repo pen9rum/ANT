@@ -52,6 +52,23 @@ export OMP_NUM_THREADS="${OMP_NUM_THREADS:-8}"
 # try, raise it if flush logs show comfortable memory margin.
 export ANT_REPO_EMBED_BATCH_SIZE="${ANT_REPO_EMBED_BATCH_SIZE:-64}"
 
+# DenseEmbedder now auto-detects a GPU onnxruntime execution provider
+# (CUDA first) and uses it when available, falling back to CPU otherwise
+# -- same code, no fork per machine. THIS STILL REQUIRES a GPU-capable
+# onnxruntime build to actually be installed in .venv (the plain
+# `onnxruntime` PyPI wheel is CPU-only; `onnxruntime-gpu` -- or whatever
+# CUDA/TensorRT-enabled build is compatible with this node's aarch64 +
+# GH200/Grace-Hopper stack -- has to be installed separately). Until
+# that's confirmed working, this job still runs CPU-only embedding
+# exactly like the local machine, just on a bigger box.
+#
+# ANT_EMBEDDING_PROVIDER overrides the auto-detection if needed: "cpu" to
+# force CPU even if a GPU provider is installed (e.g. for a controlled
+# before/after comparison), or an explicit onnxruntime provider name
+# (e.g. "CUDAExecutionProvider") to try one that auto-detection wouldn't
+# have picked.
+# export ANT_EMBEDDING_PROVIDER=cpu
+
 source "$REPO_ROOT/.venv/bin/activate"
 
 echo "== Job C: SWE-QA-Pro Dense Retrieval, N=80 =="
