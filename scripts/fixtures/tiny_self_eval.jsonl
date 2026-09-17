@@ -1,0 +1,2 @@
+{"id": "self-001", "question": "What fields does the WorkerCard model have?", "answer": "id, territory_id, name, root, responsibilities, searchable_terms, files, symbols, routing_summary, parent_worker_ids, structural_action, generation_created, lifecycle_state", "repo": "."}
+{"id": "self-002", "question": "What does the Evidence model's need_ids field represent?", "answer": "Which leaf need(s) this evidence item was gathered for", "repo": "."}
