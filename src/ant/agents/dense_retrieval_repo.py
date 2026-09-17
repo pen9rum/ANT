@@ -84,88 +84,151 @@ TOP_K = 8
 _CACHE_KEY = "repo"
 
 
-def _build_repo_dense_index(
-    environment_root: Path, files: list[str], embedder: DenseEmbedder
-) -> tuple[EmbeddingIndex, int]:
-    """Builds an embedding index over `files`, chunked with
-    `_retrieval_regions` -- the exact same block splitter Sparse
-    Retrieval's own territory-wide BM25 index uses. Returns
-    (index, n_chunks_indexed).
-    """
-    entries: list[EmbeddingEntry] = []
-    texts: list[str] = []
-    for relative in files:
-        path = environment_root / relative
-        try:
-            lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
-        except OSError:
+# Chunks buffered in memory before a save-and-release flush, not the whole
+# repo at once. A full repo checkout chunked at paragraph granularity can
+# produce many thousands of chunks (adk-python: ~34k) -- confirmed live
+# that building+holding the whole corpus in memory before one final save
+# both drove RSS to several GB (onnxruntime's own inference-time arena
+# plus this process's own entries/texts/vectors buffers) and meant a crash
+# partway through lost 100% of that repo's progress, forcing a full
+# from-scratch retry every time. Flushing every ~2000 chunks bounds peak
+# memory to roughly one flush's worth regardless of repo size, and makes
+# progress resumable -- a retry after a crash only re-embeds the files
+# that were never flushed, not the whole repo.
+_FLUSH_CHUNK_BUDGET = 2000
+# Recreate the embedder (and therefore its onnxruntime session/arena)
+# periodically rather than reusing one session for the whole repo: an
+# onnxruntime CPU arena does not shrink as inference proceeds, so a
+# session that lives across many thousands of chunks can still accumulate
+# memory across flushes even though each flush's own working set is
+# bounded. A fresh session forces the old arena to actually be released.
+_RECYCLE_EMBEDDER_EVERY_N_FLUSHES = 3
+
+
+def _covered_files_path(index_dir: Path) -> Path:
+    return index_dir / f"{_CACHE_KEY}.covered_files.json"
+
+
+def _load_covered_files(index_dir: Path) -> set[str]:
+    path = _covered_files_path(index_dir)
+    if not path.exists():
+        return set()
+    return set(json.loads(path.read_text(encoding="utf-8")))
+
+
+def _iter_file_chunks(
+    environment_root: Path, relative: str
+) -> list[tuple[EmbeddingEntry, str]]:
+    path = environment_root / relative
+    try:
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return []
+    out: list[tuple[EmbeddingEntry, str]] = []
+    for start, block in _retrieval_regions(lines):
+        text = "\n".join(block).strip()
+        if not text:
             continue
-        for start, block in _retrieval_regions(lines):
-            text = "\n".join(block).strip()
-            if not text:
-                continue
-            entries.append(
-                EmbeddingEntry(
-                    path=relative,
-                    line_start=start,
-                    line_end=start + len(block) - 1,
-                    quote=text[:2400],
-                )
-            )
-            texts.append(text)
-
-    if not entries:
-        return EmbeddingIndex(entries=[], vectors=np.zeros((0, 0), dtype=np.float32)), 0
-
-    # A full repo checkout, chunked at paragraph granularity (not the much
-    # sparser per-symbol granularity build_embedding_index uses), can
-    # produce many thousands of chunks -- confirmed live that a single
-    # unbatched embedder.embed(texts) call over ~4k texts did not return
-    # within 10 minutes and drove memory to several GB, while the SAME
-    # corpus embedded in _embed_entries' own 256-text batches (with visible
-    # per-batch progress) completed normally. Reusing that helper, not
-    # reimplementing batching here, keeps this file's batch size in sync
-    # with DEFAULT_SCORING_CONFIG.dense.embed_batch_size everywhere else in
-    # the codebase.
-    index = _embed_entries(entries, texts, embedder, verbose=True)
-    return index, len(entries)
-
-
-def _source_files_path(index_dir: Path) -> Path:
-    return index_dir / f"{_CACHE_KEY}.source_files.json"
+        entry = EmbeddingEntry(
+            path=relative, line_start=start, line_end=start + len(block) - 1, quote=text[:2400]
+        )
+        out.append((entry, text))
+    return out
 
 
 def _ensure_repo_dense_index(
     environment_root: Path, files: list[str], embedder: DenseEmbedder, index_dir: Path
 ) -> tuple[EmbeddingIndex, int]:
-    """Disk-cached per-repo dense index. Reuses the cached index ONLY when
-    the exact `files` universe used to BUILD it (persisted separately, in
-    `{key}.source_files.json`) equals the current one -- the same
-    stale-index guard already found necessary in
-    `AntDocumentAgent._ensure_indexed()`.
+    """Disk-cached per-repo dense index, built and extended incrementally.
 
-    Regression note: an earlier version compared `{entry.path for entry in
-    cached.entries}` to `set(files)` instead. That is NOT the same set --
-    `_build_repo_dense_index` only emits an entry for a file whose
-    `_retrieval_regions` produced at least one non-blank chunk, so any
-    file that is empty or whitespace-only (a common, unremarkable case --
-    e.g. a package's `__init__.py`) never appears as an entry path even
-    though it legitimately belongs to the file universe. That made the
-    equality check fail on EVERY call, silently re-embedding the whole
-    repo from scratch for every question against it -- confirmed live on
-    RepoProbe-Python's FieldStation42 repo, which re-ran its full
-    ~4,255-chunk embed multiple times before this was caught.
+    Which files are already embedded and flushed to disk is tracked
+    separately (`{key}.covered_files.json`), file-by-file -- not inferred
+    from `{entry.path for entry in cached.entries}`, since a file that is
+    empty or whitespace-only (e.g. a package's `__init__.py`) never
+    produces a `_retrieval_regions` chunk and so never appears as an entry
+    path even though it legitimately belongs to the file universe
+    (regression found live on RepoProbe-Python's FieldStation42 repo,
+    which silently re-embedded from scratch on every call until this was
+    tracked file-by-file instead of re-derived from entries).
+
+    Only files not yet in the covered set are embedded this call, in
+    bounded-size flushes (see `_FLUSH_CHUNK_BUDGET`) -- a repo whose file
+    universe grows (or whose previous embed run was interrupted partway
+    through) picks up exactly where it left off, never re-embedding
+    already-covered files.
     """
-    cached = EmbeddingIndex.load(index_dir, _CACHE_KEY)
-    source_files_path = _source_files_path(index_dir)
-    if cached is not None and source_files_path.exists():
-        stored_files = json.loads(source_files_path.read_text(encoding="utf-8"))
-        if set(stored_files) == set(files):
-            return cached, len(cached.entries)
-    index, n_chunks = _build_repo_dense_index(environment_root, files, embedder)
-    index.save(index_dir, _CACHE_KEY)
-    source_files_path.write_text(json.dumps(sorted(files)), encoding="utf-8")
-    return index, n_chunks
+    covered = _load_covered_files(index_dir)
+    remaining = [f for f in files if f not in covered]
+
+    loaded = EmbeddingIndex.load(index_dir, _CACHE_KEY)
+    index = loaded if loaded is not None else EmbeddingIndex(
+        entries=[], vectors=np.zeros((0, 0), dtype=np.float32)
+    )
+
+    if not remaining:
+        return index, len(index.entries)
+
+    print(
+        f"[dense] {len(covered)}/{len(files)} files already cached; "
+        f"embedding the remaining {len(remaining)} incrementally...",
+        flush=True,
+    )
+
+    pending_entries: list[EmbeddingEntry] = []
+    pending_texts: list[str] = []
+    pending_files: list[str] = []
+    live_embedder = embedder
+    flush_count = 0
+
+    def _flush() -> None:
+        nonlocal index, live_embedder, flush_count, pending_entries, pending_texts, pending_files
+        if not pending_entries and not pending_files:
+            return
+        if pending_entries:
+            # _embed_entries returns an EmbeddingIndex whose .entries IS the
+            # `pending_entries` list object passed in (not a copy) -- so
+            # `index`/`fresh` must never be built before pending_entries is
+            # rebound to a fresh list below. Rebinding (not .clear()-ing)
+            # pending_entries/pending_texts/pending_files is what keeps the
+            # just-saved fresh.entries from being wiped out along with the
+            # buffer once it's reset for the next group.
+            fresh = _embed_entries(pending_entries, pending_texts, live_embedder, verbose=True)
+            if index.entries:
+                index = EmbeddingIndex(
+                    entries=[*index.entries, *fresh.entries],
+                    vectors=(
+                        np.concatenate([index.vectors, fresh.vectors], axis=0)
+                        if index.vectors.size
+                        else fresh.vectors
+                    ),
+                )
+            else:
+                index = fresh
+            index.save(index_dir, _CACHE_KEY)
+        covered.update(pending_files)
+        _covered_files_path(index_dir).write_text(json.dumps(sorted(covered)), encoding="utf-8")
+        print(
+            f"[dense] flushed {len(pending_files)} files ({len(pending_entries)} chunks); "
+            f"{len(covered)}/{len(files)} files covered so far.",
+            flush=True,
+        )
+        pending_entries = []
+        pending_texts = []
+        pending_files = []
+        flush_count += 1
+        if flush_count % _RECYCLE_EMBEDDER_EVERY_N_FLUSHES == 0:
+            live_embedder = DenseEmbedder(embedder.model_name)
+
+    for relative in remaining:
+        for entry, text in _iter_file_chunks(environment_root, relative):
+            pending_entries.append(entry)
+            pending_texts.append(text)
+        pending_files.append(relative)
+        if len(pending_entries) >= _FLUSH_CHUNK_BUDGET:
+            _flush()
+    _flush()
+
+    return index, len(index.entries)
 
 
 class DenseRetrievalRepoAgent:

@@ -240,18 +240,27 @@ def _embed_entries(
     # part of dense indexing that takes more than a few seconds, and a
     # silent multi-minute call with no output is indistinguishable from a
     # hang.
+    #
+    # Each batch is converted to a compact float32 array immediately rather
+    # than accumulated as a growing list of Python lists-of-floats: holding
+    # thousands of chunks' vectors as nested Python objects before a single
+    # np.asarray() at the end costs far more memory than the same data as
+    # numpy arrays the whole way through (confirmed as a real contributor to
+    # the OOM crashes embedding large repos like adk-python, ~34k chunks --
+    # see DenseRetrievalRepoAgent's own incremental-flush fix for the other,
+    # larger half of that problem: onnxruntime's own inference-time arena).
     batch_size = DEFAULT_SCORING_CONFIG.dense.embed_batch_size
-    batches: list[list[float]] = []
+    batch_arrays: list[np.ndarray] = []
     for start in range(0, len(texts), batch_size):
         batch = embedder.embed(texts[start : start + batch_size])
-        batches.extend(batch)
+        batch_arrays.append(np.asarray(batch, dtype=np.float32))
         if verbose:
             print(
                 f"Embedded {min(start + batch_size, len(texts))}/{len(texts)} chunks.",
                 flush=True,
             )
 
-    vectors = np.asarray(batches, dtype=np.float32)
+    vectors = np.concatenate(batch_arrays, axis=0)
     norms = np.linalg.norm(vectors, axis=1, keepdims=True)
     norms[norms == 0] = 1.0
     return EmbeddingIndex(entries=entries, vectors=vectors / norms)

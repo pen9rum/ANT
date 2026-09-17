@@ -302,6 +302,64 @@ def test_retrieval_is_deterministic_across_repeated_calls(
     assert scores1 == scores2
 
 
+# --- incremental flush: bounded memory, resumable after a partial build ---
+
+
+def test_incremental_build_flushes_per_file_group_not_all_at_once(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from ant.agents import dense_retrieval_repo as m
+
+    monkeypatch.setattr(m, "_FLUSH_CHUNK_BUDGET", 1)
+    root = _write_repo(
+        tmp_path / "repo",
+        {"a.txt": "alpha content here.", "b.txt": "beta content here.", "c.txt": "gamma content here."},
+    )
+    index_dir = tmp_path / ".ant-dense" / "test_repo_bench" / "repo"
+    embedder = m.DenseEmbedder()
+    index, n = m._ensure_repo_dense_index(root, ["a.txt", "b.txt", "c.txt"], embedder, index_dir)
+    assert n == 3
+    covered = m._load_covered_files(index_dir)
+    assert covered == {"a.txt", "b.txt", "c.txt"}
+    # The on-disk index reflects every flush, not just the last one.
+    saved = m.EmbeddingIndex.load(index_dir, m._CACHE_KEY)
+    assert saved is not None
+    assert len(saved.entries) == 3
+
+
+def test_incremental_build_resumes_only_the_uncovered_files_after_a_partial_run(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from ant.agents import dense_retrieval_repo as m
+
+    root = _write_repo(
+        tmp_path / "repo", {"a.txt": "alpha content here.", "b.txt": "beta content here."}
+    )
+    index_dir = tmp_path / ".ant-dense"
+    embedder = m.DenseEmbedder()
+
+    # Simulate a crash after "a.txt" was already flushed but before "b.txt":
+    # mark only a.txt as covered and save a partial index for it alone.
+    partial_index, _ = m._ensure_repo_dense_index(root, ["a.txt"], embedder, index_dir)
+    assert m._load_covered_files(index_dir) == {"a.txt"}
+
+    embed_calls: list[list[str]] = []
+    real_embed = m.DenseEmbedder.embed
+
+    def _counting_embed(self, texts):
+        embed_calls.append(list(texts))
+        return real_embed(self, texts)
+
+    monkeypatch.setattr(m.DenseEmbedder, "embed", _counting_embed)
+
+    index, n = m._ensure_repo_dense_index(root, ["a.txt", "b.txt"], embedder, index_dir)
+    assert n == 2
+    assert {e.path for e in index.entries} == {"a.txt", "b.txt"}
+    # Only b.txt's text should have been embedded -- a.txt's already-covered
+    # chunk must not be re-embedded.
+    assert all("beta" in text for call in embed_calls for text in call)
+
+
 def test_agent_is_registered() -> None:
     from ant.evaluation_suite.registry import get_agent
 
