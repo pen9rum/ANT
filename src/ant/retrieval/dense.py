@@ -230,7 +230,12 @@ class EmbeddingIndex:
 
 
 def _embed_entries(
-    entries: list[EmbeddingEntry], texts: list[str], embedder: DenseEmbedder, *, verbose: bool
+    entries: list[EmbeddingEntry],
+    texts: list[str],
+    embedder: DenseEmbedder,
+    *,
+    verbose: bool,
+    batch_size: int | None = None,
 ) -> EmbeddingIndex:
     if not entries:
         return EmbeddingIndex(entries=[], vectors=np.zeros((0, 0), dtype=np.float32))
@@ -249,7 +254,17 @@ def _embed_entries(
     # the OOM crashes embedding large repos like adk-python, ~34k chunks --
     # see DenseRetrievalRepoAgent's own incremental-flush fix for the other,
     # larger half of that problem: onnxruntime's own inference-time arena).
-    batch_size = DEFAULT_SCORING_CONFIG.dense.embed_batch_size
+    #
+    # batch_size defaults to the shared config (unchanged for every other
+    # caller -- per-worker territory embedding stays at 256, it's not the
+    # thing that OOM'd) but is overridable: a live isolated repro showed
+    # onnxruntime's own peak RSS for one inference call scales with batch
+    # size far more than the arena_extend_strategy setting alone controls --
+    # 256 texts/batch plateaued at ~7.8-9GB even with that setting, while 32
+    # texts/batch plateaued under 800MB on the same corpus. Large-repo
+    # embedding (DenseRetrievalRepoAgent) passes a smaller batch_size for
+    # exactly this reason.
+    batch_size = batch_size or DEFAULT_SCORING_CONFIG.dense.embed_batch_size
     batch_arrays: list[np.ndarray] = []
     for start in range(0, len(texts), batch_size):
         batch = embedder.embed(texts[start : start + batch_size])

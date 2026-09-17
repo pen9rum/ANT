@@ -63,6 +63,7 @@ would no longer isolate what this baseline is meant to isolate.
 from __future__ import annotations
 
 import json
+import os
 import time
 from pathlib import Path
 
@@ -103,6 +104,16 @@ _FLUSH_CHUNK_BUDGET = 2000
 # memory across flushes even though each flush's own working set is
 # bounded. A fresh session forces the old arena to actually be released.
 _RECYCLE_EMBEDDER_EVERY_N_FLUSHES = 3
+
+# Per-inference-call batch size for this large-repo path specifically --
+# NOT the shared DEFAULT_SCORING_CONFIG.dense.embed_batch_size (256, still
+# used everywhere else, e.g. per-worker territory embedding, which never
+# OOM'd). A live isolated repro showed onnxruntime's own peak RSS for one
+# call scales with batch size far more than the arena strategy setting
+# alone controls: 256 texts/batch plateaued at ~7.8-9GB even with
+# kSameAsRequested, while 32 texts/batch plateaued under 800MB on the
+# same synthetic corpus.
+_REPO_EMBED_BATCH_SIZE = int(os.getenv("ANT_REPO_EMBED_BATCH_SIZE", "32"))
 
 
 def _covered_files_path(index_dir: Path) -> Path:
@@ -192,7 +203,13 @@ def _ensure_repo_dense_index(
             # pending_entries/pending_texts/pending_files is what keeps the
             # just-saved fresh.entries from being wiped out along with the
             # buffer once it's reset for the next group.
-            fresh = _embed_entries(pending_entries, pending_texts, live_embedder, verbose=True)
+            fresh = _embed_entries(
+                pending_entries,
+                pending_texts,
+                live_embedder,
+                verbose=True,
+                batch_size=_REPO_EMBED_BATCH_SIZE,
+            )
             if index.entries:
                 index = EmbeddingIndex(
                     entries=[*index.entries, *fresh.entries],
