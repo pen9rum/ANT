@@ -40,10 +40,10 @@ export TMPDIR="$REPO_ROOT/.cache/fastembed_tmp"
 # arena and the tokenizer's own rayon pool both oversubscribe every core by
 # default; on a shared/allocation-limited node that's wasteful even when
 # --cpus-per-task itself is generous.
-export ANT_EMBEDDING_THREADS="${ANT_EMBEDDING_THREADS:-8}"
-export RAYON_NUM_THREADS="${RAYON_NUM_THREADS:-8}"
+export ANT_EMBEDDING_THREADS="${ANT_EMBEDDING_THREADS:-12}"
+export RAYON_NUM_THREADS="${RAYON_NUM_THREADS:-12}"
 export TOKENIZERS_PARALLELISM="${TOKENIZERS_PARALLELISM:-false}"
-export OMP_NUM_THREADS="${OMP_NUM_THREADS:-8}"
+export OMP_NUM_THREADS="${OMP_NUM_THREADS:-12}"
 # Per-inference-call batch size for large-repo embedding -- the arena
 # strategy alone did not bound peak memory on the smaller local machine
 # this was diagnosed on (see commit 3366cd3); 32 plateaued under 1GB
