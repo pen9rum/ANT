@@ -144,17 +144,21 @@ MODALITY_SUPPORT: dict[Modality, SupportStatus] = {
     Modality.TEXT: SupportStatus.SUPPORTED,
     Modality.TABULAR: SupportStatus.SUPPORTED,
     Modality.ARCHIVE: SupportStatus.SUPPORTED,
-    # PDF text extraction is available only if PyMuPDF happens to be
-    # importable. It is NOT a declared project dependency, so this entry
-    # is resolved at access time by `pdf_support_status()` rather than
-    # frozen here -- see that function for why a hard dependency was not
-    # added in an engineering-only pass.
-    Modality.PDF: SupportStatus.NOT_IMPLEMENTED,
-    # .docx/.pptx are ZIP+XML and genuinely extractable with the stdlib,
-    # but doing it correctly (paragraph/run boundaries, tables, slide
-    # ordering, speaker notes) is real work for 2 of 38 validation
-    # attachments. Deliberately deferred and declared, not half-built.
-    Modality.OFFICE_DOC: SupportStatus.NOT_IMPLEMENTED,
+    # PDF is now a DECLARED capability of this substrate, not a lucky
+    # import. PyMuPDF is pinned in `pyproject.toml`'s `gaia` extra, so
+    # "PDF works" is a property of the declared environment rather than
+    # of whichever machine happened to run the sweep. A missing PyMuPDF
+    # is therefore an ENVIRONMENT-PROVISIONING failure
+    # (`MissingSubstrateDependencyError`), categorically different from
+    # a capability gap: the remediation is `pip install`, not a design
+    # decision. `check_substrate_dependencies()` surfaces it up front so
+    # a sweep cannot start half-capable.
+    Modality.PDF: SupportStatus.SUPPORTED,
+    # .docx/.pptx are OOXML (ZIP + XML) and are read here with the
+    # stdlib only, exactly as `_read_xlsx` already reads .xlsx -- no new
+    # dependency, fully deterministic, no LLM anywhere. Scope and known
+    # limits are documented on `_read_docx_text`/`_read_pptx_text`.
+    Modality.OFFICE_DOC: SupportStatus.SUPPORTED,
     # Vision and ASR are the fairness line. Supporting either would mean
     # handing some method a perception pipeline; unless it is wired
     # identically into the shared registry for every method, it is a
@@ -190,6 +194,30 @@ class UnsupportedModalityError(GaiaSubstrateError):
         super().__init__(message)
 
 
+class MissingSubstrateDependencyError(GaiaSubstrateError):
+    """A modality this substrate DECLARES as supported could not be read
+    because its pinned third-party dependency is not installed.
+
+    Deliberately NOT an `UnsupportedModalityError`. That distinction is
+    the whole point: `UnsupportedModalityError` says "this substrate has
+    decided, for fairness, that nobody gets this capability";
+    this says "the capability exists and is declared, and this machine is
+    provisioned wrongly". Conflating them would let a `pip install` that
+    someone forgot show up in a results table as a principled coverage
+    ceiling.
+    """
+
+    def __init__(self, modality: Modality, package: str, extra: str = "gaia") -> None:
+        self.modality = modality
+        self.package = package
+        super().__init__(
+            f"GAIA modality {modality.value!r} is SUPPORTED by this substrate but its "
+            f"pinned dependency {package!r} is not installed in this environment. "
+            f"Install it with `pip install 'ant-codebase[{extra}]'`. This is an "
+            f"environment-provisioning failure, not a capability gap."
+        )
+
+
 class AttachmentMissingError(GaiaSubstrateError):
     """The task declares a `file_name` but the file is not on disk."""
 
@@ -202,29 +230,60 @@ def modality_for(file_name: str) -> Modality:
     return EXTENSION_MODALITY.get(Path(file_name).suffix.lower(), Modality.UNKNOWN)
 
 
-def pdf_support_status() -> SupportStatus:
-    """PDF support is conditional on an OPTIONAL import, resolved live.
-
-    PyMuPDF is present in some of this project's environments but is not
-    in `pyproject.toml`'s dependency set, and this pass deliberately does
-    not add a new hard dependency (adding one changes what every other
-    substrate's CI installs, which is out of scope for a GAIA-only
-    engineering pass). Resolving it dynamically means the capability is
-    reported honestly per-environment instead of being claimed in the
-    abstract -- and because this is a SUBSTRATE-level function, whatever
-    it returns applies identically to every method.
-    """
-    try:
-        import fitz  # noqa: F401  (PyMuPDF)
-    except ImportError:
-        return SupportStatus.NOT_IMPLEMENTED
-    return SupportStatus.SUPPORTED
+#: Modality -> the pinned distribution that implements it. Only PDF has
+#: one: text, tabular, archive and office-doc reading are all stdlib.
+#: Kept as data so `check_substrate_dependencies()` and the manifest
+#: builder agree by construction rather than by two parallel lists.
+MODALITY_DEPENDENCIES: dict[Modality, tuple[str, str]] = {
+    # modality -> (import name, distribution name)
+    Modality.PDF: ("pymupdf", "pymupdf"),
+}
 
 
 def support_status_for(modality: Modality) -> SupportStatus:
-    if modality is Modality.PDF:
-        return pdf_support_status()
+    """The DECLARED support status. Note what this deliberately does NOT
+    do any more: it no longer probes the environment.
+
+    The previous version resolved PDF by attempting an import, which
+    made the substrate's declared capability set vary by machine -- and
+    therefore made a frozen subset non-reproducible, since a manifest
+    built on a machine without PyMuPDF would silently exclude different
+    tasks. Support is now a fixed property of the code; whether this
+    machine can *deliver* it is a separate question answered by
+    `check_substrate_dependencies()`.
+    """
     return MODALITY_SUPPORT.get(modality, SupportStatus.UNSUPPORTED)
+
+
+def check_substrate_dependencies() -> dict[str, str]:
+    """Preflight: for every modality declared SUPPORTED, is its pinned
+    dependency actually importable here?
+
+    Returns `{distribution: version}` for everything present and raises
+    `MissingSubstrateDependencyError` on the first thing that is not.
+    Call this before freezing a manifest or starting a sweep, so a
+    provisioning gap fails at minute zero instead of surfacing as a
+    handful of mysteriously wrong answers.
+    """
+    found: dict[str, str] = {}
+    for modality, (import_name, distribution) in MODALITY_DEPENDENCIES.items():
+        if MODALITY_SUPPORT.get(modality) is not SupportStatus.SUPPORTED:
+            continue
+        try:
+            __import__(import_name)
+        except ImportError as exc:
+            raise MissingSubstrateDependencyError(modality, distribution) from exc
+        found[distribution] = _installed_version(distribution)
+    return found
+
+
+def _installed_version(distribution: str) -> str:
+    from importlib.metadata import PackageNotFoundError, version
+
+    try:
+        return version(distribution)
+    except PackageNotFoundError:  # pragma: no cover - defensive
+        return "unknown"
 
 
 def require_supported(modality: Modality, detail: str = "") -> None:
@@ -404,10 +463,24 @@ class GaiaEnvironment:
             # through read_text would hand back either mojibake (.xlsx is
             # a ZIP) or an unlabelled CSV blob. Redirect explicitly.
             return self.read_table().to_text()[:max_chars]
-        if modality is Modality.PDF:
-            require_supported(modality, "Install PyMuPDF to enable PDF text extraction.")
-            return _read_pdf_text(path)[:max_chars]
         require_supported(modality)
+        if modality is Modality.PDF:
+            return _read_pdf_text(path)[:max_chars]
+        if modality is Modality.OFFICE_DOC:
+            suffix = path.suffix.lower()
+            if suffix == ".docx":
+                return _read_docx_text(path)[:max_chars]
+            if suffix == ".pptx":
+                return _read_pptx_text(path)[:max_chars]
+            # .doc/.ppt are the pre-2007 OLE binary containers -- a
+            # different format entirely, not a variant of OOXML. Declared
+            # rather than guessed at, exactly as .xls is in read_table().
+            raise UnsupportedModalityError(
+                modality,
+                SupportStatus.NOT_IMPLEMENTED,
+                f"{suffix!r} is a legacy OLE binary Office container; only the OOXML "
+                "formats .docx and .pptx are read here.",
+            )
         if modality is Modality.ARCHIVE:
             return "\n".join(self.list_archive())
         return path.read_text(encoding="utf-8", errors="replace")[:max_chars]
@@ -444,10 +517,151 @@ class GaiaEnvironment:
 
 
 def _read_pdf_text(path: Path) -> str:
-    import fitz  # PyMuPDF; presence already checked by require_supported.
+    """PDF -> text, via PyMuPDF (pinned in the `gaia` extra).
 
-    with fitz.open(path) as document:
-        return "\n".join(page.get_text() for page in document)
+    Imported as `pymupdf`, not the legacy `fitz` alias: PyMuPDF >= 1.24
+    emits a deprecation warning for `import fitz` and the alias is slated
+    for removal, so pinning the modern name keeps this from breaking on a
+    future bump.
+
+    Page text is joined with a form feed so a downstream reader can tell
+    where a page boundary was -- GAIA PDF questions are frequently "on
+    page N ...", and collapsing the boundary throws that signal away.
+    Extraction is PyMuPDF's default reading order; no OCR is attempted,
+    so a SCANNED (image-only) PDF yields empty or near-empty text rather
+    than silently wrong text. That is the honest failure: OCR is a vision
+    capability and vision is UNSUPPORTED in this substrate for every
+    method equally.
+    """
+    try:
+        import pymupdf
+    except ImportError as exc:
+        raise MissingSubstrateDependencyError(Modality.PDF, "pymupdf") from exc
+
+    with pymupdf.open(path) as document:
+        return "\f".join(page.get_text() for page in document)
+
+
+# OOXML namespaces. `w:` is WordprocessingML, `a:`/`p:` are
+# DrawingML/PresentationML -- .pptx keeps its text inside DrawingML
+# shapes, which is why the text element there is `a:t` and not `p:t`.
+_WORD_NS = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
+_DRAWING_NS = "{http://schemas.openxmlformats.org/drawingml/2006/main}"
+
+
+def _read_docx_text(path: Path) -> str:
+    """Minimal, dependency-free .docx reader over the OOXML container.
+
+    Same bar and same technique as `_read_xlsx`: `zipfile` +
+    `xml.etree`, no `python-docx`, fully deterministic, zero LLM. A
+    .docx is a ZIP whose `word/document.xml` holds a flat sequence of
+    `<w:p>` paragraphs; the visible characters of a paragraph are its
+    descendant `<w:t>` runs concatenated in document order.
+
+    SCOPE, stated rather than discovered later:
+      * The main document body only. Headers, footers, footnotes,
+        endnotes and comments live in separate parts and are NOT read.
+      * Table cells ARE included -- a `<w:tbl>` contains ordinary
+        `<w:p>` paragraphs, so they fall out of the same traversal -- but
+        row/column GEOMETRY is lost; a table reads as consecutive lines.
+      * `<w:tab>` becomes a tab and `<w:br>` a newline, so simple
+        layout survives. Numbering, styles, revision marks and field
+        codes are not interpreted.
+      * Tracked-change deletions (`<w:delText>`) are NOT included, so
+        the text read is the document as it currently stands.
+    """
+    with zipfile.ZipFile(path) as archive:
+        if "word/document.xml" not in set(archive.namelist()):
+            raise UnsupportedModalityError(
+                Modality.OFFICE_DOC,
+                SupportStatus.NOT_IMPLEMENTED,
+                f"No `word/document.xml` part inside {path.name}; this is not a .docx.",
+            )
+        root = ElementTree.fromstring(archive.read("word/document.xml"))
+
+    lines: list[str] = []
+    for paragraph in root.iter(f"{_WORD_NS}p"):
+        lines.append(_ooxml_paragraph_text(paragraph, _WORD_NS))
+    return "\n".join(lines)
+
+
+def _ooxml_paragraph_text(paragraph: ElementTree.Element, namespace: str) -> str:
+    pieces: list[str] = []
+    for node in paragraph.iter():
+        tag = node.tag
+        if tag == f"{namespace}t":
+            pieces.append(node.text or "")
+        elif tag == f"{namespace}tab":
+            pieces.append("\t")
+        elif tag == f"{namespace}br" or tag == f"{namespace}cr":
+            pieces.append("\n")
+    return "".join(pieces)
+
+
+#: Case-insensitive because the two part families spell the stem
+#: differently: `ppt/slides/slide7.xml` but `ppt/notesSlides/notesSlide7.xml`.
+#: A case-sensitive pattern silently matched slides and missed every set
+#: of speaker notes -- caught by a fixture whose first slide has notes.
+_SLIDE_NUMBER_RE = re.compile(r"slide(\d+)\.xml$", re.IGNORECASE)
+
+
+def _read_pptx_text(path: Path) -> str:
+    """Minimal, dependency-free .pptx reader over the OOXML container.
+
+    A .pptx keeps one XML part per slide at `ppt/slides/slideN.xml`, and
+    each slide's visible text lives in DrawingML `<a:p>` paragraphs
+    inside shapes. Speaker notes live in parallel parts at
+    `ppt/notesSlides/notesSlideN.xml` and ARE read, because a GAIA
+    question about a deck can just as easily be about the notes.
+
+    SLIDE ORDER: parts are sorted by the NUMERIC suffix of their
+    filename, not lexicographically -- `slide10.xml` sorts after
+    `slide9.xml`, which a plain string sort gets wrong. That matters:
+    "what is on the third slide" is a real GAIA question shape.
+
+    KNOWN LIMITS: the presentation's own `presentation.xml` slide-id
+    order is not consulted, so a deck whose slides were reordered
+    without renaming its parts would be read in file order. Shape
+    geometry, z-order, grouping, charts, SmartArt and embedded media are
+    not interpreted; a table reads as consecutive lines.
+    """
+    with zipfile.ZipFile(path) as archive:
+        names = archive.namelist()
+        slides = sorted(
+            (name for name in names if _SLIDE_NUMBER_RE.search(name) and "/slides/" in name),
+            key=lambda name: int(_SLIDE_NUMBER_RE.search(name).group(1)),  # type: ignore[union-attr]
+        )
+        notes = {
+            int(_SLIDE_NUMBER_RE.search(name).group(1)): name  # type: ignore[union-attr]
+            for name in names
+            if _SLIDE_NUMBER_RE.search(name) and "/notesSlides/" in name
+        }
+        if not slides:
+            raise UnsupportedModalityError(
+                Modality.OFFICE_DOC,
+                SupportStatus.NOT_IMPLEMENTED,
+                f"No `ppt/slides/slideN.xml` parts inside {path.name}; this is not a .pptx.",
+            )
+
+        blocks: list[str] = []
+        for name in slides:
+            number = int(_SLIDE_NUMBER_RE.search(name).group(1))  # type: ignore[union-attr]
+            body = _drawingml_text(archive.read(name))
+            block = f"--- slide {number} ---\n{body}"
+            if number in notes:
+                note_text = _drawingml_text(archive.read(notes[number]))
+                if note_text.strip():
+                    block = f"{block}\n[notes] {note_text}"
+            blocks.append(block)
+    return "\n".join(blocks)
+
+
+def _drawingml_text(payload: bytes) -> str:
+    root = ElementTree.fromstring(payload)
+    return "\n".join(
+        _ooxml_paragraph_text(paragraph, _DRAWING_NS)
+        for paragraph in root.iter(f"{_DRAWING_NS}p")
+    )
 
 
 def _read_delimited(path: Path, suffix: str, max_rows: int, max_cols: int) -> TableView:

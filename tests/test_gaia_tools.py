@@ -79,7 +79,7 @@ def test_declared_tool_surface_is_the_five_primitives(registry: GaiaToolRegistry
         "open_url",
         "inspect_file",
         "inspect_table",
-        "compute",
+        "run_python",
     }
 
 
@@ -163,14 +163,14 @@ def test_call_log_is_byte_identical_across_identical_runs(tmp_path: Path):
         )
         reg.search("widgets", limit=2)
         reg.inspect_table(max_rows=3)
-        reg.compute("2 + 2")
+        reg.run_python("2 + 2")
         return serialize_call_log(reg)
 
     assert run() == run()
 
 
 def test_call_log_contains_no_timestamp_or_duration_fields(registry: GaiaToolRegistry):
-    registry.compute("1 + 1")
+    registry.run_python("1 + 1")
     entry = registry.log_as_dicts()[0]
     assert set(entry) == {"seq", "tool", "arguments", "ok", "summary", "error"}
 
@@ -187,44 +187,88 @@ def test_a_failed_tool_call_is_logged_before_the_exception_propagates(tmp_path: 
 
 def test_tool_call_count_tracks_the_log(registry: GaiaToolRegistry):
     assert registry.tool_call_count() == 0
-    registry.compute("3 * 3")
+    registry.run_python("3 * 3")
     assert registry.tool_call_count() == 1
 
 
 # --------------------------------------------------------------------
-# compute()
+# run_python() -- the sandboxed execution primitive
+#
+# The sandbox's OWN isolation guarantees are tested in
+# tests/test_gaia_sandbox.py. What is tested HERE is the registry's
+# contract over it: that failures are reported rather than raised, that
+# the call log stays honest, and that the execution budget belongs to
+# the registry rather than the caller (a fairness property).
 # --------------------------------------------------------------------
 
 
 @pytest.mark.parametrize(
-    ("expression", "expected"),
+    ("code", "expected"),
     [("2 + 2", "4"), ("10 / 4", "2.5"), ("2 ** 10", "1024"), ("(3 + 4) * 2", "14")],
 )
-def test_compute_evaluates_arithmetic(registry: GaiaToolRegistry, expression, expected):
-    assert registry.compute(expression) == expected
+def test_run_python_evaluates_arithmetic(registry: GaiaToolRegistry, code, expected):
+    assert registry.run_python(code) == expected
 
 
-@pytest.mark.parametrize(
-    "expression",
-    [
-        "__import__('os').system('echo hi')",
-        "open('/etc/passwd').read()",
-        "some_name",
-        "[x for x in range(3)]",
-        "(1).__class__",
-    ],
-)
-def test_compute_refuses_anything_beyond_arithmetic(registry: GaiaToolRegistry, expression):
-    """compute() is explicitly NOT a Python sandbox -- it evaluates a
-    restricted grammar so that a model-chosen string can never become an
-    arbitrary-code-execution primitive."""
-    with pytest.raises((ValueError, SyntaxError)):
-        registry.compute(expression)
+def test_run_python_executes_real_programs_not_just_expressions(registry: GaiaToolRegistry):
+    """This is the capability the restricted-AST `compute()` did not
+    have and is the reason it was replaced."""
+    output = registry.run_python(
+        "import statistics\nvalues = [3, 1, 4, 1, 5, 9, 2, 6]\nstatistics.median(values)"
+    )
+    assert "3.5" in output
 
 
-def test_compute_refuses_an_expression_that_would_hang_the_process(registry: GaiaToolRegistry):
-    with pytest.raises(ValueError, match="ceiling"):
-        registry.compute("9 ** 999999")
+def test_run_python_reports_failure_instead_of_raising(registry: GaiaToolRegistry):
+    """An agent must be able to READ its own failure to correct itself;
+    raising would turn a debugging loop into a dead end."""
+    output = registry.run_python("1 / 0")
+    assert "ZeroDivisionError" in output
+
+
+def test_a_failed_program_is_logged_as_a_failed_call(registry: GaiaToolRegistry):
+    """Reported-not-raised must NOT mean recorded-as-success."""
+    registry.run_python("1 / 0")
+    entry = registry.log_as_dicts()[0]
+    assert entry["ok"] is False
+    assert entry["error"]
+
+
+def test_run_python_is_blocked_from_the_repository_and_the_network(
+    registry: GaiaToolRegistry,
+):
+    """A smoke check that the registry really is going through the
+    sandbox rather than some in-process shortcut. The exhaustive escape
+    battery lives in tests/test_gaia_sandbox.py."""
+    assert "SandboxDenied" in registry.run_python("import socket")
+    assert "SandboxDenied" in registry.run_python("import os\nos.system('echo hi')")
+
+
+def test_run_python_cannot_reach_the_tasks_attachment(registry: GaiaToolRegistry):
+    """If it could, it would be a way around the modality policy: a
+    method could read an image's bytes and gain a perception capability
+    the substrate withholds from every method equally."""
+    path = registry.environment.attachment_path()
+    output = registry.run_python(f"open({str(path)!r}).read()")
+    assert "SandboxDenied" in output
+
+
+def test_the_registry_owns_the_execution_budget_not_the_caller(registry: GaiaToolRegistry):
+    """A caller-chosen timeout would mean "ANTMAN got 60s and the
+    baseline got 10s" could happen silently. The limits are registry
+    fields, and run_python() takes no budget argument."""
+    import inspect
+
+    parameters = set(inspect.signature(GaiaToolRegistry.run_python).parameters)
+    assert parameters == {"self", "code"}
+    assert registry.python_timeout_seconds > 0
+    assert registry.python_memory_bytes > 0
+
+
+def test_both_shapes_share_one_execution_budget(registry: GaiaToolRegistry):
+    react, antman = ReActShapedAgent(registry), AntmanShapedAgent(registry)
+    assert react.registry.python_timeout_seconds == antman.registry.python_timeout_seconds
+    assert react.registry.python_memory_bytes == antman.registry.python_memory_bytes
 
 
 # --------------------------------------------------------------------
@@ -287,10 +331,10 @@ def test_both_shapes_share_one_call_log(registry: GaiaToolRegistry):
     shape makes a call, the same ledger records it."""
     react = ReActShapedAgent(registry)
     antman = AntmanShapedAgent(registry)
-    react.step("compute", expression="1 + 1")
+    react.step("run_python", code="1 + 1")
     antman.coordinator_tool().search("stations", files=[], limit=2)
     tools_used = [entry["tool"] for entry in registry.log_as_dicts()]
-    assert "compute" in tools_used
+    assert "run_python" in tools_used
     assert "search" in tools_used
 
 

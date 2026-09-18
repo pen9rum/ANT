@@ -15,13 +15,16 @@ import pytest
 
 from ant.evaluation_suite.gaia_fixtures import build_fixture_attachment, materialize_all
 from ant.evaluation_suite.gaia_scope import (
+    MODALITY_DEPENDENCIES,
     AttachmentMissingError,
     GaiaEnvironment,
+    MissingSubstrateDependencyError,
     Modality,
     NoAttachmentError,
     SupportStatus,
     TerritoryKind,
     UnsupportedModalityError,
+    check_substrate_dependencies,
     derive_territories,
     modality_for,
     support_status_for,
@@ -81,9 +84,71 @@ def test_image_audio_and_video_are_declared_unsupported():
         assert support_status_for(modality) is SupportStatus.UNSUPPORTED
 
 
-def test_text_tabular_and_archive_are_supported():
-    for modality in (Modality.TEXT, Modality.TABULAR, Modality.ARCHIVE):
+def test_text_tabular_archive_pdf_and_office_doc_are_supported():
+    for modality in (
+        Modality.TEXT,
+        Modality.TABULAR,
+        Modality.ARCHIVE,
+        Modality.PDF,
+        Modality.OFFICE_DOC,
+    ):
         assert support_status_for(modality) is SupportStatus.SUPPORTED
+
+
+def test_support_status_is_a_property_of_the_code_not_of_the_environment(monkeypatch):
+    """PDF support used to be resolved by ATTEMPTING an import, which
+    made the declared capability set vary by machine and therefore made a
+    frozen subset non-reproducible. Pin the new contract: hiding the
+    dependency changes nothing about what is DECLARED supported."""
+    import builtins
+
+    real_import = builtins.__import__
+
+    def refuse_pymupdf(name, *args, **kwargs):
+        if name == "pymupdf":
+            raise ImportError("simulated missing dependency")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", refuse_pymupdf)
+    assert support_status_for(Modality.PDF) is SupportStatus.SUPPORTED
+
+
+def test_a_missing_pinned_dependency_is_a_provisioning_error_not_a_capability_gap(
+    attachments: Path, monkeypatch
+):
+    """`MissingSubstrateDependencyError` must NOT be an
+    `UnsupportedModalityError`. Conflating them would let a forgotten
+    `pip install` show up in a results table as a principled coverage
+    ceiling."""
+    import builtins
+
+    real_import = builtins.__import__
+
+    def refuse_pymupdf(name, *args, **kwargs):
+        if name == "pymupdf":
+            raise ImportError("simulated missing dependency")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", refuse_pymupdf)
+    with pytest.raises(MissingSubstrateDependencyError) as excinfo:
+        env_for(attachments, "report.pdf").read_text()
+    assert not isinstance(excinfo.value, UnsupportedModalityError)
+    assert "pymupdf" in str(excinfo.value)
+    with pytest.raises(MissingSubstrateDependencyError):
+        check_substrate_dependencies()
+
+
+def test_check_substrate_dependencies_reports_resolved_versions():
+    found = check_substrate_dependencies()
+    assert "pymupdf" in found
+    assert found["pymupdf"]
+
+
+def test_only_pdf_needs_a_third_party_reader():
+    """.xlsx/.csv/.docx/.pptx are stdlib-only by design, so the declared
+    dependency map must stay a single entry -- if it grows, the `gaia`
+    extra in pyproject.toml has silently drifted."""
+    assert set(MODALITY_DEPENDENCIES) == {Modality.PDF}
 
 
 # --------------------------------------------------------------------
@@ -261,3 +326,187 @@ def test_gaia_environment_has_no_slot_for_question_or_answer():
     """The environment is built from a directory and a filename only."""
     parameters = set(inspect.signature(GaiaEnvironment.__init__).parameters)
     assert parameters == {"self", "task_root", "file_name"}
+
+
+# --------------------------------------------------------------------
+# PDF / DOCX / PPTX -- the modalities promoted from conditional/not
+# implemented to SUPPORTED in this pass
+# --------------------------------------------------------------------
+
+
+def test_pdf_attachment_extracts_real_text(attachments: Path):
+    text = env_for(attachments, "report.pdf").read_text()
+    assert "Quorvian Survey Report" in text
+
+
+def test_pdf_pages_are_separated_by_a_form_feed(tmp_path: Path):
+    """GAIA PDF questions are frequently "on page N ...", so the page
+    boundary is signal and must survive extraction."""
+    import pymupdf
+
+    path = tmp_path / "two_pages.pdf"
+    document = pymupdf.open()
+    for body in ("ALPHA PAGE", "BETA PAGE"):
+        page = document.new_page()
+        page.insert_text((72, 720), body)
+    document.save(path)
+    document.close()
+
+    text = env_for(tmp_path, "two_pages.pdf").read_text()
+    assert "\f" in text
+    assert text.split("\f")[0].strip().startswith("ALPHA")
+    assert text.split("\f")[1].strip().startswith("BETA")
+
+
+def test_pdf_is_read_through_the_modern_import_name(attachments: Path, monkeypatch):
+    """`import fitz` is deprecated upstream and slated for removal. If
+    this substrate ever falls back to it, this test fails rather than a
+    future PyMuPDF bump failing a whole sweep."""
+    import builtins
+
+    real_import = builtins.__import__
+
+    def refuse_fitz(name, *args, **kwargs):
+        if name == "fitz":
+            raise AssertionError("gaia_scope must import `pymupdf`, not the legacy `fitz` alias")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", refuse_fitz)
+    assert env_for(attachments, "report.pdf").read_text()
+
+
+def test_docx_attachment_extracts_paragraphs_in_order(attachments: Path):
+    text = env_for(attachments, "charter.docx").read_text()
+    lines = [line for line in text.splitlines() if line.strip()]
+    assert lines[0].strip() == "Quorvian Cartographers Guild Charter"
+    assert "Article One" in lines[1]
+    assert "Article Two" in lines[2]
+
+
+def test_docx_reassembles_text_split_across_runs(attachments: Path):
+    """Real Word files fragment a sentence across `<w:r>` runs at every
+    formatting change; the fixture does the same. A reader that took
+    only the first `<w:t>` per paragraph would truncate silently."""
+    text = env_for(attachments, "charter.docx").read_text()
+    assert "the Guild shall survey every province of Quorvia once each decade" in text
+
+
+def test_docx_includes_table_cell_text(attachments: Path):
+    assert "Survey cadence: 10 years" in env_for(attachments, "charter.docx").read_text()
+
+
+def test_docx_reading_needs_no_third_party_library(attachments: Path, monkeypatch):
+    """Same stdlib-only bar `_read_xlsx` already meets: `python-docx`
+    must never become a hidden requirement."""
+    import builtins
+
+    real_import = builtins.__import__
+
+    def refuse(name, *args, **kwargs):
+        if name in ("docx", "pptx", "lxml"):
+            raise AssertionError(f"docx/pptx reading must be stdlib-only, imported {name!r}")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", refuse)
+    assert env_for(attachments, "charter.docx").read_text()
+    assert env_for(attachments, "roadmap.pptx").read_text()
+
+
+def test_pptx_slides_are_ordered_numerically_not_lexicographically(attachments: Path):
+    """The bug this pins: `slide10.xml` sorts BEFORE `slide9.xml` as a
+    string. "What is on the third slide" is a real GAIA question shape,
+    so a string sort silently renumbers the deck."""
+    text = env_for(attachments, "roadmap.pptx").read_text()
+    order = [line for line in text.splitlines() if line.startswith("--- slide ")]
+    numbers = [int(line.split()[2]) for line in order]
+    assert numbers == sorted(numbers)
+    assert numbers == list(range(1, len(numbers) + 1))
+    assert text.index("--- slide 9 ---") < text.index("--- slide 10 ---")
+
+
+def test_pptx_includes_speaker_notes(attachments: Path):
+    """Notes live in `ppt/notesSlides/notesSlideN.xml` -- note the
+    CAPITAL S, which a case-sensitive part matcher misses entirely."""
+    text = env_for(attachments, "roadmap.pptx").read_text()
+    assert "[notes] Opening slide; keep to thirty seconds." in text
+    assert "[notes] Closing slide; the sealing ceremony is in Vandermeer." in text
+
+
+def test_pptx_notes_attach_to_the_right_slide(attachments: Path):
+    text = env_for(attachments, "roadmap.pptx").read_text()
+    first_block = text.split("--- slide 2 ---")[0]
+    assert "Opening slide" in first_block
+    assert "Closing slide" not in first_block
+
+
+def test_legacy_binary_office_extensions_are_not_claimed_as_supported():
+    """.doc/.ppt are OLE compound files, not OOXML. They are deliberately
+    absent from `EXTENSION_MODALITY`, so they classify UNKNOWN and are
+    refused -- rather than being mapped to OFFICE_DOC and then failing
+    deep inside a ZIP reader, which would also wrongly retain them in a
+    capability-covered subset."""
+    for file_name in ("old.doc", "old.ppt"):
+        assert modality_for(file_name) is Modality.UNKNOWN
+        assert support_status_for(Modality.UNKNOWN) is SupportStatus.UNSUPPORTED
+
+
+def test_an_office_doc_with_an_unhandled_suffix_fails_explicitly(tmp_path: Path, monkeypatch):
+    """Defence in depth for the case above: if a future edit DID map
+    `.doc` to OFFICE_DOC, the reader must still refuse it by name rather
+    than handing an OLE file to a ZIP parser."""
+    from ant.evaluation_suite import gaia_scope
+
+    monkeypatch.setitem(gaia_scope.EXTENSION_MODALITY, ".doc", Modality.OFFICE_DOC)
+    (tmp_path / "old.doc").write_bytes(b"\xd0\xcf\x11\xe0not really an OLE file")
+    with pytest.raises(UnsupportedModalityError, match="legacy OLE"):
+        env_for(tmp_path, "old.doc").read_text()
+
+
+def test_a_docx_without_its_document_part_fails_explicitly(tmp_path: Path):
+    import zipfile
+
+    path = tmp_path / "broken.docx"
+    with zipfile.ZipFile(path, "w") as archive:
+        archive.writestr("not/the/right/part.xml", "<a/>")
+    with pytest.raises(UnsupportedModalityError, match="not a .docx"):
+        env_for(tmp_path, "broken.docx").read_text()
+
+
+def test_a_pptx_without_slide_parts_fails_explicitly(tmp_path: Path):
+    import zipfile
+
+    path = tmp_path / "broken.pptx"
+    with zipfile.ZipFile(path, "w") as archive:
+        archive.writestr("ppt/presentation.xml", "<a/>")
+    with pytest.raises(UnsupportedModalityError, match="not a .pptx"):
+        env_for(tmp_path, "broken.pptx").read_text()
+
+
+def test_office_and_pdf_attachments_get_a_supported_document_territory():
+    for file_name in ("paper.pdf", "notes.docx", "deck.pptx"):
+        territories = derive_territories(file_name=file_name)
+        document = next(t for t in territories if t.kind is TerritoryKind.DOCUMENT)
+        assert document.supported is True
+
+
+def test_image_audio_and_video_remain_unsupported_after_this_pass(attachments: Path):
+    """Explicitly pinned: extending the substrate to PDF/DOCX/PPTX must
+    NOT have loosened the vision/ASR fairness line anywhere."""
+    for modality in (Modality.IMAGE, Modality.AUDIO, Modality.VIDEO):
+        assert support_status_for(modality) is SupportStatus.UNSUPPORTED
+    for file_name in ("diagram.png", "briefing.mp3"):
+        with pytest.raises(UnsupportedModalityError):
+            env_for(attachments, file_name).read_text()
+
+
+def test_fixture_builders_are_byte_deterministic(tmp_path: Path):
+    """The docx/pptx writers join the existing determinism guarantee --
+    otherwise the byte-stable tool-call log assertions elsewhere would
+    be resting on drifting inputs."""
+    first, second = tmp_path / "a", tmp_path / "b"
+    first.mkdir()
+    second.mkdir()
+    materialize_all(first, FIXTURES)
+    materialize_all(second, FIXTURES)
+    for name in ("charter.docx", "roadmap.pptx"):
+        assert (first / name).read_bytes() == (second / name).read_bytes()

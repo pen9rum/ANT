@@ -31,6 +31,9 @@ from typing import Any
 _ZIP_EPOCH = (1980, 1, 1, 0, 0, 0)
 
 _SHEET_NS = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+_WORD_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+_DRAWING_NS = "http://schemas.openxmlformats.org/drawingml/2006/main"
+_PRESENTATION_NS = "http://schemas.openxmlformats.org/presentationml/2006/main"
 
 
 def load_fixture_spec(fixtures_path: Path) -> dict[str, Any]:
@@ -223,6 +226,111 @@ def _write_xlsx(entry: dict[str, Any], destination: Path) -> None:
             archive.writestr(zipfile.ZipInfo(name, date_time=_ZIP_EPOCH), members[name])
 
 
+def _write_docx(entry: dict[str, Any], destination: Path) -> None:
+    """A minimal WordprocessingML document.
+
+    Deliberately exercises MORE than the easy path, mirroring
+    `_write_xlsx`'s reasoning: each spec paragraph is split into several
+    `<w:r>` RUNS rather than one, because real Word files fragment a
+    sentence across runs at every formatting change and a reader that
+    only handled one-run paragraphs would pass a naive fixture and then
+    silently truncate real text. A `<w:tab>` and a `<w:br>` are included
+    for the same reason, and one paragraph is wrapped in a `<w:tbl>` so
+    table-cell text is proven to be reachable.
+    """
+    paragraphs: list[str] = []
+    for index, text in enumerate(entry["paragraphs"]):
+        # Split into two runs at the midpoint: same visible characters,
+        # fragmented exactly as Word would fragment them.
+        middle = len(text) // 2
+        runs = "".join(
+            f"<w:r><w:t xml:space=\"preserve\">{_escape(part)}</w:t></w:r>"
+            for part in (text[:middle], text[middle:])
+            if part
+        )
+        if index == 1:
+            runs = f'<w:r><w:tab/></w:r>{runs}<w:r><w:br/></w:r>'
+        paragraphs.append(f"<w:p>{runs}</w:p>")
+
+    table_text = entry.get("table_cell", "")
+    table = (
+        f"<w:tbl><w:tr><w:tc><w:p><w:r><w:t>{_escape(table_text)}</w:t></w:r>"
+        f"</w:p></w:tc></w:tr></w:tbl>"
+        if table_text
+        else ""
+    )
+    document = (
+        f'<?xml version="1.0" encoding="UTF-8"?><w:document xmlns:w="{_WORD_NS}">'
+        f'<w:body>{"".join(paragraphs)}{table}</w:body></w:document>'
+    )
+    content_types = (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+        '<Default Extension="xml" ContentType="application/xml"/>'
+        '<Override PartName="/word/document.xml" ContentType="application/vnd.'
+        'openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>'
+    )
+    _write_ooxml_package(
+        destination,
+        {"[Content_Types].xml": content_types, "word/document.xml": document},
+    )
+
+
+def _write_pptx(entry: dict[str, Any], destination: Path) -> None:
+    """A minimal PresentationML deck.
+
+    The spec lists slides in order; this writer numbers the parts
+    `slide1..slideN`. Fixtures with TEN OR MORE slides are the point of
+    the `slides` spec allowing that many: `slide10.xml` sorts before
+    `slide9.xml` lexicographically, so a reader that sorts by filename
+    string silently reorders the deck. `_read_pptx_text` sorts by the
+    numeric suffix, and the fixture exists to prove it.
+    """
+    members: dict[str, str] = {}
+    overrides: list[str] = []
+    for number, slide in enumerate(entry["slides"], start=1):
+        shapes = "".join(
+            f'<p:sp><p:txBody><a:p><a:r><a:t>{_escape(line)}</a:t></a:r></a:p>'
+            f"</p:txBody></p:sp>"
+            for line in slide["lines"]
+        )
+        members[f"ppt/slides/slide{number}.xml"] = (
+            f'<?xml version="1.0" encoding="UTF-8"?>'
+            f'<p:sld xmlns:p="{_PRESENTATION_NS}" xmlns:a="{_DRAWING_NS}">'
+            f"<p:cSld><p:spTree>{shapes}</p:spTree></p:cSld></p:sld>"
+        )
+        overrides.append(
+            f'<Override PartName="/ppt/slides/slide{number}.xml" ContentType="application/'
+            'vnd.openxmlformats-officedocument.presentationml.slide+xml"/>'
+        )
+        note = slide.get("notes")
+        if note:
+            members[f"ppt/notesSlides/notesSlide{number}.xml"] = (
+                f'<?xml version="1.0" encoding="UTF-8"?>'
+                f'<p:notes xmlns:p="{_PRESENTATION_NS}" xmlns:a="{_DRAWING_NS}">'
+                f"<p:cSld><p:spTree><p:sp><p:txBody><a:p><a:r>"
+                f"<a:t>{_escape(note)}</a:t></a:r></a:p></p:txBody></p:sp>"
+                f"</p:spTree></p:cSld></p:notes>"
+            )
+    members["[Content_Types].xml"] = (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+        '<Default Extension="xml" ContentType="application/xml"/>'
+        + "".join(overrides)
+        + "</Types>"
+    )
+    _write_ooxml_package(destination, members)
+
+
+def _write_ooxml_package(destination: Path, members: dict[str, str]) -> None:
+    """Shared ZIP writer for the OOXML fixtures. Fixed member timestamps
+    and sorted member order, so the package bytes are identical every
+    time -- the same determinism guarantee `_write_xlsx` relies on."""
+    with zipfile.ZipFile(destination, "w", zipfile.ZIP_DEFLATED) as archive:
+        for name in sorted(members):
+            archive.writestr(zipfile.ZipInfo(name, date_time=_ZIP_EPOCH), members[name])
+
+
 def _looks_numeric(value: str) -> bool:
     try:
         float(value)
@@ -252,4 +360,6 @@ _WRITERS = {
     "pdf": _write_pdf,
     "zip": _write_zip,
     "xlsx": _write_xlsx,
+    "docx": _write_docx,
+    "pptx": _write_pptx,
 }

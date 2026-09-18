@@ -54,8 +54,18 @@ def test_adapter_registers_itself_under_the_gaia_name():
 
 
 def test_loads_all_synthetic_examples(examples):
-    assert len(examples) == 8
+    # 10 since the .docx and .pptx fixtures were added alongside
+    # OFFICE_DOC support; the count is asserted rather than derived so a
+    # fixture accidentally dropped from the spec fails loudly.
+    assert len(examples) == 10
     assert all(example.benchmark == "gaia" for example in examples)
+
+
+def test_every_supported_modality_has_a_synthetic_fixture(examples):
+    """Each modality this substrate DECLARES supported must have an
+    offline fixture, or its reader is only covered in theory."""
+    modalities = {example.metadata["attachment_modality"] for example in examples}
+    assert {"text", "tabular", "archive", "pdf", "office_doc"} <= modalities
 
 
 def test_limit_is_honored(adapter: GaiaAdapter):

@@ -128,27 +128,90 @@
         "Number of tools": "1",
         "How long did this take?": "2 minutes"
       }
+    },
+    {
+      "task_id": "synthetic-0009",
+      "Question": "According to the Guild charter, how often must every province of Quorvia be surveyed?",
+      "Level": "1",
+      "Final answer": "Once each decade",
+      "file_name": "charter.docx",
+      "Annotator Metadata": {
+        "Steps": "SENTINEL_STEPS_0009 Open the charter and read Article One.",
+        "Number of steps": "2",
+        "Tools": "SENTINEL_TOOLS_0009 word document reader",
+        "Number of tools": "1",
+        "How long did this take?": "3 minutes"
+      }
+    },
+    {
+      "task_id": "synthetic-0010",
+      "Question": "What is the title of the last slide of the Quorvia survey roadmap deck?",
+      "Level": "2",
+      "Final answer": "Phase Ten",
+      "file_name": "roadmap.pptx",
+      "Annotator Metadata": {
+        "Steps": "SENTINEL_STEPS_0010 Open the deck and read the final slide.",
+        "Number of steps": "2",
+        "Tools": "SENTINEL_TOOLS_0010 powerpoint reader",
+        "Number of tools": "1",
+        "How long did this take?": "2 minutes"
+      }
     }
   ],
   "attachments": {
     "quarterly_widgets.csv": {
       "kind": "csv",
       "rows": [
-        ["Quarter", "Units", "Region"],
-        ["Q1", "300", "North"],
-        ["Q2", "284", "North"],
-        ["Q3", "350", "South"],
-        ["Q4", "300", "South"]
+        [
+          "Quarter",
+          "Units",
+          "Region"
+        ],
+        [
+          "Q1",
+          "300",
+          "North"
+        ],
+        [
+          "Q2",
+          "284",
+          "North"
+        ],
+        [
+          "Q3",
+          "350",
+          "South"
+        ],
+        [
+          "Q4",
+          "300",
+          "South"
+        ]
       ]
     },
     "inventory.xlsx": {
       "kind": "xlsx",
       "rows": [
-        ["Item", "Stock"],
-        ["apples", "52"],
-        ["bananas", "47"],
-        ["cherries", "12"],
-        ["dates", "8"]
+        [
+          "Item",
+          "Stock"
+        ],
+        [
+          "apples",
+          "52"
+        ],
+        [
+          "bananas",
+          "47"
+        ],
+        [
+          "cherries",
+          "12"
+        ],
+        [
+          "dates",
+          "8"
+        ]
       ]
     },
     "field_notes.txt": {
@@ -173,6 +236,88 @@
         "readme.txt": "Bundle contents listing.\n",
         "data/values.txt": "17\n"
       }
+    },
+    "charter.docx": {
+      "kind": "docx",
+      "paragraphs": [
+        "Quorvian Cartographers Guild Charter",
+        "Article One: the Guild shall survey every province of Quorvia once each decade.",
+        "Article Two: the Vandermeer archive holds the master index of all surveys."
+      ],
+      "table_cell": "Survey cadence: 10 years"
+    },
+    "roadmap.pptx": {
+      "kind": "pptx",
+      "slides": [
+        {
+          "lines": [
+            "Quorvia Survey Roadmap",
+            "Prepared by the Cartographers Guild"
+          ],
+          "notes": "Opening slide; keep to thirty seconds."
+        },
+        {
+          "lines": [
+            "Phase One",
+            "Chart the northern marches"
+          ]
+        },
+        {
+          "lines": [
+            "Phase Two",
+            "Re-index the Vandermeer archive"
+          ]
+        },
+        {
+          "lines": [
+            "Phase Three",
+            "Publish the decadal atlas"
+          ]
+        },
+        {
+          "lines": [
+            "Phase Four",
+            "Retire the provisional charts"
+          ]
+        },
+        {
+          "lines": [
+            "Phase Five",
+            "Audit the marker stones"
+          ]
+        },
+        {
+          "lines": [
+            "Phase Six",
+            "Commission new survey rods"
+          ]
+        },
+        {
+          "lines": [
+            "Phase Seven",
+            "Train the junior cartographers"
+          ]
+        },
+        {
+          "lines": [
+            "Phase Eight",
+            "Review the eastern boundary"
+          ]
+        },
+        {
+          "lines": [
+            "Phase Nine",
+            "Reconcile the ledger"
+          ]
+        },
+        {
+          "lines": [
+            "Phase Ten",
+            "Seal the decade's record"
+          ],
+          "notes": "Closing slide; the sealing ceremony is in Vandermeer."
+        }
+      ]
     }
   }
 }

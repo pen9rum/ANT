@@ -30,7 +30,24 @@ TOOL SURFACE (the five primitives the GAIA capability audit calls for):
   * `open_url(url)`             -- fetch one page as text.
   * `inspect_file(offset, limit)` -- read the task's attachment as text.
   * `inspect_table(...)`        -- read the task's attachment as rows.
-  * `compute(expression)`       -- deterministic arithmetic.
+  * `run_python(code)`          -- execute Python in an isolated sandbox.
+
+THE SANDBOX IS THE SECURITY-SENSITIVE PART OF THIS FILE. `run_python`
+replaced the restricted-AST `compute()` this substrate originally
+shipped, which means the registry now holds a genuine
+arbitrary-code-execution primitive driven by model output.
+`ant.evaluation_suite.gaia_sandbox`'s module docstring is the mechanism
+writeup AND the explicit list of what the isolation does not cover; it
+should be read before this tool is pointed at a live run. Note that the
+execution limits live on the REGISTRY (`python_timeout_seconds`,
+`python_memory_bytes`), not on the caller, so the fairness invariant
+above extends to compute budget and not just to capability names.
+
+The sandbox is also deliberately unable to reach the task's attachment:
+its scratch directory starts empty. If `run_python` could open the
+attachment path it would become a way around the modality policy -- a
+method could read an image's bytes and claim a perception capability the
+substrate declares UNSUPPORTED for everyone.
 
 BACKENDS ARE INJECTED, NEVER DEFAULTED TO SOMETHING LIVE. A registry
 built without a search backend does not silently return `[]` -- it
@@ -40,20 +57,27 @@ them is how a substrate misconfiguration turns into a fake accuracy
 number. This is the same reasoning that removed the ungrounded local-BM25
 fallback from `web_navigation_tool.py` (see that module's own history).
 
-ZERO-INFERENCE NOTE: nothing in this module calls an LLM. The compute
-primitive is a restricted AST evaluator, not `exec`; see `compute()`.
+ZERO-INFERENCE NOTE: nothing in this module calls an LLM. `run_python`
+executes model-CHOSEN code, but it executes it in a subprocess with no
+network and no model access -- there is no API key in that child's
+environment by construction (`gaia_sandbox._build_child_environment`
+builds an allowlist, never a copy of `os.environ`).
 """
 
 from __future__ import annotations
 
-import ast
 import json
-import operator
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any, Protocol, runtime_checkable
 
 from ant.domain.models import Evidence
+from ant.evaluation_suite.gaia_sandbox import (
+    DEFAULT_MEMORY_BYTES,
+    DEFAULT_TIMEOUT_SECONDS,
+    SandboxResult,
+    run_python,
+)
 from ant.evaluation_suite.gaia_scope import (
     GaiaEnvironment,
     GaiaSubstrateError,
@@ -64,7 +88,13 @@ TOOL_SEARCH = "search"
 TOOL_OPEN_URL = "open_url"
 TOOL_INSPECT_FILE = "inspect_file"
 TOOL_INSPECT_TABLE = "inspect_table"
-TOOL_COMPUTE = "compute"
+#: Renamed from `compute` when the restricted-AST arithmetic evaluator was
+#: replaced by a real sandboxed interpreter. The name change is
+#: deliberate and not cosmetic: `compute(expression)` promised an
+#: arithmetic expression, `run_python(code)` accepts a program, and a
+#: tool whose name understates what it does is a documentation bug in a
+#: security-relevant place.
+TOOL_RUN_PYTHON = "run_python"
 
 #: Canonical, ordered tool surface. Ordered (not a set) so that any
 #: prompt rendering built from it is byte-stable across runs -- a set's
@@ -74,7 +104,7 @@ GAIA_TOOL_NAMES: tuple[str, ...] = (
     TOOL_OPEN_URL,
     TOOL_INSPECT_FILE,
     TOOL_INSPECT_TABLE,
-    TOOL_COMPUTE,
+    TOOL_RUN_PYTHON,
 )
 
 
@@ -158,6 +188,13 @@ class GaiaToolRegistry:
     search_backend: SearchBackend | None = None
     fetch_backend: FetchBackend | None = None
     max_search_results: int = 10
+    #: Sandbox limits live on the REGISTRY, not on the caller, so every
+    #: method that drives this registry gets the same wall clock and the
+    #: same memory ceiling. If a caller could pass its own timeout,
+    #: "ANTMAN was allowed 60s of compute and the baseline 10s" would be
+    #: a silent fairness break rather than a visible configuration.
+    python_timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS
+    python_memory_bytes: int = DEFAULT_MEMORY_BYTES
     _calls: list[ToolCall] = field(default_factory=list, repr=False)
 
     # ---- introspection -------------------------------------------------
@@ -196,8 +233,17 @@ class GaiaToolRegistry:
                 "available": has_attachment,
             },
             {
-                "name": TOOL_COMPUTE,
-                "description": "Evaluate an arithmetic expression. Args: expression (str).",
+                "name": TOOL_RUN_PYTHON,
+                "description": (
+                    "Run a Python program in an isolated, network-free, stdlib-only "
+                    "sandbox and return its output. The value of a trailing bare "
+                    "expression is reported, so a final `print()` is optional. "
+                    f"Limits: {self.python_timeout_seconds:g}s wall clock, "
+                    f"{self.python_memory_bytes // (1024 * 1024)} MiB memory, no "
+                    "filesystem access outside an empty scratch directory (the task's "
+                    "attachment is NOT reachable from here -- use inspect_file / "
+                    "inspect_table). Args: code (str)."
+                ),
                 "available": True,
             },
         ]
@@ -303,31 +349,46 @@ class GaiaToolRegistry:
         )
         return view
 
-    def compute(self, expression: str) -> str:
-        """Deterministic arithmetic over a RESTRICTED expression grammar.
+    def run_python(self, code: str) -> str:
+        """Execute a Python program in the isolated sandbox and return
+        its rendered output.
 
-        This is NOT a Python sandbox and deliberately does not try to be
-        one. GAIA does include tasks that would benefit from running
-        arbitrary code, but standing up a genuinely safe execution
-        sandbox is its own reviewed piece of work -- and an unsafe one
-        wired into an agent loop is an arbitrary-code-execution primitive
-        driven by model output. So this pass ships the safe subset and
-        declares the gap rather than shipping `exec` and hoping.
+        **Read `ant.evaluation_suite.gaia_sandbox`'s module docstring
+        before relying on this.** It is a real arbitrary-code-execution
+        primitive driven by model output, and that docstring is the
+        security writeup -- including an explicit list of what the
+        isolation does NOT protect against.
 
-        Supported: numeric literals, `+ - * / // % **`, unary `+`/`-`,
-        comparisons, and parentheses. Everything else -- names, calls,
-        attributes, subscripts, imports, comprehensions -- raises
-        `ValueError`, which is recorded as a failed call rather than
-        silently returning something wrong.
+        DOES NOT RAISE on user-code failure. A syntax error, an
+        exception, a timeout and a denied operation all come back as a
+        rendered string, because an agent has to be able to *read* its
+        own failure to correct itself; raising would turn an ordinary
+        debugging loop into a dead end. The call is still logged with
+        `ok=False`, so a failed program is never mistaken for a
+        successful one when the log is read.
+
+        The limits are the registry's, not the caller's -- see
+        `python_timeout_seconds` / `python_memory_bytes`. A caller-chosen
+        budget would be a fairness hole.
         """
-        arguments = {"expression": expression}
-        try:
-            value = _safe_eval(expression)
-        except Exception as exc:
-            self._record(TOOL_COMPUTE, arguments, ok=False, summary="", error=str(exc))
-            raise
-        rendered = repr(value)
-        self._record(TOOL_COMPUTE, arguments, ok=True, summary=rendered)
+        arguments = {"code": code}
+        result: SandboxResult = run_python(
+            code,
+            timeout_seconds=self.python_timeout_seconds,
+            memory_bytes=self.python_memory_bytes,
+        )
+        rendered = result.render()
+        self._record(
+            TOOL_RUN_PYTHON,
+            arguments,
+            ok=result.ok,
+            # A BOUNDED, non-varying summary: the rendered output can be
+            # tens of kilobytes and would swamp a log diff, and anything
+            # derived from wall-clock time would break the byte-identical
+            # log guarantee `ToolCall` exists to provide.
+            summary=f"{len(rendered)} chars" if result.ok else "",
+            error=None if result.ok else (result.error or "sandboxed execution failed"),
+        )
         return rendered
 
     # ---- uniform dispatch (what a ReAct-shaped agent drives) -----------
@@ -341,66 +402,6 @@ class GaiaToolRegistry:
                 f"Unknown GAIA tool {tool!r}. Available: {list(GAIA_TOOL_NAMES)}"
             )
         return getattr(self, tool)(**kwargs)
-
-
-_BIN_OPS = {
-    ast.Add: operator.add,
-    ast.Sub: operator.sub,
-    ast.Mult: operator.mul,
-    ast.Div: operator.truediv,
-    ast.FloorDiv: operator.floordiv,
-    ast.Mod: operator.mod,
-    ast.Pow: operator.pow,
-}
-_CMP_OPS = {
-    ast.Eq: operator.eq,
-    ast.NotEq: operator.ne,
-    ast.Lt: operator.lt,
-    ast.LtE: operator.le,
-    ast.Gt: operator.gt,
-    ast.GtE: operator.ge,
-}
-# Caps an expression like `9**9**9`, which is syntactically tiny but
-# would otherwise hang the process building an enormous integer.
-_MAX_POW_EXPONENT = 1_000
-
-
-def _safe_eval(expression: str) -> Any:
-    tree = ast.parse(expression, mode="eval")
-    return _eval_node(tree.body)
-
-
-def _eval_node(node: ast.AST) -> Any:
-    if isinstance(node, ast.Constant):
-        if isinstance(node.value, (int, float, complex)) and not isinstance(node.value, bool):
-            return node.value
-        raise ValueError(f"Only numeric literals are allowed, got {node.value!r}.")
-    if isinstance(node, ast.UnaryOp) and isinstance(node.op, (ast.UAdd, ast.USub)):
-        operand = _eval_node(node.operand)
-        return operand if isinstance(node.op, ast.UAdd) else -operand
-    if isinstance(node, ast.BinOp):
-        handler = _BIN_OPS.get(type(node.op))
-        if handler is None:
-            raise ValueError(f"Operator {type(node.op).__name__} is not allowed.")
-        left, right = _eval_node(node.left), _eval_node(node.right)
-        if isinstance(node.op, ast.Pow) and abs(right) > _MAX_POW_EXPONENT:
-            raise ValueError(f"Exponent {right} exceeds the allowed ceiling.")
-        return handler(left, right)
-    if isinstance(node, ast.Compare):
-        left = _eval_node(node.left)
-        for op, comparator in zip(node.ops, node.comparators, strict=True):
-            handler = _CMP_OPS.get(type(op))
-            if handler is None:
-                raise ValueError(f"Comparison {type(op).__name__} is not allowed.")
-            right = _eval_node(comparator)
-            if not handler(left, right):
-                return False
-            left = right
-        return True
-    raise ValueError(
-        f"Expression node {type(node).__name__} is not allowed -- compute() evaluates "
-        "arithmetic only, never names, calls, or attribute access."
-    )
 
 
 class GaiaCoordinatorSearchTool:

@@ -1,0 +1,48 @@
+{
+  "name": "GAIA",
+  "role": "capability-covered evaluation subset of the 2023 validation split",
+  "benchmark": "gaia",
+  "status": "blocked_on_gated_access",
+  "paper": "arXiv:2311.12983 (ICLR 2024)",
+  "dataset": "https://huggingface.co/datasets/gaia-benchmark/GAIA",
+  "dataset_config": "2023_all",
+  "split": "validation",
+  "dataset_revision": null,
+  "license_data": "gated; redistribution prohibited by the dataset's own gate terms. This manifest therefore lists TASK IDS ONLY -- no question, answer or attachment byte appears here or anywhere else in this repository.",
+  "benchmark_adapter": "src/ant/benchmarks/gaia.py",
+  "selection_rule_version": 1,
+  "selection_rule": "Include a validation task IFF every modality it requires is SUPPORTED in ant.evaluation_suite.gaia_scope.MODALITY_SUPPORT. Concretely: include iff the task declares no attachment, OR its attachment's file extension maps to a SUPPORTED modality. Exclude otherwise. Computed from TASK-OBSERVABLE signals only (declared attachment presence and file extension).",
+  "selection_inputs_forbidden": [
+    "the gold `Final answer` (TaskExample.reference)",
+    "`Annotator Metadata` (metadata['_audit_only'], i.e. Steps / Tools)",
+    "any model's performance on the task",
+    "the question text"
+  ],
+  "selection_leakage_guarantee": "Structural, not conventional: gaia_subset.SubsetCandidate has no field for a reference answer or annotator metadata, so select_subset() has no parameter through which either could be threaded. `level` is carried for REPORTING only; tests/test_gaia_subset.py asserts the partition is identical when every level is blanked.",
+  "supported_modalities": [
+    "archive",
+    "office_doc",
+    "pdf",
+    "tabular",
+    "text"
+  ],
+  "unsupported_modalities": [
+    "audio",
+    "image",
+    "unknown",
+    "video"
+  ],
+  "substrate_dependencies": {
+    "pymupdf": "1.28.2"
+  },
+  "substrate_dependency_error": null,
+  "counts": null,
+  "retained_level_distribution": null,
+  "retained_extension_distribution": null,
+  "task_ids": null,
+  "exclusion_ledger": null,
+  "blocked_reason": "HTTP 403 GatedRepoError from huggingface.co on 2026-09-17. HF_TOKEN is present and valid (whoami -> user \"Xaviuer\"; fine-grained token \"Gaia\" with canReadGatedRepos=true), and HfApi().dataset_info(\"gaia-benchmark/GAIA\") succeeds -- but dataset_info returns PUBLIC metadata for a gated:auto repo whether or not the gate has been accepted, so its success is not a test of access. The authoritative check, GET https://huggingface.co/api/datasets/gaia-benchmark/GAIA/auth-check, returns 403: \"Access to dataset gaia-benchmark/GAIA is restricted and you are not in the authorized list.\" The account must accept the dataset terms once, in a browser, on the dataset page. No mirror or scraped copy was sought or used.",
+  "freeze_command": "python scripts/freeze_gaia_manifest.py",
+  "created_at": "2026-09-17T17:32:19.983754+00:00",
+  "note": "NOT FROZEN. Every field above that describes the SELECTION RULE, the declared modality policy and the substrate dependency versions is real and final; every field that would describe the SELECTED TASKS is null because the split could not be read. Nulls (not zeros/empty lists) are deliberate: \"not computable yet\" and \"computed, found none\" must not share a representation. Run scripts/freeze_gaia_manifest.py once the gate is accepted -- it recomputes everything live and rewrites this file with status=frozen. require_frozen_manifest() refuses this file as-is."
+}
