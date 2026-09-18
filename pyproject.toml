@@ -23,6 +23,19 @@ bench = [
 dense = [
   "fastembed>=0.7",
 ]
+# RepoDistill baseline only (ant.external_wrappers.repodistill*). A separate
+# extra, not added to `dense`, because these are heavy and nothing else in
+# this project needs them: tree-sitter drives the paper's dependency-graph
+# construction, and transformers/torch run Qwen2.5-Coder-0.5B locally for
+# CABA's perplexity/similarity scoring. Both are imported lazily (inside the
+# functions that use them), so importing the RepoDistill modules -- and the
+# whole default test suite -- still works without this extra installed.
+repodistill = [
+  "tree-sitter>=0.23",
+  "tree-sitter-python>=0.23",
+  "transformers>=4.40",
+  "torch>=2.2",
+]
 dev = [
   "pytest>=8.2",
   "ruff>=0.6",
@@ -61,6 +74,11 @@ select = ["E", "F", "I", "UP", "B"]
 # docs/chainrag_fidelity_audit.md. Reflowing them to satisfy line length
 # would mean editing the fidelity-critical prompt text itself.
 "src/ant/external_wrappers/chainrag.py" = ["E501"]
+# CONTEXT_COMPRESSION_PROMPT/ANSWER_GENERATION_PROMPT in repodistill.py are
+# reproduced VERBATIM from Table 4 (Appendix A.1.2) of the RepoDistill paper
+# -- same rationale as the two entries above. Reflowing them to satisfy line
+# length would mean editing the fidelity-critical prompt text itself.
+"src/ant/external_wrappers/repodistill.py" = ["E501"]
 
 [tool.pyright]
 include = ["src", "tests"]
