@@ -51,6 +51,11 @@ select = ["E", "F", "I", "UP", "B"]
 # above it in judge.py) -- it must not be reformatted to satisfy line
 # length, so this file is exempted from E501 rather than touching the text.
 "src/ant/evaluation/judge.py" = ["E501"]
+# SELECTOR_SYSTEM_PROMPT/SUFF_SYSTEM_PROMPT are verbatim copies of upstream
+# S2G-RAG's own prompt strings (utils/prompt_template.py) -- reformatting
+# them to satisfy line length would break the fidelity claim this baseline
+# rests on, so this file is exempted rather than the text being touched.
+"src/ant/external_wrappers/s2g_rag.py" = ["E501"]
 # Every prompt in chainrag.py is reproduced VERBATIM (including original
 # line breaks/indentation) from the pinned upstream ChainRAG commit -- see
 # docs/chainrag_fidelity_audit.md. Reflowing them to satisfy line length
