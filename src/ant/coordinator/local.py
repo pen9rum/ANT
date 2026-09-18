@@ -371,6 +371,7 @@ class LocalCoordinator:
         index_path: Path | None = None,
         cross_repo_experience: list[str] | None = None,
         search_tool_factory: Callable[[Path, Path | None], object] | None = None,
+        worker_reasoner: WorkerReasoner | None = None,
     ) -> None:
         self.repo_root = repo_root
         self.workers = workers
@@ -378,6 +379,17 @@ class LocalCoordinator:
             cast(WorkerReasoner, synthesizer) if synthesizer is not None else MockLLMProvider()
         )
         self.synthesizer = synthesizer
+        # Optional coordination/execution model split: defaults to
+        # `self.reasoner` (the exact same object), so every existing
+        # caller -- Track A, every test, every already-frozen benchmark
+        # run -- gets provably identical behavior when this is left unset.
+        # When set, ONLY AutonomousWorker's own local tool-call loop
+        # (select_lookups/plan_worker_actions, see _run_selected_workers)
+        # is routed to it; every orchestrator-level call on `self.reasoner`
+        # -- plan_round, check_need_resolution, consolidate_graph,
+        # verify_evidence_upgrade, select_evidence, observe (progress
+        # interpretation) -- is untouched and keeps using `self.reasoner`.
+        self.worker_reasoner = worker_reasoner or self.reasoner
         self.memory_routes = memory_routes or []
         self.index_path = index_path
         # Pre-fetched by the caller (see GlobalMemoryStore.retrieve_similar),
@@ -1589,7 +1601,7 @@ class LocalCoordinator:
         round_needs: list[UnresolvedNeed] = []
         for worker in selected:
             observation = AutonomousWorker(
-                self.repo_root, worker, search, reasoner=self.reasoner
+                self.repo_root, worker, search, reasoner=self.worker_reasoner
             ).run(
                 query,
                 config=worker_config,

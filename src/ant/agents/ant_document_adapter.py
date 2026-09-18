@@ -70,6 +70,7 @@ from ant.evaluation_suite.natural_qa_synthesis import (
     synthesize_natural_multihop_answer,
 )
 from ant.evaluation_suite.usage import UsageStats
+from ant.evaluation_suite.vllm_provider import VLLMChatCompletionsProvider
 from ant.indexing import build_worker_cards
 from ant.memory import IndexStore
 
@@ -120,6 +121,9 @@ class AntDocumentAgent:
         max_rounds: int = 6,
         search_top_k: int = 4,
         index_root: Path | None = None,
+        worker_model: str | None = None,
+        worker_base_url: str | None = None,
+        worker_max_context_tokens: int | None = None,
     ) -> None:
         self.model = model
         self.max_rounds = max_rounds
@@ -128,6 +132,14 @@ class AntDocumentAgent:
         # search_top_k, for controlled boundary-expansion experiments only.
         self.search_top_k = search_top_k
         self.index_root = index_root or Path(".ant/eval-suite-documents")
+        # Same coordination/execution model split as ant_adapter.AntAgent
+        # -- see that class's own docstring and
+        # ant.evaluation_suite.vllm_provider for the full rationale. Both
+        # left unset (the default) reproduces the frozen single-GPT-4.1-
+        # provider runtime exactly.
+        self.worker_model = worker_model
+        self.worker_base_url = worker_base_url
+        self.worker_max_context_tokens = worker_max_context_tokens
 
     def _index_path_for(self, example: TaskExample, environment_root: Path) -> Path:
         return self.index_root / example.benchmark / environment_root.name
@@ -170,12 +182,25 @@ class AntDocumentAgent:
         workers = IndexStore(index_path).load_workers()
 
         provider = CountingOpenAIProvider(model=self.model)
+
+        assert (self.worker_model is None) == (self.worker_base_url is None), (
+            "worker_model and worker_base_url must be set together (or both left unset)"
+        )
+        worker_provider = provider
+        if self.worker_model is not None and self.worker_base_url is not None:
+            worker_provider = VLLMChatCompletionsProvider(
+                model=self.worker_model,
+                base_url=self.worker_base_url,
+                max_context_tokens=self.worker_max_context_tokens,
+            )
+
         coordinator = LocalCoordinator(
             environment_root,
             workers,
             reasoner=provider,
             synthesizer=provider,
             index_path=index_path,
+            worker_reasoner=worker_provider,
             # memory_routes / cross_repo_experience deliberately omitted --
             # same "ordinary clean runtime" shape as ant_adapter.AntAgent.
         )
@@ -238,6 +263,22 @@ class AntDocumentAgent:
             final_answer = condense_to_answer_span(provider, example.question, grounded_answer)
         llm_calls = provider.drain_call_count()
 
+        # See ant_adapter.AntAgent.run's identical block for why this is
+        # drained/reported separately from `provider`'s own usage above.
+        worker_usage_metadata = None
+        if worker_provider is not provider:
+            worker_usage = worker_provider.drain_usage()
+            worker_usage_metadata = {
+                "model": self.worker_model,
+                "base_url": self.worker_base_url,
+                "max_context_tokens": self.worker_max_context_tokens,
+                "llm_calls": worker_provider.drain_call_count(),
+                "input_tokens": worker_usage.input_tokens,
+                "output_tokens": worker_usage.output_tokens,
+                "total_tokens": worker_usage.total_tokens,
+                "wall_clock_seconds": worker_usage.latency_ms / 1000.0,
+            }
+
         # Behavioral-diagnostic counts for Section 13/14 of the long-context
         # evaluation spec -- disclosed operationalizations, not invented ad
         # hoc: see module docstring and each comment below for exactly what
@@ -295,6 +336,7 @@ class AntDocumentAgent:
             ),
             metadata={
                 "generation_model": self.model,
+                "worker_usage": worker_usage_metadata,
                 "final_need_graph_size": len(state.final_need_graph),
                 "facet_rescue": state.facet_rescue.model_dump() if state.facet_rescue else None,
                 "total_territories": len(territories),

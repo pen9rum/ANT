@@ -8,6 +8,7 @@ from ant.coordinator import LocalCoordinator
 from ant.evaluation_suite.counting_provider import CountingOpenAIProvider
 from ant.evaluation_suite.repo_scope import EvalRepoEnvironment
 from ant.evaluation_suite.usage import UsageStats
+from ant.evaluation_suite.vllm_provider import VLLMChatCompletionsProvider
 from ant.indexing import build_worker_cards, discover_territories
 from ant.memory import IndexStore
 
@@ -33,11 +34,26 @@ class AntAgent:
     name = "ant"
 
     def __init__(
-        self, model: str = "gpt-4.1", max_rounds: int = 6, index_root: Path | None = None
+        self,
+        model: str = "gpt-4.1",
+        max_rounds: int = 6,
+        index_root: Path | None = None,
+        worker_model: str | None = None,
+        worker_base_url: str | None = None,
+        worker_max_context_tokens: int | None = None,
     ) -> None:
         self.model = model
         self.max_rounds = max_rounds
         self.index_root = index_root or Path(".ant/eval-suite")
+        # Coordination/execution model split (worker-model bake-off, see
+        # ant.providers.vllm_provider's own docstring). Both left unset
+        # (the default) reproduces the frozen single-GPT-4.1-provider
+        # runtime exactly -- `worker_model`/`worker_base_url` only take
+        # effect together; setting one without the other is a caller
+        # error, asserted in run() rather than silently ignored.
+        self.worker_model = worker_model
+        self.worker_base_url = worker_base_url
+        self.worker_max_context_tokens = worker_max_context_tokens
 
     def _index_path_for(self, example: TaskExample, environment_root: Path) -> Path:
         repo_slug = environment_root.name
@@ -80,18 +96,60 @@ class AntAgent:
         # UsageStats' own 0).
         provider = CountingOpenAIProvider(model=self.model)
 
+        assert (self.worker_model is None) == (self.worker_base_url is None), (
+            "worker_model and worker_base_url must be set together (or both left unset)"
+        )
+        worker_provider = provider
+        if self.worker_model is not None and self.worker_base_url is not None:
+            # A SEPARATE provider instance, deliberately not shared with
+            # `provider` above -- only AutonomousWorker's own local
+            # tool-call loop (select_lookups/plan_worker_actions) is
+            # routed to it, via LocalCoordinator's worker_reasoner= below.
+            # Every orchestrator-level call (plan_round,
+            # check_need_resolution, consolidate_graph,
+            # verify_evidence_upgrade, select_evidence, observe, synthesis)
+            # still goes through `provider` (GPT-4.1), unaffected.
+            worker_provider = VLLMChatCompletionsProvider(
+                model=self.worker_model,
+                base_url=self.worker_base_url,
+                max_context_tokens=self.worker_max_context_tokens,
+            )
+
         coordinator = LocalCoordinator(
             environment_root,
             workers,
             reasoner=provider,
             synthesizer=provider,
             index_path=index_path,
+            worker_reasoner=worker_provider,
             # memory_routes / cross_repo_experience deliberately omitted --
             # default [] -- no cross-task memory, matching this session's
             # own no-evolution-runtime validation exactly.
         )
         state = coordinator.ask(example.question, max_rounds=self.max_rounds)
         llm_calls = provider.drain_call_count()
+
+        # `state.usage` only ever drains `self.synthesizer` (== `provider`,
+        # the orchestrator's GPT-4.1 provider) -- see LocalCoordinator.ask's
+        # final block. When a separate worker_provider is in play, its own
+        # usage/call-count is otherwise never surfaced anywhere; drained
+        # here and reported under metadata (not merged into `usage=` above,
+        # which stays a pure orchestrator-cost figure comparable across
+        # every other baseline that has no worker/orchestrator split at
+        # all).
+        worker_usage_metadata = None
+        if worker_provider is not provider:
+            worker_usage = worker_provider.drain_usage()
+            worker_usage_metadata = {
+                "model": self.worker_model,
+                "base_url": self.worker_base_url,
+                "max_context_tokens": self.worker_max_context_tokens,
+                "llm_calls": worker_provider.drain_call_count(),
+                "input_tokens": worker_usage.input_tokens,
+                "output_tokens": worker_usage.output_tokens,
+                "total_tokens": worker_usage.total_tokens,
+                "wall_clock_seconds": worker_usage.latency_ms / 1000.0,
+            }
 
         return AgentResult(
             benchmark=example.benchmark,
@@ -122,6 +180,7 @@ class AntAgent:
                 "final_need_graph_size": len(state.final_need_graph),
                 "facet_rescue": state.facet_rescue.model_dump() if state.facet_rescue else None,
                 "generation_model": self.model,
+                "worker_usage": worker_usage_metadata,
             },
         )
 
