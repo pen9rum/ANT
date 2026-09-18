@@ -1,0 +1,655 @@
+{
+  "benchmark": "repoprobe",
+  "task_id": "FieldStation42-2",
+  "method": "repodistill",
+  "final_answer": "No, there is no built-in way in this project to stream video to a websocket or directly to a web page; all video playback and web rendering occur locally on the host machine using a local fullscreen window, with no network streaming features implemented.",
+  "trajectory": [
+    {
+      "capo_turn": 0,
+      "n_documents": 29,
+      "document_ids": [
+        "fs42\\station_player.py::StationPlayer.show_web::514",
+        "field_player.py::main_loop::84",
+        "fs42\\fs42_server\\api\\ppv.py::play_file::287",
+        "fs42\\station_player.py::PlayerOutcome::77",
+        "fs42\\station_player.py::StationPlayer._play_from_point::612",
+        "fs42\\station_player.py::StationPlayer.play_file::231",
+        "fs42\\station_player.py::StationPlayer.show_guide::434",
+        "fs42\\station_player.py::StationPlayer._show_now_playing::171",
+        "fs42\\station_player.py::update_status_socket::45",
+        "fs42\\station_player.py::StationPlayer._apply_vfx::396",
+        "fs42\\station_manager.py::StationManager::6",
+        "fs42\\reception.py::long_change_effect::24",
+        "fs42\\autobump_agent.py::AutoBumpAgent.is_autobump_url::29",
+        "fs42\\autobump_agent.py::AutoBumpAgent.extract_url::33",
+        "fs42\\liquid_manager.py::LiquidManager.get_play_point::182",
+        "fs42\\liquid_manager.py::LiquidManager._build_stream_point::169",
+        "fs42\\fs42_server\\api\\player.py::player_channel::198",
+        "fs42\\fs42_server\\api\\ppv.py::PlayFileResponse::46",
+        "fs42\\station_manager.py::StationManager.station_by_channel::79",
+        "fs42\\station_player.py::StationPlayer.play_slot::593",
+        "fs42\\reception.py::ChunkyScrambledVideoFilter.update_filter::146",
+        "fs42\\station_player.py::StationPlayer._close_now_playing::153",
+        "fs42\\station_player.py::StationPlayer.update_reception::222",
+        "fs42\\reception.py::ColorInvertedScrambledVideoFilter.update_filter::135",
+        "fs42\\reception.py::DiagonalScrambledVideoFilter.update_filter::122",
+        "fs42\\block_plan.py::BlockPlanEntry::1",
+        "fs42\\liquid_manager.py::PlayPoint::19",
+        "fs42\\webrender\\web_render.py::web_render_runner::157",
+        "fs42\\webrender\\web_render.py::WebRenderApp::94"
+      ],
+      "assigned_budgets": {
+        "fs42\\station_player.py::StationPlayer.show_web::514": 0.5,
+        "field_player.py::main_loop::84": 0.25,
+        "fs42\\fs42_server\\api\\ppv.py::play_file::287": 0.25,
+        "fs42\\station_player.py::PlayerOutcome::77": 0.25,
+        "fs42\\station_player.py::StationPlayer._play_from_point::612": 0.25,
+        "fs42\\station_player.py::StationPlayer.play_file::231": 0.75,
+        "fs42\\station_player.py::StationPlayer.show_guide::434": 0.25,
+        "fs42\\station_player.py::StationPlayer._show_now_playing::171": 0.25,
+        "fs42\\station_player.py::update_status_socket::45": 0.25,
+        "fs42\\station_player.py::StationPlayer._apply_vfx::396": 0.25,
+        "fs42\\station_manager.py::StationManager::6": 0.25,
+        "fs42\\reception.py::long_change_effect::24": 0.25,
+        "fs42\\autobump_agent.py::AutoBumpAgent.is_autobump_url::29": 0.25,
+        "fs42\\autobump_agent.py::AutoBumpAgent.extract_url::33": 0.25,
+        "fs42\\liquid_manager.py::LiquidManager.get_play_point::182": 0.25,
+        "fs42\\liquid_manager.py::LiquidManager._build_stream_point::169": 0.25,
+        "fs42\\fs42_server\\api\\player.py::player_channel::198": 0.25,
+        "fs42\\fs42_server\\api\\ppv.py::PlayFileResponse::46": 0.25,
+        "fs42\\station_manager.py::StationManager.station_by_channel::79": 0.25,
+        "fs42\\station_player.py::StationPlayer.play_slot::593": 0.5,
+        "fs42\\reception.py::ChunkyScrambledVideoFilter.update_filter::146": 0.25,
+        "fs42\\station_player.py::StationPlayer._close_now_playing::153": 0.25,
+        "fs42\\station_player.py::StationPlayer.update_reception::222": 0.25,
+        "fs42\\reception.py::ColorInvertedScrambledVideoFilter.update_filter::135": 0.25,
+        "fs42\\reception.py::DiagonalScrambledVideoFilter.update_filter::122": 0.25,
+        "fs42\\block_plan.py::BlockPlanEntry::1": 0.25,
+        "fs42\\liquid_manager.py::PlayPoint::19": 0.25,
+        "fs42\\webrender\\web_render.py::web_render_runner::157": 0.5,
+        "fs42\\webrender\\web_render.py::WebRenderApp::94": 0.5
+      },
+      "budget_parse_failures": 0,
+      "memory_after_turn": "This chunk focuses on how the FS42 project handles video playback, including local media, web content, and possible streaming mechanisms. The key function 'show_web' (in StationPlayer) launches a web process to render web content locally using PySide6; it does not inherently stream video to a browser or websocket. The file also demonstrates how station info and playback state are managed, but there are no built-in methods to re-encode or stream media to a browser or over websockets\u2014playback primarily uses MPV locally on the machine where the server runs. Some code paths allow launching URLs (possibly for web-based media), which are rendered inside the local app via QtWebEngine, not across a network. Piping/streaming via ffmpeg is not natively provided. Related class structures and queue messaging to child processes are included, but no evidence of browser or websocket streaming built-in."
+    },
+    {
+      "capo_turn": 1,
+      "n_documents": 3,
+      "document_ids": [
+        "fs42\\webrender\\web_render.py::WebRenderApp.__init__::95",
+        "fs42\\webrender\\web_render.py::WebRender::8",
+        "fs42\\webrender\\web_render.py::WebRender._on_load_finished::52"
+      ],
+      "assigned_budgets": {
+        "fs42\\webrender\\web_render.py::WebRenderApp.__init__::95": 0.25,
+        "fs42\\webrender\\web_render.py::WebRender::8": 0.5,
+        "fs42\\webrender\\web_render.py::WebRender._on_load_finished::52": 0.25
+      },
+      "budget_parse_failures": 0,
+      "memory_after_turn": "This chunk details the initialization and core logic of the WebRender and WebRenderApp classes, which utilize PySide6's QWebEngineView to render web content in a frameless or fullscreen window. The relevant configuration allows for autoplay and custom user agent settings, auto-hiding the cursor, and provides basic error handling for failed loads with limited retries. A small amount of JavaScript is injected on each load to simulate user interaction and enable media autoplay. The entire rendering and playback occur locally on the host machine, with no mechanisms present for streaming video to a web browser or over websockets. As in prior context, these components do not support re-encoding or forwarding video content; instead, video or web-based streams are rendered to a local fullscreen window, not via a networked stream."
+    }
+  ],
+  "evidence": [
+    {
+      "path": "fs42\\station_player.py",
+      "line_start": 514,
+      "line_end": 583,
+      "quote": "    def show_web(self, web_config):\n        if not WEB_RENDER_AVAILABLE:\n            self._l.error(\"Web rendering not available - PySide6 not installed\")\n            msg = \"Web rendering requires PySide6 to be installed and configured. Please check documentation.\"\n            return PlayerOutcome(PlayerState.EXIT_COMMAND, msg)\n\n        # create the pipe to communicate with the web channel\n        self.web_queue = multiprocessing.Queue()\n        self.web_process = multiprocessing.Process(\n            target=web_render_runner,\n            args=(\n                web_config,\n                self.web_queue,\n            ),\n        )\n        self.web_process.start()\n\n        update_status_socket(\n            \"playing\",\n            self.station_config[\"network_name\"],\n            self.station_config[\"channel_number\"],\n            self.station_config[\"network_name\"],\n            timestamp=StationManager().server_conf[\"date_time_format\"],\n            content_type=\"web\",\n        )\n\n            response = self.input_check_fn()\n            if response:\n                self._l.info(\"Sending the web channel shutdown command\")\n                self.web_queue.put(\"hide_window\")\n                self.web_process.join()\n                self.web_process = None\n                self.web_queue = None\n                return response\n        return PlayerOutcome(PlayerState.SUCCESS)",
+      "reason": "RepoDistill GraphRAG candidate (StationPlayer.show_web), CAPO retention budget 50%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "StationPlayer.show_web"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "field_player.py",
+      "line_start": 84,
+      "line_end": 283,
+      "quote": "    reception.degrade()\n    player.update_filters()\n    player.play_file(stand_by)\n\n    player.load_up()\n\n    def signal_handler(sig, frame):\n        logger.critical(\"Received sig-int signal, attempting to exit gracefully...\")\n        player.shutdown()\n\n        # reset skip\n        skip_play = False\n\n        if player_state.status == PlayerState.CHANNEL_CHANGE:\n            stuck_timer = 0\n                                \n                                if channel_index < 0:\n                                    channel_index = stations_len-1\n                                if not station_cache[channel_index][\"hidden\"]:\n                                    found = True\n\n\n                except Exception as e:\n                    logger.exception(e)\n                    logger.warning(\n                        \"Got payload on channel change, but JSON convert failed\"\n                    )\n\n            if tune_up:\n                logger.info(\"Starting channel change\")\n                found = False\n                while not found:\n                    channel_index += 1\n                    channel_index = channel_index if channel_index < stations_len else 0\n                    found = not station_cache[channel_index][\"hidden\"]\n\n            # save the player state\n            with shelve.open(STATE_SHELVE) as s:\n                s[\"channel_index\"] = channel_index\n            channel_conf = station_cache[channel_index]\n            player.station_config = channel_conf\n\n            # long_change_effect(player, reception)\n            transition_fn(player, reception)\n\n        elif player_state.status == PlayerState.PLAY_FILE:\n                # set skip play so outcome isn't overwritten\n                # and the channel change can be processed next loop\n                skip_play = True\n        elif player_state.status == PlayerState.SUCCESS:\n            stuck_timer = 0\n        elif player_state.status == PlayerState.EXIT_COMMAND:\n            signal_handler(None, None)\n        else:\n            stuck_timer = 0",
+      "reason": "RepoDistill GraphRAG candidate (main_loop), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "main_loop"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\fs42_server\\api\\ppv.py",
+      "line_start": 287,
+      "line_end": 342,
+      "quote": "async def play_file(channel_number: int, play_request: PlayFileRequest, request: Request):\n    \"\"\"\n    logger = logging.getLogger(\"PPV_API\")\n\n    # Get the command queue from app state\n    command_queue = request.app.state.player_command_queue\n\n    # Create the command to send to the player\n    command = {\n        \"command\": \"play_file\",\n        \"file_path\": play_request.file_path\n    }\n",
+      "reason": "RepoDistill GraphRAG candidate (play_file), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "play_file"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\station_player.py",
+      "line_start": 77,
+      "line_end": 80,
+      "quote": "class PlayerOutcome:",
+      "reason": "RepoDistill GraphRAG candidate (PlayerOutcome), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "PlayerOutcome"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\station_player.py",
+      "line_start": 612,
+      "line_end": 713,
+      "quote": "    def _play_from_point(self, play_point: PlayPoint):\n        # This handles channel changes and ensures clean state\n        self._close_now_playing()\n\n        if len(play_point.plan):\n            initial_skip = play_point.offset\n\n                    return PlayerOutcome(PlayerState.FAILED)\n                # Seek now happens inside play_file() before overlay is shown\n\n                if entry.duration:\n                    self._l.info(f\"Monitoring for: {entry.duration - initial_skip}\")\n\n                    # Calculate target end time using wall clock\n                    target_end_time = datetime.datetime.now() + datetime.timedelta(seconds=(entry.duration - initial_skip))\n                    self._l.info(f\"Target end time: {target_end_time.strftime('%H:%M:%S.%f')[:-3]}\")\n\n                            if self.scrambler:\n                                self.mpv.vf = self.scrambler.update_filter()\n\n                        # Calculate time remaining based on wall clock\n                        time_remaining = (target_end_time - datetime.datetime.now()).total_seconds()\n\n                            # debounce time\n                            time.sleep(0.05)\n                            response = self.input_check_fn()\n                            if response:\n                                return response\n                else:\n                    return PlayerOutcome(PlayerState.FAILED)\n",
+      "reason": "RepoDistill GraphRAG candidate (StationPlayer._play_from_point), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "StationPlayer._play_from_point"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\station_player.py",
+      "line_start": 231,
+      "line_end": 339,
+      "quote": "                          \n                else:\n                    self._l.warning(\n                        \"station_config not available in play_file, cannot update status socket with title.\"\n                    )\n                \n                                #now see if this is an autobump\n\n                if AutoBumpAgent.is_autobump_url(file_path):\n                    conf = {\n                        \"web_url\" : AutoBumpAgent.extract_url(file_path)\n                    }\n                    if file_duration:\n                        conf[\"duration\"] = file_duration\n                    self.show_web(conf)\n                    return True\n\n                if \"panscan\" in self.station_config:\n                    self.mpv.panscan = self.station_config[\"panscan\"]\n                else:\n                    self.mpv.panscan = 0.0\n\n                if \"video_keepaspect\" in self.station_config:\n                    self.mpv.keepaspect = self.station_config[\"video_keepaspect\"]\n                else:\n                    self.mpv.keepaspect = True\n\n                self._apply_vfx(datetime.datetime.now())\n\n                # self.mpv.vf = \"lavfi=[]\"\n                self._l.info(f\"playing {file_path}\")\n                self.mpv.command(\"playlist-clear\")\n                self.mpv.play(file_path)\n                \n                \n                # Wait for video to load with timeout to prevent blocking on invalid streams\n                ready_to_return = False\n                timeout_seconds = 10\n                start_time = time.time()\n\n                while not ready_to_return:\n                    try:\n                        got_duration = self.mpv.duration  # Uses __getattr__ internally\n                        if got_duration is not None:\n                            ready_to_return = True\n                        else:\n                            if time.time() - start_time > timeout_seconds:\n                                self._l.error(f\"Timeout waiting for duration on {file_path}\")\n                                return False\n                            time.sleep(0.05)\n                    except Exception as e:\n                        if time.time() - start_time > timeout_seconds:\n                            self._l.error(f\"Error getting duration: {e}\")\n                            return False\n                        time.sleep(0.05)\n\n                # Perform seek if",
+      "reason": "RepoDistill GraphRAG candidate (StationPlayer.play_file), CAPO retention budget 75%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "StationPlayer.play_file"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\station_player.py",
+      "line_start": 434,
+      "line_end": 510,
+      "quote": "    def show_guide(self, guide_config):\n        # create the pipe to communicate with the guide channel\n        queue = multiprocessing.Queue()\n        guide_process = multiprocessing.Process(\n            target=guide_channel_runner,\n            args=(\n                guide_config,\n                queue,\n            ),\n        )\n        guide_process.start()\n\n        if \"play_sound\" in guide_config and guide_config[\"play_sound\"]:\n            sound_to_play = guide_config[\"sound_to_play\"]\n\n        update_status_socket(\n            \"playing\",\n            timestamp=StationManager().server_conf[\"date_time_format\"],\n            content_type=\"guide\",\n        )\n                queue.put(GuideCommands.hide_window)\n                guide_process.join()\n                return response\n\n        return PlayerOutcome(PlayerState.SUCCESS)",
+      "reason": "RepoDistill GraphRAG candidate (StationPlayer.show_guide), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "StationPlayer.show_guide"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\station_player.py",
+      "line_start": 171,
+      "line_end": 188,
+      "quote": "        import time\n\n            db_path = StationManager().server_conf[\"db_path\"]\n            self.now_playing_process = run_now_playing(file_path, db_path)",
+      "reason": "RepoDistill GraphRAG candidate (StationPlayer._show_now_playing), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "StationPlayer._show_now_playing"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\station_player.py",
+      "line_start": 45,
+      "line_end": 65,
+      "quote": "def update_status_socket(\n    status, network_name, channel, title=None, timestamp=\"%Y-%m-%dT%H:%M:%S\", duration=None, file_path=None, content_type=None\n):\n    status_obj = {",
+      "reason": "RepoDistill GraphRAG candidate (update_status_socket), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "update_status_socket"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\station_player.py",
+      "line_start": 396,
+      "line_end": 429,
+      "quote": "    def _apply_vfx(self, current_time):\n        vfx = None\n            self.scramble_effects[\"station_fx\"] = self.station_config[\"station_fx\"]\n\n                self.skip_reception_check = True\n                if vfx == \"horizontal_line\":\n                elif vfx == \"chunky_scramble\":\n                    self.scrambler = ChunkyScrambledVideoFilter()\n            else:",
+      "reason": "RepoDistill GraphRAG candidate (StationPlayer._apply_vfx), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "StationPlayer._apply_vfx"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\station_manager.py",
+      "line_start": 6,
+      "line_end": 264,
+      "quote": "class StationManager(object):\n    no_catalog = {\"guide\", \"streaming\", \"web\"}\n    no_schedule = {\"guide\", \"streaming\", \"web\"}\n\n                self.server_conf = {\n                    \"channel_socket\": \"runtime/channel.socket\",\n                    \"status_socket\": \"runtime/play_status.socket\",\n                    \"day_parts\": {\n                        \"morning\": range(6, 10),\n                        \"daytime\": range(10, 18),\n                        \"prime\": range(18, 23),\n                        \"late\": [23, 0, 1, 2],\n                        \"overnight\": range(2, 6),\n                    },\n                    \"time_format\": \"%H:%M\",\n                    \"date_time_format\": \"%Y-%m-%dT%H:%M:%S\",\n                    \"db_path\": \"runtime/fs42_fluid.db\",\n                    \"start_mpv\": True,\n                    \"server_host\": \"0.0.0.0\",\n                    \"server_port\": 4242,\n                    \"title_patterns\": [],\n                }\n                    logging.getLogger().info(\"Loading and checking guide channel\")\n                to_check = [\n                    \"channel_socket\",\n                    \"status_socket\",\n                    \"time_format\",\n                    \"start_mpv\",\n                    \"db_path\",\n                    \"server_host\",\n                    \"server_port\",\n                    \"normalize_titles\",\n                    \"tmdb_api_key\",\n                    \"recall_last_channel\"\n                ]\n\n                for key in to_check:\n                    if key in d:\n                        self.server_conf[key] = d[key]\n\n                    import re\n                    custom_patterns = []\n                    for i, pattern_config in enumerate(d[\"title_patterns\"]):\n                        try:\n                            # Validate that the regex compiles\n                            re.compile(pattern_config[\"pattern\"])\n\n                    \n\n                if \"date_time_format\" not in d:\n        Delegates to StationIO for all the work, then reloads.\n        \"\"\"\n        # Clear current stations and indexes\n        self.stations = []\n        self._name_index = {}\n        self._number_index = {}\n\n        # Reload from disk (this also rebuilds indexes)\n        self.load_json_stations()\n\n        # Re-apply tag smoothing for standard networks\n        for i in range(len(self.stations)):\n            station = self.stations[i]\n            if station",
+      "reason": "RepoDistill GraphRAG candidate (StationManager), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "StationManager"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\reception.py",
+      "line_start": 24,
+      "line_end": 42,
+      "quote": "def long_change_effect(player, reception):\n    print(\"Applying long change effect.\")\n    # add noise to current channel",
+      "reason": "RepoDistill GraphRAG candidate (long_change_effect), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "long_change_effect"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\autobump_agent.py",
+      "line_start": 29,
+      "line_end": 30,
+      "quote": "    def is_autobump_url(url):",
+      "reason": "RepoDistill GraphRAG candidate (AutoBumpAgent.is_autobump_url), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "AutoBumpAgent.is_autobump_url"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\autobump_agent.py",
+      "line_start": 33,
+      "line_end": 34,
+      "quote": "    def extract_url(prefixed_url):",
+      "reason": "RepoDistill GraphRAG candidate (AutoBumpAgent.extract_url), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "AutoBumpAgent.extract_url"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\liquid_manager.py",
+      "line_start": 182,
+      "line_end": 200,
+      "quote": "                return PlayPoint(found_index, diff.total_seconds(), _block.plan, _block.title)\n            current_mark = next_mark\n            found_index += 1",
+      "reason": "RepoDistill GraphRAG candidate (LiquidManager.get_play_point), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "LiquidManager.get_play_point"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\liquid_manager.py",
+      "line_start": 169,
+      "line_end": 180,
+      "quote": "        block_plan = []\n        for stream in conf_streams:",
+      "reason": "RepoDistill GraphRAG candidate (LiquidManager._build_stream_point), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "LiquidManager._build_stream_point"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\fs42_server\\api\\player.py",
+      "line_start": 198,
+      "line_end": 212,
+      "quote": "    cs = StationManager().server_conf[\"channel_socket\"]\n    with open(cs, \"w\") as f:\n        f.write(json.dumps(command))",
+      "reason": "RepoDistill GraphRAG candidate (player_channel), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "player_channel"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\fs42_server\\api\\ppv.py",
+      "line_start": 46,
+      "line_end": 49,
+      "quote": "class PlayFileResponse(BaseModel):",
+      "reason": "RepoDistill GraphRAG candidate (PlayFileResponse), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "PlayFileResponse"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\station_manager.py",
+      "line_start": 79,
+      "line_end": 82,
+      "quote": "    def station_by_channel(self, channel_number):",
+      "reason": "RepoDistill GraphRAG candidate (StationManager.station_by_channel), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "StationManager.station_by_channel"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\station_player.py",
+      "line_start": 593,
+      "line_end": 610,
+      "quote": "    def play_slot(self, network_name, when):\n        liquid = LiquidManager()\n\n        try:\n            play_point = liquid.get_play_point(network_name, when)\n            self._current_playing = play_point\n        except (ScheduleNotFound, ScheduleQueryNotInBounds):\n            self.schedule_panic(network_name)",
+      "reason": "RepoDistill GraphRAG candidate (StationPlayer.play_slot), CAPO retention budget 50%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "StationPlayer.play_slot"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\reception.py",
+      "line_start": 146,
+      "line_end": 147,
+      "quote": "    def update_filter(self):",
+      "reason": "RepoDistill GraphRAG candidate (ChunkyScrambledVideoFilter.update_filter), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "ChunkyScrambledVideoFilter.update_filter"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\station_player.py",
+      "line_start": 153,
+      "line_end": 169,
+      "quote": "                # Force kill if still alive\n                if self.now_playing_process.is_alive():\n                    self.now_playing_process.kill()",
+      "reason": "RepoDistill GraphRAG candidate (StationPlayer._close_now_playing), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "StationPlayer._close_now_playing"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\station_player.py",
+      "line_start": 222,
+      "line_end": 229,
+      "quote": "                self.mpv.vf = \"\"\n            else:",
+      "reason": "RepoDistill GraphRAG candidate (StationPlayer.update_reception), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "StationPlayer.update_reception"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\reception.py",
+      "line_start": 135,
+      "line_end": 140,
+      "quote": "    def update_filter(self):",
+      "reason": "RepoDistill GraphRAG candidate (ColorInvertedScrambledVideoFilter.update_filter), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "ColorInvertedScrambledVideoFilter.update_filter"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\reception.py",
+      "line_start": 122,
+      "line_end": 128,
+      "quote": "    def update_filter(self):",
+      "reason": "RepoDistill GraphRAG candidate (DiagonalScrambledVideoFilter.update_filter), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "DiagonalScrambledVideoFilter.update_filter"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\block_plan.py",
+      "line_start": 1,
+      "line_end": 14,
+      "quote": "class BlockPlanEntry:\n    def __init__(self, the_path, skip=0, duration=-1, is_stream=False, content_type=\"feature\", media_type=\"video\"):",
+      "reason": "RepoDistill GraphRAG candidate (BlockPlanEntry), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "BlockPlanEntry"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\liquid_manager.py",
+      "line_start": 19,
+      "line_end": 27,
+      "quote": "class PlayPoint:\n    def __init__(self, index, offset, plan, block_title=\"Unknown\"):",
+      "reason": "RepoDistill GraphRAG candidate (PlayPoint), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "PlayPoint"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\webrender\\web_render.py",
+      "line_start": 157,
+      "line_end": 185,
+      "quote": "def web_render_runner(user_conf, queue):\n    # Set up signal handler for web process - just exit cleanly\n    def web_sigint_handler(sig, frame):\n        print(\"WebRender process received SIGINT, exiting...\")\n        import sys\n        sys.exit(0)\n\n    signal.signal(signal.SIGINT, web_sigint_handler)\n\n    # Set environment variables to enable autoplay\n    import os\n    os.environ['QTWEBENGINE_CHROMIUM_FLAGS'] = '--autoplay-policy=no-user-gesture-required --disable-web-security --allow-running-insecure-content --disable-features=VizDisplayCompositor'\n",
+      "reason": "RepoDistill GraphRAG candidate (web_render_runner), CAPO retention budget 50%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "web_render_runner"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\webrender\\web_render.py",
+      "line_start": 94,
+      "line_end": 155,
+      "quote": "class WebRenderApp(QApplication):\n    def __init__(self, user_conf, queue=None):\n        super().__init__([])\n\n        self.queue = queue\n\n        self.window = WebRender()\n\n        # Set window properties\n        if \"width\" in user_conf and \"height\" in user_conf:\n            # Use specified dimensions\n            width = user_conf[\"width\"]\n            height = user_conf[\"height\"]\n\n            # Always use frameless window (no decorations)\n            self.window.setWindowFlags(Qt.FramelessWindowHint)\n            self.window.resize(width, height)\n\n            # Calculate position\n            if \"x\" in user_conf and \"y\" in user_conf:\n                # Use specified position\n                x = user_conf[\"x\"]\n                y = user_conf[\"y\"]\n            else:\n                # Center on screen\n                screen = self.primaryScreen().availableGeometry()\n                x = screen.center().x() - width // 2\n                y = screen.center().y() - height // 2\n",
+      "reason": "RepoDistill GraphRAG candidate (WebRenderApp), CAPO retention budget 50%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "WebRenderApp"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\webrender\\web_render.py",
+      "line_start": 95,
+      "line_end": 139,
+      "quote": "            # Use specified dimensions\n            width = user_conf[\"width\"]\n            height = user_conf[\"height\"]\n\n            # Always use frameless window (no decorations)\n            self.window.setWindowFlags(Qt.FramelessWindowHint)\n            self.window.resize(width, height)\n\n            # Go fullscreen by default (no decorations)\n            self.window.showFullScreen()",
+      "reason": "RepoDistill GraphRAG candidate (WebRenderApp.__init__), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "WebRenderApp.__init__"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\webrender\\web_render.py",
+      "line_start": 8,
+      "line_end": 92,
+      "quote": "class WebRender(QMainWindow):\n    def __init__(self):\n        super().__init__()\n        self.browser = QWebEngineView()\n\n        # Configure QWebEngineSettings to enable autoplay\n        settings = self.browser.settings()\n        settings.setAttribute(QWebEngineSettings.WebAttribute.PlaybackRequiresUserGesture, False)\n        settings.setAttribute(QWebEngineSettings.WebAttribute.JavascriptEnabled, True)\n        settings.setAttribute(QWebEngineSettings.WebAttribute.AutoLoadImages, True)\n        settings.setAttribute(QWebEngineSettings.WebAttribute.AllowRunningInsecureContent, True)\n\n        # Set custom user agent for identification\n        self.browser.page().profile().setHttpUserAgent(\"FieldStation42-WebRender/1.0\")\n\n        # Set black background color\n        self.browser.page().setBackgroundColor(Qt.black)\n\n        self.setCentralWidget(self.browser)\n\n        # Hide cursor\n        self.setCursor(Qt.BlankCursor)\n\n        # Initialize retry tracking for new URL\n        self.current_url = URL\n        self.retry_count = 0\n        print(f\"WebRender navigating to: {URL}\")\n\n        self.browser.setUrl(QUrl(URL))\n            // Try to enable wake lock and autoplay for media elements\n            if ('wakeLock' in navigator) {\n                navigator.wakeLock.request('screen').catch(e => console.log('Wake lock failed:', e));\n            }\n\n            // Find and try to play any media elements\n            const mediaElements = document.querySelectorAll('video, audio');\n            mediaElements.forEach(element => {\n                if (element.paused) {\n                    element.play().catch(e => console.log('Autoplay failed:', e));\n                }\n            });\n            \"\"\"\n            self.browser.page().runJavaScript(js_code)\n        else:",
+      "reason": "RepoDistill GraphRAG candidate (WebRender), CAPO retention budget 50%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "WebRender"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\webrender\\web_render.py",
+      "line_start": 52,
+      "line_end": 92,
+      "quote": "    def _on_load_finished(self, success):\n        if success:\n            print(f\"WebRender successfully loaded: {self.current_url}\")\n            document.body.click();\n\n            # Load failed - hide any error content and show black screen\n            hide_error_code = \"\"\"\n            document.body.style.backgroundColor = 'black';\n            document.body.innerHTML = '';\n            \"\"\"\n            self.browser.page().runJavaScript(hide_error_code)\n",
+      "reason": "RepoDistill GraphRAG candidate (WebRender._on_load_finished), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "WebRender._on_load_finished"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    }
+  ],
+  "usage": {
+    "llm_calls": 3,
+    "tool_calls": 33,
+    "input_tokens": 17634,
+    "output_tokens": 710,
+    "total_tokens": 18344,
+    "estimated_cost_usd": 0.040948,
+    "wall_clock_seconds": 1756.155705690384,
+    "unique_files_inspected": 10,
+    "unique_symbols_inspected": 32
+  },
+  "termination_reason": "all_chunks_processed",
+  "metadata": {
+    "generation_model": "gpt-4.1",
+    "implementation": "paper-faithful RepoDistill (No-Training) reimplementation",
+    "paper_citation": "Yin, Ding, Zhang, Wang, Wang, Ni, Cui. \"RepoDistill: Distilling Repository Knowledge through Compression-Aware Budget Allocation and Policy Optimization.\" Findings of ACL 2026, pp. 4425-4443. https://aclanthology.org/2026.findings-acl.217/",
+    "upstream_code_note": "No code was ported. The paper's cited implementation link is an Anonymous-GitHub mirror that is dead/unreachable, and no trained checkpoint is published. This implementation is derived from the published paper text (sections 2.1/2.2/2.3 and Appendix A.1.2, read directly from the ACL Anthology PDF).",
+    "variant": "no_training",
+    "embedding_model": "BAAI/bge-small-en-v1.5",
+    "perplexity_model": "Qwen/Qwen2.5-Coder-0.5B",
+    "graph_nodes": 791,
+    "graph_edges": 1516,
+    "anchor_node_ids": [
+      "fs42\\station_player.py::StationPlayer.show_web::514",
+      "fs42\\station_player.py::StationPlayer.play_file::231",
+      "fs42\\fs42_server\\api\\ppv.py::play_file::287",
+      "fs42\\station_player.py::StationPlayer._play_from_point::612",
+      "fs42\\webrender\\web_render.py::web_render_runner::157",
+      "fs42\\liquid_manager.py::LiquidManager._build_stream_point::169",
+      "fs42\\webrender\\web_render.py::WebRender._on_load_finished::52",
+      "fs42\\fs42_server\\api\\player.py::player_channel::198"
+    ],
+    "top_k": 8,
+    "rerank_lambda": 0.5,
+    "mmr_lambda": 0.1,
+    "segmentation_alpha": 0.2,
+    "capo_chunk_tokens": 10000,
+    "n_candidates": 24,
+    "n_retrieved_units": 32,
+    "n_capo_turns": 2,
+    "capo_turn_cap_hit": false,
+    "retrieved_chunk_ids": [
+      "fs42\\station_player.py:514-583",
+      "field_player.py:84-283",
+      "fs42\\fs42_server\\api\\ppv.py:287-342",
+      "fs42\\station_player.py:77-80",
+      "fs42\\station_player.py:612-713",
+      "fs42\\station_player.py:231-339",
+      "fs42\\station_player.py:434-510",
+      "fs42\\station_player.py:171-188",
+      "fs42\\station_player.py:45-65",
+      "fs42\\station_player.py:396-429",
+      "fs42\\station_manager.py:6-264",
+      "fs42\\reception.py:24-42",
+      "fs42\\autobump_agent.py:29-30",
+      "fs42\\autobump_agent.py:33-34",
+      "fs42\\liquid_manager.py:182-200",
+      "fs42\\liquid_manager.py:169-180",
+      "fs42\\fs42_server\\api\\player.py:198-212",
+      "fs42\\fs42_server\\api\\ppv.py:46-49",
+      "fs42\\station_manager.py:79-82",
+      "fs42\\station_player.py:593-610",
+      "fs42\\reception.py:146-147",
+      "fs42\\station_player.py:153-169",
+      "fs42\\station_player.py:222-229",
+      "fs42\\reception.py:135-140",
+      "fs42\\reception.py:122-128",
+      "fs42\\block_plan.py:1-14",
+      "fs42\\liquid_manager.py:19-27",
+      "fs42\\webrender\\web_render.py:157-185",
+      "fs42\\webrender\\web_render.py:94-155",
+      "fs42\\webrender\\web_render.py:95-139",
+      "fs42\\webrender\\web_render.py:8-92",
+      "fs42\\webrender\\web_render.py:52-92"
+    ],
+    "retention_budgets": {
+      "fs42\\station_player.py::StationPlayer.show_web::514": 0.5,
+      "field_player.py::main_loop::84": 0.25,
+      "fs42\\fs42_server\\api\\ppv.py::play_file::287": 0.25,
+      "fs42\\station_player.py::PlayerOutcome::77": 0.25,
+      "fs42\\station_player.py::StationPlayer._play_from_point::612": 0.25,
+      "fs42\\station_player.py::StationPlayer.play_file::231": 0.75,
+      "fs42\\station_player.py::StationPlayer.show_guide::434": 0.25,
+      "fs42\\station_player.py::StationPlayer._show_now_playing::171": 0.25,
+      "fs42\\station_player.py::update_status_socket::45": 0.25,
+      "fs42\\station_player.py::StationPlayer._apply_vfx::396": 0.25,
+      "fs42\\station_manager.py::StationManager::6": 0.25,
+      "fs42\\reception.py::long_change_effect::24": 0.25,
+      "fs42\\autobump_agent.py::AutoBumpAgent.is_autobump_url::29": 0.25,
+      "fs42\\autobump_agent.py::AutoBumpAgent.extract_url::33": 0.25,
+      "fs42\\liquid_manager.py::LiquidManager.get_play_point::182": 0.25,
+      "fs42\\liquid_manager.py::LiquidManager._build_stream_point::169": 0.25,
+      "fs42\\fs42_server\\api\\player.py::player_channel::198": 0.25,
+      "fs42\\fs42_server\\api\\ppv.py::PlayFileResponse::46": 0.25,
+      "fs42\\station_manager.py::StationManager.station_by_channel::79": 0.25,
+      "fs42\\station_player.py::StationPlayer.play_slot::593": 0.5,
+      "fs42\\reception.py::ChunkyScrambledVideoFilter.update_filter::146": 0.25,
+      "fs42\\station_player.py::StationPlayer._close_now_playing::153": 0.25,
+      "fs42\\station_player.py::StationPlayer.update_reception::222": 0.25,
+      "fs42\\reception.py::ColorInvertedScrambledVideoFilter.update_filter::135": 0.25,
+      "fs42\\reception.py::DiagonalScrambledVideoFilter.update_filter::122": 0.25,
+      "fs42\\block_plan.py::BlockPlanEntry::1": 0.25,
+      "fs42\\liquid_manager.py::PlayPoint::19": 0.25,
+      "fs42\\webrender\\web_render.py::web_render_runner::157": 0.5,
+      "fs42\\webrender\\web_render.py::WebRenderApp::94": 0.5,
+      "fs42\\webrender\\web_render.py::WebRenderApp.__init__::95": 0.25,
+      "fs42\\webrender\\web_render.py::WebRender::8": 0.5,
+      "fs42\\webrender\\web_render.py::WebRender._on_load_finished::52": 0.25
+    },
+    "original_context_tokens": 11232,
+    "compressed_context_tokens": 3480,
+    "compression_ratio": 0.30982905982905984
+  }
+}

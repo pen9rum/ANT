@@ -1,0 +1,563 @@
+{
+  "benchmark": "repoprobe",
+  "task_id": "FieldStation42-10",
+  "method": "repodistill",
+  "final_answer": "1. Yes, it is intentional: when you define a time slot without a \"tags\" entry (i.e., you use `\"0\": { }`), the system builds a default/empty tag version in the catalog (tag is \"\" or None). If you add \"tags\", then a version for each tag appears.\n\n2. If you add \"sequence\" to the JSON, an additional catalog grouping/entry is created for the combination of tag + sequence. So if you use the same show sometimes with just a tag, sometimes with tag+sequence, and sometimes empty tag, you will end up with three catalog groupings (empty tag, tag, tag+sequence), effectively tripling the catalog entries (each points to the same media, but under different keys).\n\nThis behavior results in episode counts being \"multiplied\" whenever you combine tag, tag+sequence, or empty tag scheduling styles in your config.",
+  "trajectory": [
+    {
+      "capo_turn": 0,
+      "n_documents": 9,
+      "document_ids": [
+        "test\\test_title_parser.py::TestTitleParserCustomPatterns.test_empty_custom_patterns_list::224",
+        "fs42\\title_parser.py::TitleParser.parse_title::7",
+        "fs42\\guide_builder.py::normalize_video_title::12",
+        "fs42\\station_manager.py::StationManager::6",
+        "fs42\\fs42_server\\api\\build.py::rebuild_catalog.rebuild_worker::24",
+        "fs42\\catalog.py::ShowCatalog::41",
+        "fs42\\catalog.py::ShowCatalog.__init__::45",
+        "test\\test_title_parser.py::TestTitleParserCustomPatterns.test_none_custom_patterns::231",
+        "test\\test_title_parser.py::TestTitleParserCustomPatterns.test_multiple_custom_patterns::186"
+      ],
+      "assigned_budgets": {
+        "test\\test_title_parser.py::TestTitleParserCustomPatterns.test_empty_custom_patterns_list::224": 0.0,
+        "fs42\\title_parser.py::TitleParser.parse_title::7": 0.25,
+        "fs42\\guide_builder.py::normalize_video_title::12": 0.25,
+        "fs42\\station_manager.py::StationManager::6": 0.25,
+        "fs42\\fs42_server\\api\\build.py::rebuild_catalog.rebuild_worker::24": 0.0,
+        "fs42\\catalog.py::ShowCatalog::41": 0.5,
+        "fs42\\catalog.py::ShowCatalog.__init__::45": 0.0,
+        "test\\test_title_parser.py::TestTitleParserCustomPatterns.test_none_custom_patterns::231": 0.0,
+        "test\\test_title_parser.py::TestTitleParserCustomPatterns.test_multiple_custom_patterns::186": 0.0
+      },
+      "budget_parse_failures": 0,
+      "memory_after_turn": "This chunk contains essential logic for building and managing catalogs and tags, specifically in the context of a media scheduling and playback platform. Key points include: TitleParser's ability to parse episode titles with built-in or custom patterns; normalization processes for video titles; and the StationManager's role in handling configuration, custom title patterns, day parts, and loading station/channel information. The ShowCatalog class forms the core of catalog construction, associating media entries (clips) with tags, either from explicit tags defined in schedule slots or by scanning directory structures for tagged content. It also integrates tag scans from slot configurations, applies overrides, and handles commercial, bump, and fallback tags. Sequence scanning is briefly mentioned. Tests and boilerplate code have been omitted as non-essential. Overall, the key architecture for catalog and tag handling, as well as points of customization, are preserved, which is crucial for debugging catalog building and behaviors with tagged content."
+    },
+    {
+      "capo_turn": 1,
+      "n_documents": 18,
+      "document_ids": [
+        "fs42\\catalog.py::ShowCatalog._build_standard::136",
+        "fs42\\sequence_api.py::SequenceAPI.scan_sequences::96",
+        "fs42\\sequence_api.py::SequenceAPI._build_sequence::110",
+        "fs42\\sequence.py::NamedSequence::12",
+        "fs42\\catalog.py::ShowCatalog.build_catalog::99",
+        "fs42\\catalog_entry.py::CatalogEntry::15",
+        "station_42.py::main::183",
+        "fs42\\sequence_io.py::SequenceIO.__init__::8",
+        "fs42\\sequence_io.py::SequenceIO::7",
+        "fs42\\ux\\welcome_screen.py::WelcomeScreen.populate_stats::46",
+        "fs42\\liquid_manager.py::LiquidManager.reset_sequences::73",
+        "fs42\\ux\\schedule_screen.py::ScheduleScreen.all_catalogs_found::134",
+        "fs42\\ux\\catalog_screen.py::CatalogScreen.populate_stats::114",
+        "fs42\\ux\\catalog_screen.py::CatalogScreen.rebuild_all_thread::106",
+        "fs42\\ux\\catalog_screen.py::CatalogScreen.on_button_pressed::38",
+        "station_42.py::Station42.__init__::24",
+        "fs42\\ux\\catalog_screen.py::CatalogScreen.rebuild_thread::99",
+        "fs42\\liquid_schedule.py::LiquidSchedule.__init__::28"
+      ],
+      "assigned_budgets": {
+        "fs42\\catalog.py::ShowCatalog._build_standard::136": 0.5,
+        "fs42\\sequence_api.py::SequenceAPI.scan_sequences::96": 0.25,
+        "fs42\\sequence_api.py::SequenceAPI._build_sequence::110": 0.25,
+        "fs42\\sequence.py::NamedSequence::12": 0.25,
+        "fs42\\catalog.py::ShowCatalog.build_catalog::99": 0.25,
+        "fs42\\catalog_entry.py::CatalogEntry::15": 0.25,
+        "station_42.py::main::183": 0.0,
+        "fs42\\sequence_io.py::SequenceIO.__init__::8": 0.0,
+        "fs42\\sequence_io.py::SequenceIO::7": 0.25,
+        "fs42\\ux\\welcome_screen.py::WelcomeScreen.populate_stats::46": 0.0,
+        "fs42\\liquid_manager.py::LiquidManager.reset_sequences::73": 0.25,
+        "fs42\\ux\\schedule_screen.py::ScheduleScreen.all_catalogs_found::134": 0.0,
+        "fs42\\ux\\catalog_screen.py::CatalogScreen.populate_stats::114": 0.0,
+        "fs42\\ux\\catalog_screen.py::CatalogScreen.rebuild_all_thread::106": 0.0,
+        "fs42\\ux\\catalog_screen.py::CatalogScreen.on_button_pressed::38": 0.0,
+        "station_42.py::Station42.__init__::24": 0.0,
+        "fs42\\ux\\catalog_screen.py::CatalogScreen.rebuild_thread::99": 0.0,
+        "fs42\\liquid_schedule.py::LiquidSchedule.__init__::28": 0.0
+      },
+      "budget_parse_failures": 0,
+      "memory_after_turn": "This chunk provides a detailed look into catalog and sequence building, strengthening the picture of how the system manages tagged content and episode sequencing. ShowCatalog._build_standard constructs catalogs by analyzing configured tags across days/times, handling slot configuration for bumps, commercials, and tag overrides, and scanning directories for media per tag. If a slot includes a 'sequence', the SequenceAPI builds or updates associated NamedSequences. Sequence management is database-backed, with NamedSequence and SequenceIO handling persistence and retrieval of ordered episode groups. CatalogEntry is used to model individual media items, with serialization support for persistence. Catalog and sequence rebuilding can be triggered interactively, and error handling is embedded throughout. The chunk clarifies that tags and sequences can lead to multiple catalog entries per show/tag/sequence combo, answering key questions about catalog building behaviors when tags or sequences are provided in the schedule slots."
+    },
+    {
+      "capo_turn": 2,
+      "n_documents": 11,
+      "document_ids": [
+        "fs42\\catalog_entry.py::CatalogEntry.from_db_row::74",
+        "fs42\\media_processor.py::MediaProcessor.process_one::123",
+        "fs42\\autobump_agent.py::AutoBumpAgent.next_up_bump::44",
+        "fs42\\catalog.py::ShowCatalog.make_reel_fill::511",
+        "fs42\\autobump_agent.py::AutoBumpAgent.message_bump::37",
+        "fs42\\sequence_io.py::SequenceIO.put_sequence::41",
+        "fs42\\sequence_api.py::SequenceAPI.get_sequence::21",
+        "fs42\\media_processor.py::MediaProcessor._rfind_media::262",
+        "fs42\\catalog_io.py::CatalogIO.entry_by_id::87",
+        "fs42\\catalog_api.py::CatalogAPI.get_entry_by_id::52",
+        "fs42\\liquid_io.py::LiquidIO._build_block_from_row::164"
+      ],
+      "assigned_budgets": {
+        "fs42\\catalog_entry.py::CatalogEntry.from_db_row::74": 0.25,
+        "fs42\\media_processor.py::MediaProcessor.process_one::123": 0.25,
+        "fs42\\autobump_agent.py::AutoBumpAgent.next_up_bump::44": 0.25,
+        "fs42\\catalog.py::ShowCatalog.make_reel_fill::511": 0.25,
+        "fs42\\autobump_agent.py::AutoBumpAgent.message_bump::37": 0.25,
+        "fs42\\sequence_io.py::SequenceIO.put_sequence::41": 0.25,
+        "fs42\\sequence_api.py::SequenceAPI.get_sequence::21": 0.25,
+        "fs42\\media_processor.py::MediaProcessor._rfind_media::262": 0.25,
+        "fs42\\catalog_io.py::CatalogIO.entry_by_id::87": 0.25,
+        "fs42\\catalog_api.py::CatalogAPI.get_entry_by_id::52": 0.25,
+        "fs42\\liquid_io.py::LiquidIO._build_block_from_row::164": 0.25
+      },
+      "budget_parse_failures": 0,
+      "memory_after_turn": "This chunk outlines core mechanisms for catalog entry creation, media processing, tag/sequence handling, and data persistence relevant to catalog/tags issues. CatalogEntry deserialization adapts to schema changes and reconstructs scheduling hints. MediaProcessor processes media files, detecting type and duration. Both autobump and catalog filling utilize CatalogEntry for program blocks. Sequences are managed in a database via SequenceIO, and can be retrieved for constructing logical episode orders. Catalog lookups and API calls resolve entries by ID for scheduling. File scanning supports both audio/video cataloging. Overall, multiple catalog entries can result from combinations of tag and sequence parameters, supporting the memory's insight that tags, sequences, and slot definitions influence catalog multiplicity and scheduling behavior."
+    }
+  ],
+  "evidence": [
+    {
+      "path": "fs42\\title_parser.py",
+      "line_start": 7,
+      "line_end": 70,
+      "quote": "        # Define separator pattern - spaces, dots, underscores, dashes\n        sep = r\"[\\s._-]+\"\n\n        # Default built-in patterns\n        default_patterns = [\n            # Title + separators + episode indicators + number (e.g., \"e2\", \"ep3\", \"episode4\", \"Episode 1\")\n            (r\"^(.+?)\" + sep + r\"(?:[eE](?:p(?:isode)?)?(?:\" + sep + r\")?\\d+|[eE]\\d+)(?:\" + sep + r\".*)?$\", 1),\n                # Clean up the title\n                title = re.sub(r\"[._-]\", \" \", title)  # Replace dots, dashes and underscores with spaces\n                title = re.sub(r\"\\s+\", \" \", title)  # Normalize multiple spaces\n                title = title.strip()\n                # Convert to title case\n                return \" \".join(word.capitalize() for word in title.split())\n",
+      "reason": "RepoDistill GraphRAG candidate (TitleParser.parse_title), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "TitleParser.parse_title"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\guide_builder.py",
+      "line_start": 12,
+      "line_end": 14,
+      "quote": "def normalize_video_title(title):",
+      "reason": "RepoDistill GraphRAG candidate (normalize_video_title), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "normalize_video_title"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\station_manager.py",
+      "line_start": 6,
+      "line_end": 264,
+      "quote": "class StationManager(object):\n    # the borg singleton pattern\n    __we_are_all_one = {}\n    _initialized = False\n\n    __main_config_path = \"confs/main_config.json\"\n\n    no_catalog = {\"guide\", \"streaming\", \"web\"}\n    no_schedule = {\"guide\", \"streaming\", \"web\"}\n\n                self.server_conf = {\n                    \"channel_socket\": \"runtime/channel.socket\",\n                    \"status_socket\": \"runtime/play_status.socket\",\n                    \"day_parts\": {\n                        \"morning\": range(6, 10),\n                        \"daytime\": range(10, 18),\n                        \"prime\": range(18, 23),\n                        \"late\": [23, 0, 1, 2],\n                        \"overnight\": range(2, 6),\n                    },\n                    \"time_format\": \"%H:%M\",\n                    \"date_time_format\": \"%Y-%m-%dT%H:%M:%S\",\n                    \"title_patterns\": [],\n                }\n                to_check = [\n                    \"channel_socket\",\n                    \"status_socket\",\n                    \"time_format\",\n                    \"start_mpv\",\n                    \"db_path\",\n                    \"server_host\",\n                    \"server_port\",\n                    \"normalize_titles\",\n                    \"tmdb_api_key\",\n                    \"recall_last_channel\"\n                ]\n\n                for key in to_check:\n                    if key in d:\n                        self.server_conf[key] = d[key]\n\n                            # Validate that required fields exist\n                            if \"pattern\" not in pattern_config:\n                                _l.error(f\"title_patterns[{i}]: missing 'pattern' field\")\n                                continue\n                            if \"group\" not in pattern_config:\n                                _l.error(f\"title_patterns[{i}]: missing 'group' field\")\n                                continue\n\n                            # Validate that the regex compiles\n                            re.compile(pattern_config[\"pattern\"])\n\n                    # check the environment variable or set default then\n                    self.server_conf[\"date_time_format\"] = os.environ.get(\"FS42_TS\", \"%Y-%m-%dT%H:%M:%S\")\n                else:\n                    self.server_conf[\"date_time_format\"] = d[\"date_time_format\"]\n\n            except Exception as e:\n                print(e)\n                _l.exception(e)\n         ",
+      "reason": "RepoDistill GraphRAG candidate (StationManager), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "StationManager"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\catalog.py",
+      "line_start": 41,
+      "line_end": 668,
+      "quote": "        \n        self.clip_index = {}\n\n        for entry in catalog_entries:\n            \n            if entry.tag not in self.clip_index:\n                self.clip_index[entry.tag] = []\n            self.clip_index[entry.tag].append(entry)\n\n    def build_catalog(self):\n        self._l.info(f\"Starting catalog build for {self.config['network_name']}\")\n\n        match self.config[\"network_type\"]:\n            case \"standard\":\n                if FF_USE_FLUID_FILE_CACHE:\n                    from fs42.fluid_builder import FluidBuilder\n\n                    self.__fluid_builder = FluidBuilder()\n                    media_filter = self.config.get(\"media_filter\", \"video\")\n                    self._l.info(\"Initializing fluid file cache...\")\n                    self.__fluid_builder.scan_file_cache(self.config[\"content_dir\"], media_filter)\n                    self._l.info(\"Fluid file cache updated - continuing build\")\n\n                return self._build_standard()\n            case \"loop\":\n                return self._build_single()\n            case \"guide\":\n                raise NotImplementedError(\"Guide catalog not supported yet.\")\n            case \"streaming\":\n                # just return for now\n                return\n\n    def _build_single(self, tag=\"content\"):\n        self.clip_index = {}\n        self.tags = []\n        # for station types with all files in a single directory\n        media_filter = self.config.get(\"media_filter\", \"video\")\n        self._l.info(f\"Checking for media in {self.config['content_dir']} for single directory with filter={media_filter}\")\n        file_list = MediaProcessor._find_media(self.config[\"content_dir\"], media_filter)\n        self.clip_index[tag] = MediaProcessor._process_media(file_list, tag, content_type=\"feature\")\n        self._l.info(f\"Building complete - processed {len(file_list)} files\")\n        self._write_catalog()\n\n    def _build_tags(self):\n        self.tags = list(self.clip_index.keys())\n\n    def _build_standard(self):\n        self.clip_index = {}\n        self.tags = []\n\n        self._l.info(\"Standard network\")\n        start_bumps = {}\n        end_bumps = {}\n\n        # get the list of all tags\n        tags = {}\n        bump_overrides = {}\n        commercial_overrides = {}\n        for day in DAYS:\n            slots = self.config[day]\n            for k in slots:\n                # Validate that slots[k] is a dictionary\n           ",
+      "reason": "RepoDistill GraphRAG candidate (ShowCatalog), CAPO retention budget 50%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "ShowCatalog"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\catalog.py",
+      "line_start": 136,
+      "line_end": 257,
+      "quote": "    def _build_standard(self):\n        self.clip_index = {}\n        self.tags = []\n\n        self._l.info(\"Standard network\")\n        start_bumps = {}\n        end_bumps = {}\n\n        # get the list of all tags\n        tags = {}\n        bump_overrides = {}\n        commercial_overrides = {}\n        for day in DAYS:\n            slots = self.config[day]\n            for k in slots:\n                # Validate that slots[k] is a dictionary\n                if not isinstance(slots[k], dict):\n                    self._l.error(f\"Invalid slot configuration for {day}[{k}]: expected dict, got {type(slots[k]).__name__}\")\n                    self._l.error(f\"This may be caused by media processing failures. Check logs above for errors.\")\n                    self._l.error(f\"Slot value: {slots[k]}\")\n                    raise TypeError(f\"Invalid slot configuration for {day}[{k}]: expected dict, got {type(slots[k]).__name__}. Check media processing logs for errors.\")\n\n                if \"tags\" in slots[k]:\n                    if type(slots[k][\"tags\"]) is list:\n                        for m in slots[k][\"tags\"]:\n                            tags[m] = True\n                    else:\n                        tags[slots[k][\"tags\"]] = True\n\n                # These checks should be outside the tags check - slots can have bump/commercial dirs without tags\n                if \"bump_dir\" in slots[k]:\n                    bump_overrides[slots[k][\"bump_dir\"]] = True\n                if \"commercial_dir\" in slots[k]:\n                    commercial_overrides[slots[k][\"commercial_dir\"]] = True\n                if \"start_bump\" in slots[k]:\n                    start_bumps[slots[k][\"start_bump\"]] = True\n                if \"end_bump\" in slots[k]:\n                    end_bumps[slots[k][\"end_bump\"]] = True\n        \n        # check for tag overrides\n        tag_overrides = self.config.get(\"tag_overrides\", {})\n        for override in tag_overrides.values():\n            if \"bump_dir\" in override:\n                bump_overrides[override[\"bump_dir\"]] = True\n            if \"commercial_dir\" in override:\n                commercial_overrides[override[\"commercial_dir\"]] = True\n            if \"start_bump\" in override:\n                start_bumps[override[\"start_bump\"]] = True\n            if \"end_bump\" in override:\n                end_bumps[override[\"start_bump\"]] = True\n\n        # check for fallback tag\n        if \"fall",
+      "reason": "RepoDistill GraphRAG candidate (ShowCatalog._build_standard), CAPO retention budget 50%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "ShowCatalog._build_standard"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\sequence_api.py",
+      "line_start": 96,
+      "line_end": 107,
+      "quote": "    def scan_sequences(station_config):\n        for day in DAYS:\n            if day in station_config:",
+      "reason": "RepoDistill GraphRAG candidate (SequenceAPI.scan_sequences), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "SequenceAPI.scan_sequences"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\sequence_api.py",
+      "line_start": 110,
+      "line_end": 139,
+      "quote": "            \n            file_list = MediaProcessor._rfind_media(f\"{station_config['content_dir']}/{seq_tag}\")\n            \n            ns = NamedSequence(station_config[\"network_name\"], seq_name, seq_tag, seq_start, seq_end, 0, file_list)\n            SequenceIO().put_sequence(station_config[\"network_name\"], ns)",
+      "reason": "RepoDistill GraphRAG candidate (SequenceAPI._build_sequence), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "SequenceAPI._build_sequence"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\sequence.py",
+      "line_start": 12,
+      "line_end": 47,
+      "quote": "class NamedSequence:\n    def __init__(\n        self,\n        station_name: str,\n        sequence_name: str,\n        tag_path: str,\n        start_perc: float,\n        end_perc: float,\n        current_index: int,\n        file_list: list[str],\n    ):\n        self.station_name = station_name\n        self.sequence_name = sequence_name",
+      "reason": "RepoDistill GraphRAG candidate (NamedSequence), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "NamedSequence"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\catalog.py",
+      "line_start": 99,
+      "line_end": 120,
+      "quote": "    def build_catalog(self):\n        self._l.info(f\"Starting catalog build for {self.config['network_name']}\")\n\n        match self.config[\"network_type\"]:\n            case \"standard\":",
+      "reason": "RepoDistill GraphRAG candidate (ShowCatalog.build_catalog), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "ShowCatalog.build_catalog"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\catalog_entry.py",
+      "line_start": 15,
+      "line_end": 134,
+      "quote": "class CatalogEntry:\n    # CatalogEntry(row[2], row[3], float(row[4]), json.loads(row[6]) if row[6] else [])\n    def __init__(self, path, duration, tag, hints=[], count=0, content_type=\"feature\", media_type=\"video\"):\n        self.path = path\n        self.realpath = None\n        # get the show name from the path\n        self.title = os.path.splitext(os.path.basename(path))[0]\n        self.duration = duration\n        self.tag = tag\n        self.count = count\n        self.hints = hints\n        self.content_type = content_type\n        self.media_type = media_type\n        tup = (\n            json_data[\"dbid\"],\n            json_data[\"station\"],\n            json_data[\"path\"],\n            json_data[\"title\"],\n            json_data[\"duration\"],\n            json_data[\"tag\"],\n            json_data[\"count\"],\n            json_data[\"hints\"],\n            json_data.get(\"created_at\", None),\n            json_data.get(\"updated_at\", None),\n            json_data.get(\"realpath\", None),\n            json_data.get(\"content_type\", \"feature\"),\n            json_data.get(\"media_type\", \"video\"),\n        )\n        return CatalogEntry.from_db_row(tup)\n\n    @staticmethod\n    def from_db_row(row):\n\n        # Load hints from JSON\n        if hints_str:\n            try:",
+      "reason": "RepoDistill GraphRAG candidate (CatalogEntry), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "CatalogEntry"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\sequence_io.py",
+      "line_start": 7,
+      "line_end": 198,
+      "quote": "class SequenceIO:\n    def __init__(self):\n    \n    def update_current_index(self, station_name: str, sequence_name: str, tag_path: str, new_index: int):\n        with sqlite3.connect(self.db_path) as connection:\n            cursor = connection.cursor()\n            cursor.execute(\n                \"\"\"UPDATE named_sequence \n                              SET current_index = ? \n                              WHERE station = ? AND sequence_name = ? AND tag_path = ?\"\"\",\n                (new_index, station_name, sequence_name, tag_path),\n            )\n            cursor.close()\n            connection.commit()\n\n    def update_sequence_index_by_path(self, station_name: str, sequence_name: str, tag_path: str, episode_path: str):\n        with sqlite3.connect(self.db_path) as connection:\n            cursor = connection.cursor()\n            # Get the sequence_index for the episode_path\n            cursor.execute(\"\"\"\n                SELECT se.sequence_index \n                FROM sequence_entries se\n                JOIN named_sequence ns ON se.named_sequence_id = ns.id\n                WHERE ns.station = ? AND ns.sequence_name = ? AND ns.tag_path = ? AND se.fpath = ?\n            \"\"\", (station_name, sequence_name, tag_path, episode_path))",
+      "reason": "RepoDistill GraphRAG candidate (SequenceIO), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "SequenceIO"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\liquid_manager.py",
+      "line_start": 73,
+      "line_end": 118,
+      "quote": "        # get the catalog\n        catalog = ShowCatalog(station_config)\n\n        _blocks: list[LiquidBlock] = self.schedules[station_config[\"network_name\"]]\n\n        now = datetime.datetime.now()\n        _reaped = {}\n\n                        SequenceAPI.reset_by_episode_path(\n                            station_config,\n                            _block.sequence_key[\"sequence_name\"],\n                            _block.sequence_key[\"tag_path\"],",
+      "reason": "RepoDistill GraphRAG candidate (LiquidManager.reset_sequences), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "LiquidManager.reset_sequences"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\catalog_entry.py",
+      "line_start": 74,
+      "line_end": 134,
+      "quote": "    def from_db_row(row):\n\n        entry = CatalogEntry(path, duration, tag, None, count, content_type, media_type)\n        entry.realpath = realpath\n        entry.count = count\n        entry.dbid = dbid\n        entry.station = station\n        entry.created_at = created\n        entry.updated_at = updated\n\n                # Parse the JSON string back to list\n                loaded_hints = json.loads(hints_str)\n\n                if not isinstance(loaded_hints, list):\n                    loaded_hints = []\n\n                for hint_str in loaded_hints:\n                    hint = json.loads(hint_str)\n                    # Convert each hint JSON back to its object\n                    if isinstance(hint, dict) and \"type\" in hint:\n                        if hint[\"type\"] == \"day_part\":",
+      "reason": "RepoDistill GraphRAG candidate (CatalogEntry.from_db_row), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "CatalogEntry.from_db_row"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\media_processor.py",
+      "line_start": 123,
+      "line_end": 165,
+      "quote": "        # get video file length in seconds\n        duration = 0.0\n        result = None\n        try:\n            full_path = False\n            if fluid:\n                full_path = os.path.realpath(fname)\n                cached = fluid.check_file_cache(full_path)\n                if cached:\n                    duration = cached.duration\n\n            if not duration:\n                # then do the processing\n                duration = MediaProcessor._get_duration(fname)\n",
+      "reason": "RepoDistill GraphRAG candidate (MediaProcessor.process_one), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "MediaProcessor.process_one"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\autobump_agent.py",
+      "line_start": 44,
+      "line_end": 50,
+      "quote": "        block = CatalogEntry(message_url, ab_config[\"duration\"], \":autobump:\")\n        return block",
+      "reason": "RepoDistill GraphRAG candidate (AutoBumpAgent.next_up_bump), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "AutoBumpAgent.next_up_bump"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\catalog.py",
+      "line_start": 511,
+      "line_end": 575,
+      "quote": "    def make_reel_fill(self, when, length, use_bumpers=True, commercial_dir=None, bump_dir=None, strict_count=None):\n        target_break_duration = self.config[\"break_duration\"]\n\n        elif strict_count:\n            target_break_duration = length / strict_count\n\n        remaining = length\n            candidate = None\n            try:\n                if not self.config[\"commercial_free\"]:\n                    candidate = self.find_commercial(seconds=remaining, when=when, commercial_dir=commercial_dir)\n                else:\n                    candidate = self.find_bump(remaining, when, \"fill\")\n            except MatchingContentNotFound:",
+      "reason": "RepoDistill GraphRAG candidate (ShowCatalog.make_reel_fill), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "ShowCatalog.make_reel_fill"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\autobump_agent.py",
+      "line_start": 37,
+      "line_end": 41,
+      "quote": "        block = CatalogEntry(message_url, ab_config[\"duration\"], \":autobump:\")",
+      "reason": "RepoDistill GraphRAG candidate (AutoBumpAgent.message_bump), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "AutoBumpAgent.message_bump"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\sequence_io.py",
+      "line_start": 41,
+      "line_end": 71,
+      "quote": "    def put_sequence(self, station_name: str, named_sequence):\n        \"\"\"\n            # Now insert the sequence entries\n            for index, entry in enumerate(named_sequence.episodes):\n                cursor.execute(",
+      "reason": "RepoDistill GraphRAG candidate (SequenceIO.put_sequence), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "SequenceIO.put_sequence"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\sequence_api.py",
+      "line_start": 21,
+      "line_end": 30,
+      "quote": "    def get_sequence(station_config, sequence_name, tag_path) -> NamedSequence:",
+      "reason": "RepoDistill GraphRAG candidate (SequenceAPI.get_sequence), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "SequenceAPI.get_sequence"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\media_processor.py",
+      "line_start": 262,
+      "line_end": 281,
+      "quote": "    def _rfind_media(path, media_filter=\"video\") -> list[str]:\n        logging.getLogger(\"MEDIA\").debug(f\"_rfind_media scanning for media in {path} with filter={media_filter}\")\n",
+      "reason": "RepoDistill GraphRAG candidate (MediaProcessor._rfind_media), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "MediaProcessor._rfind_media"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\catalog_io.py",
+      "line_start": 87,
+      "line_end": 101,
+      "quote": "            cursor.close()\n\n            if row:\n                return CatalogEntry.from_db_row(row)\n\n            return None",
+      "reason": "RepoDistill GraphRAG candidate (CatalogIO.entry_by_id), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "CatalogIO.entry_by_id"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\catalog_api.py",
+      "line_start": 52,
+      "line_end": 53,
+      "quote": "    def get_entry_by_id(entry_id):",
+      "reason": "RepoDistill GraphRAG candidate (CatalogAPI.get_entry_by_id), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "CatalogAPI.get_entry_by_id"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\liquid_io.py",
+      "line_start": 164,
+      "line_end": 224,
+      "quote": "    \n\n        content_obj = None\n        if _content_json:\n            if not isinstance(_content_json, list):\n                # Single content entry\n                if content_cache is not None:\n                    content_obj = content_cache.get(int(_content_json))\n                else:\n                    content_obj = CatalogAPI.get_entry_by_id(int(_content_json))\n            else:\n                # Multiple content entries\n                content_obj = []\n                for entry in _content_json:\n                    if content_cache is not None:\n                        cached_entry = content_cache.get(int(entry))\n                        if cached_entry:\n                            content_obj.append(cached_entry)\n                    else:",
+      "reason": "RepoDistill GraphRAG candidate (LiquidIO._build_block_from_row), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "LiquidIO._build_block_from_row"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    }
+  ],
+  "usage": {
+    "llm_calls": 4,
+    "tool_calls": 39,
+    "input_tokens": 30793,
+    "output_tokens": 1084,
+    "total_tokens": 31877,
+    "estimated_cost_usd": 0.070258,
+    "wall_clock_seconds": 1528.2497861385345,
+    "unique_files_inspected": 21,
+    "unique_symbols_inspected": 38
+  },
+  "termination_reason": "all_chunks_processed",
+  "metadata": {
+    "generation_model": "gpt-4.1",
+    "implementation": "paper-faithful RepoDistill (No-Training) reimplementation",
+    "paper_citation": "Yin, Ding, Zhang, Wang, Wang, Ni, Cui. \"RepoDistill: Distilling Repository Knowledge through Compression-Aware Budget Allocation and Policy Optimization.\" Findings of ACL 2026, pp. 4425-4443. https://aclanthology.org/2026.findings-acl.217/",
+    "upstream_code_note": "No code was ported. The paper's cited implementation link is an Anonymous-GitHub mirror that is dead/unreachable, and no trained checkpoint is published. This implementation is derived from the published paper text (sections 2.1/2.2/2.3 and Appendix A.1.2, read directly from the ACL Anthology PDF).",
+    "variant": "no_training",
+    "embedding_model": "BAAI/bge-small-en-v1.5",
+    "perplexity_model": "Qwen/Qwen2.5-Coder-0.5B",
+    "graph_nodes": 791,
+    "graph_edges": 1516,
+    "anchor_node_ids": [
+      "fs42\\catalog.py::ShowCatalog::41",
+      "fs42\\catalog_entry.py::CatalogEntry::15",
+      "test\\test_title_parser.py::TestTitleParserCustomPatterns.test_empty_custom_patterns_list::224",
+      "fs42\\sequence_api.py::SequenceAPI._build_sequence::110",
+      "fs42\\sequence.py::NamedSequence::12",
+      "fs42\\catalog.py::ShowCatalog.__init__::45",
+      "test\\test_title_parser.py::TestTitleParserCustomPatterns.test_none_custom_patterns::231",
+      "test\\test_title_parser.py::TestTitleParserCustomPatterns.test_multiple_custom_patterns::186"
+    ],
+    "top_k": 8,
+    "rerank_lambda": 0.5,
+    "mmr_lambda": 0.1,
+    "segmentation_alpha": 0.2,
+    "capo_chunk_tokens": 10000,
+    "n_candidates": 24,
+    "n_retrieved_units": 38,
+    "n_capo_turns": 3,
+    "capo_turn_cap_hit": false,
+    "retrieved_chunk_ids": [
+      "test\\test_title_parser.py:224-229",
+      "fs42\\title_parser.py:7-70",
+      "fs42\\guide_builder.py:12-14",
+      "fs42\\station_manager.py:6-264",
+      "fs42\\fs42_server\\api\\build.py:24-62",
+      "fs42\\catalog.py:41-668",
+      "fs42\\catalog.py:45-66",
+      "test\\test_title_parser.py:231-235",
+      "test\\test_title_parser.py:186-204",
+      "fs42\\catalog.py:136-257",
+      "fs42\\sequence_api.py:96-107",
+      "fs42\\sequence_api.py:110-139",
+      "fs42\\sequence.py:12-47",
+      "fs42\\catalog.py:99-120",
+      "fs42\\catalog_entry.py:15-134",
+      "station_42.py:183-600",
+      "fs42\\sequence_io.py:8-10",
+      "fs42\\sequence_io.py:7-198",
+      "fs42\\ux\\welcome_screen.py:46-83",
+      "fs42\\liquid_manager.py:73-118",
+      "fs42\\ux\\schedule_screen.py:134-143",
+      "fs42\\ux\\catalog_screen.py:114-129",
+      "fs42\\ux\\catalog_screen.py:106-112",
+      "fs42\\ux\\catalog_screen.py:38-79",
+      "station_42.py:24-32",
+      "fs42\\ux\\catalog_screen.py:99-103",
+      "fs42\\liquid_schedule.py:28-33",
+      "fs42\\catalog_entry.py:74-134",
+      "fs42\\media_processor.py:123-165",
+      "fs42\\autobump_agent.py:44-50",
+      "fs42\\catalog.py:511-575",
+      "fs42\\autobump_agent.py:37-41",
+      "fs42\\sequence_io.py:41-71",
+      "fs42\\sequence_api.py:21-30",
+      "fs42\\media_processor.py:262-281",
+      "fs42\\catalog_io.py:87-101",
+      "fs42\\catalog_api.py:52-53",
+      "fs42\\liquid_io.py:164-224"
+    ],
+    "retention_budgets": {
+      "test\\test_title_parser.py::TestTitleParserCustomPatterns.test_empty_custom_patterns_list::224": 0.0,
+      "fs42\\title_parser.py::TitleParser.parse_title::7": 0.25,
+      "fs42\\guide_builder.py::normalize_video_title::12": 0.25,
+      "fs42\\station_manager.py::StationManager::6": 0.25,
+      "fs42\\fs42_server\\api\\build.py::rebuild_catalog.rebuild_worker::24": 0.0,
+      "fs42\\catalog.py::ShowCatalog::41": 0.5,
+      "fs42\\catalog.py::ShowCatalog.__init__::45": 0.0,
+      "test\\test_title_parser.py::TestTitleParserCustomPatterns.test_none_custom_patterns::231": 0.0,
+      "test\\test_title_parser.py::TestTitleParserCustomPatterns.test_multiple_custom_patterns::186": 0.0,
+      "fs42\\catalog.py::ShowCatalog._build_standard::136": 0.5,
+      "fs42\\sequence_api.py::SequenceAPI.scan_sequences::96": 0.25,
+      "fs42\\sequence_api.py::SequenceAPI._build_sequence::110": 0.25,
+      "fs42\\sequence.py::NamedSequence::12": 0.25,
+      "fs42\\catalog.py::ShowCatalog.build_catalog::99": 0.25,
+      "fs42\\catalog_entry.py::CatalogEntry::15": 0.25,
+      "station_42.py::main::183": 0.0,
+      "fs42\\sequence_io.py::SequenceIO.__init__::8": 0.0,
+      "fs42\\sequence_io.py::SequenceIO::7": 0.25,
+      "fs42\\ux\\welcome_screen.py::WelcomeScreen.populate_stats::46": 0.0,
+      "fs42\\liquid_manager.py::LiquidManager.reset_sequences::73": 0.25,
+      "fs42\\ux\\schedule_screen.py::ScheduleScreen.all_catalogs_found::134": 0.0,
+      "fs42\\ux\\catalog_screen.py::CatalogScreen.populate_stats::114": 0.0,
+      "fs42\\ux\\catalog_screen.py::CatalogScreen.rebuild_all_thread::106": 0.0,
+      "fs42\\ux\\catalog_screen.py::CatalogScreen.on_button_pressed::38": 0.0,
+      "station_42.py::Station42.__init__::24": 0.0,
+      "fs42\\ux\\catalog_screen.py::CatalogScreen.rebuild_thread::99": 0.0,
+      "fs42\\liquid_schedule.py::LiquidSchedule.__init__::28": 0.0,
+      "fs42\\catalog_entry.py::CatalogEntry.from_db_row::74": 0.25,
+      "fs42\\media_processor.py::MediaProcessor.process_one::123": 0.25,
+      "fs42\\autobump_agent.py::AutoBumpAgent.next_up_bump::44": 0.25,
+      "fs42\\catalog.py::ShowCatalog.make_reel_fill::511": 0.25,
+      "fs42\\autobump_agent.py::AutoBumpAgent.message_bump::37": 0.25,
+      "fs42\\sequence_io.py::SequenceIO.put_sequence::41": 0.25,
+      "fs42\\sequence_api.py::SequenceAPI.get_sequence::21": 0.25,
+      "fs42\\media_processor.py::MediaProcessor._rfind_media::262": 0.25,
+      "fs42\\catalog_io.py::CatalogIO.entry_by_id::87": 0.25,
+      "fs42\\catalog_api.py::CatalogAPI.get_entry_by_id::52": 0.25,
+      "fs42\\liquid_io.py::LiquidIO._build_block_from_row::164": 0.25
+    },
+    "original_context_tokens": 21668,
+    "compressed_context_tokens": 5339,
+    "compression_ratio": 0.24640022152482924
+  }
+}

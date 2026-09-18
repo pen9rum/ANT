@@ -1,0 +1,631 @@
+{
+  "benchmark": "repoprobe",
+  "task_id": "FieldStation42-9",
+  "method": "repodistill",
+  "final_answer": "The error \"'NoneType' object has no attribute 'duration'\" occurs because a catalog entry with a `None` or invalid duration is being returned or included in your catalog, most likely due to failed or incomplete media file processing when rebuilding the catalog. This typically happens if your content directory contains files that could not be processed, have zero/invalid duration, or there was a problem reading file metadata.\n\n**Solution:**  \nRebuild your catalog and inspect the logs for warnings/errors about files with zero or missing duration. Remove or fix the problematic media files from your content directory (`catalog/cbc/`), then run the catalog rebuild again. Make sure all media files have valid, nonzero durations and can be read properly. This will prevent `NoneType` catalog entries and resolve the `AttributeError`.",
+  "trajectory": [
+    {
+      "capo_turn": 0,
+      "n_documents": 18,
+      "document_ids": [
+        "fs42\\station_manager.py::StationManager::6",
+        "test\\test_custom_title_patterns.py::TestCustomTitlePatternsLoading.test_load_empty_custom_patterns::64",
+        "fs42\\ux\\welcome_screen.py::WelcomeScreen.populate_stats::46",
+        "test\\test_custom_title_patterns.py::TestCustomTitlePatternsLoading.test_pattern_missing_pattern_field::118",
+        "test\\test_custom_title_patterns.py::TestCustomTitlePatternsLoading.test_pattern_missing_group_field::145",
+        "test\\test_custom_title_patterns.py::TestCustomTitlePatternsLoading.test_no_custom_patterns_in_config::86",
+        "fs42\\station_player.py::StationPlayer.schedule_panic::585",
+        "fs42\\guide_builder.py::GuideBuilder.build_view::85",
+        "fs42\\fs42_server\\api\\schedules.py::get_schedule::60",
+        "fs42\\station_player.py::StationPlayer.play_file::231",
+        "test\\test_custom_title_patterns.py::TestCustomTitlePatternsLoading.test_invalid_regex_pattern::172",
+        "test\\test_custom_title_patterns.py::TestCustomTitlePatternsLoading.test_no_main_config_file::108",
+        "fs42\\station_player.py::update_status_socket::45",
+        "test\\test_custom_title_patterns.py::TestCustomTitlePatternsLoading.test_mixed_valid_and_invalid_patterns::200",
+        "test\\test_custom_title_patterns.py::TestCustomTitlePatternsLoading.test_load_valid_custom_patterns::19",
+        "station_42.py::main::183",
+        "fs42\\fs42_server\\api\\build.py::add_time_to_schedule.add_time_worker::82",
+        "fs42\\fs42_server\\api\\build.py::rebuild_catalog.rebuild_worker::24"
+      ],
+      "assigned_budgets": {
+        "fs42\\station_manager.py::StationManager::6": 0.25,
+        "test\\test_custom_title_patterns.py::TestCustomTitlePatternsLoading.test_load_empty_custom_patterns::64": 0.25,
+        "fs42\\ux\\welcome_screen.py::WelcomeScreen.populate_stats::46": 0.25,
+        "test\\test_custom_title_patterns.py::TestCustomTitlePatternsLoading.test_pattern_missing_pattern_field::118": 0.25,
+        "test\\test_custom_title_patterns.py::TestCustomTitlePatternsLoading.test_pattern_missing_group_field::145": 0.25,
+        "test\\test_custom_title_patterns.py::TestCustomTitlePatternsLoading.test_no_custom_patterns_in_config::86": 0.25,
+        "fs42\\station_player.py::StationPlayer.schedule_panic::585": 0.25,
+        "fs42\\guide_builder.py::GuideBuilder.build_view::85": 0.25,
+        "fs42\\fs42_server\\api\\schedules.py::get_schedule::60": 0.25,
+        "fs42\\station_player.py::StationPlayer.play_file::231": 0.5,
+        "test\\test_custom_title_patterns.py::TestCustomTitlePatternsLoading.test_invalid_regex_pattern::172": 0.25,
+        "test\\test_custom_title_patterns.py::TestCustomTitlePatternsLoading.test_no_main_config_file::108": 0.25,
+        "fs42\\station_player.py::update_status_socket::45": 0.25,
+        "test\\test_custom_title_patterns.py::TestCustomTitlePatternsLoading.test_mixed_valid_and_invalid_patterns::200": 0.25,
+        "test\\test_custom_title_patterns.py::TestCustomTitlePatternsLoading.test_load_valid_custom_patterns::19": 0.25,
+        "station_42.py::main::183": 0.25,
+        "fs42\\fs42_server\\api\\build.py::add_time_to_schedule.add_time_worker::82": 0.25,
+        "fs42\\fs42_server\\api\\build.py::rebuild_catalog.rebuild_worker::24": 0.25
+      },
+      "budget_parse_failures": 0,
+      "memory_after_turn": "This chunk primarily details interactions with station configuration, main configuration loading (custom title pattern support and error handling), and routines for station/catlog/schedule management within FieldStation42. The core compression retains: that `StationManager` loads station and config data and builds indexes (including safeguarding custom regex pattern loading), unit tests ensure config pattern handling robustness, the main application (station_42.py) orchestrates catalog rebuilds and schedule management, and functions like `play_file` (in StationPlayer) include logic to determine media duration. These details provide context on how stations, catalogs, and schedules are manipulated, and suggest where duration-related attributes may be expected or missing, aligning with the object 'NoneType' has no 'duration' error when accessing media or catalog entries."
+    },
+    {
+      "capo_turn": 1,
+      "n_documents": 4,
+      "document_ids": [
+        "fs42\\catalog.py::ShowCatalog::41",
+        "fs42\\catalog.py::ShowCatalog._build_standard::136",
+        "fs42\\catalog_entry.py::CatalogEntry::15",
+        "test\\test_custom_title_patterns.py::TestCustomTitlePatternsLoading::9"
+      ],
+      "assigned_budgets": {
+        "fs42\\catalog.py::ShowCatalog::41": 0.5,
+        "fs42\\catalog.py::ShowCatalog._build_standard::136": 0.25,
+        "fs42\\catalog_entry.py::CatalogEntry::15": 0.5,
+        "test\\test_custom_title_patterns.py::TestCustomTitlePatternsLoading::9": 0.0
+      },
+      "budget_parse_failures": 0,
+      "memory_after_turn": "This chunk focuses on catalog and entry management within FieldStation42. The ShowCatalog class (Document_0, 1) contains methods central to catalog building and access\u2014especially for managing media content, durations, and associated tags. Its make_reel_block and make_reel_fill methods assemble content blocks and expect components (start/end bumpers, commercials) with defined duration attributes. If any component is None, attempting to access .duration causes an AttributeError, as described in the problem. Document_2 defines CatalogEntry, which standardizes duration and metadata representation for each cataloged file. Key for solving the error is ensuring only valid CatalogEntry instances (never None) are present in clip_index and related arrays. The remaining code is about configuration and unit-testing for title patterns and is not relevant to the duration issue, hence highly compressible or ignorable. This chunk solidifies that proper catalog construction and ContentEntry integrity are critical in preventing 'NoneType' duration errors."
+    },
+    {
+      "capo_turn": 2,
+      "n_documents": 19,
+      "document_ids": [
+        "fs42\\ux\\schedule_screen.py::ScheduleScreen::15",
+        "fs42\\ux\\schedule_screen.py::ScheduleScreen.addtime_thread::117",
+        "fs42\\sequence_api.py::SequenceAPI._build_sequence::110",
+        "fs42\\sequence_api.py::SequenceAPI.scan_sequences::96",
+        "fs42\\liquid_manager.py::LiquidManager::30",
+        "fs42\\liquid_manager.py::LiquidManager.get_extents::120",
+        "fs42\\osd\\logo_display.py::LogoDisplay.update::608",
+        "fs42\\ux\\welcome_screen.py::WelcomeScreen.on_mount::36",
+        "fs42\\osd\\main.py::StatusDisplay.update::91",
+        "fs42\\ux\\welcome_screen.py::WelcomeScreen.on_screen_resume::43",
+        "fs42\\catalog.py::ShowCatalog.summary::656",
+        "fs42\\ux\\schedule_screen.py::ScheduleScreen.all_catalogs_found::134",
+        "fs42\\catalog_entry.py::CatalogEntry.from_db_row::74",
+        "fs42\\media_processor.py::MediaProcessor.process_one::123",
+        "fs42\\catalog.py::ShowCatalog.make_reel_fill::511",
+        "fs42\\autobump_agent.py::AutoBumpAgent.next_up_bump::44",
+        "fs42\\autobump_agent.py::AutoBumpAgent.message_bump::37",
+        "fs42\\sequence_io.py::SequenceIO.__init__::8",
+        "fs42\\sequence_io.py::SequenceIO::7"
+      ],
+      "assigned_budgets": {
+        "fs42\\ux\\schedule_screen.py::ScheduleScreen::15": 0.25,
+        "fs42\\ux\\schedule_screen.py::ScheduleScreen.addtime_thread::117": 0.0,
+        "fs42\\sequence_api.py::SequenceAPI._build_sequence::110": 0.0,
+        "fs42\\sequence_api.py::SequenceAPI.scan_sequences::96": 0.0,
+        "fs42\\liquid_manager.py::LiquidManager::30": 0.25,
+        "fs42\\liquid_manager.py::LiquidManager.get_extents::120": 0.0,
+        "fs42\\osd\\logo_display.py::LogoDisplay.update::608": 0.0,
+        "fs42\\ux\\welcome_screen.py::WelcomeScreen.on_mount::36": 0.0,
+        "fs42\\osd\\main.py::StatusDisplay.update::91": 0.0,
+        "fs42\\ux\\welcome_screen.py::WelcomeScreen.on_screen_resume::43": 0.0,
+        "fs42\\catalog.py::ShowCatalog.summary::656": 0.0,
+        "fs42\\ux\\schedule_screen.py::ScheduleScreen.all_catalogs_found::134": 0.0,
+        "fs42\\catalog_entry.py::CatalogEntry.from_db_row::74": 0.5,
+        "fs42\\media_processor.py::MediaProcessor.process_one::123": 0.5,
+        "fs42\\catalog.py::ShowCatalog.make_reel_fill::511": 0.75,
+        "fs42\\autobump_agent.py::AutoBumpAgent.next_up_bump::44": 0.0,
+        "fs42\\autobump_agent.py::AutoBumpAgent.message_bump::37": 0.0,
+        "fs42\\sequence_io.py::SequenceIO.__init__::8": 0.0,
+        "fs42\\sequence_io.py::SequenceIO::7": 0.25
+      },
+      "budget_parse_failures": 0,
+      "memory_after_turn": "This chunk provides significant insight into catalog entry management and schedule block construction in FieldStation42. Most crucial is the logic in ShowCatalog.make_reel_fill (Document_14), which assembles schedule blocks by chaining together content and relies on all entries having valid, non-None durations. CatalogEntry.from_db_row (Document_12) and MediaProcessor.process_one (Document_13) show how entries are constructed from database rows and media files, highlighting the need for robust handling to avoid None durations. SequenceIO (Document_18) handles sequence persistence, which although important for broader system context, contains less directly relevant logic for solving the immediate AttributeError. Other UI and stats code (e.g., ScheduleScreen, LiquidManager) is not central to the NoneType duration error itself. Preserving detailed logic from make_reel_fill and entry construction is key for understanding and fixing such errors."
+    }
+  ],
+  "evidence": [
+    {
+      "path": "fs42\\station_manager.py",
+      "line_start": 6,
+      "line_end": 264,
+      "quote": "class StationManager(object):\n    # the borg singleton pattern\n    __we_are_all_one = {}\n    _initialized = False\n\n    __main_config_path = \"confs/main_config.json\"\n\n    # public visible - be careful\n    stations = []\n    no_catalog = {\"guide\", \"streaming\", \"web\"}\n    no_schedule = {\"guide\", \"streaming\", \"web\"}\n\n                self.server_conf = {\n                    \"channel_socket\": \"runtime/channel.socket\",\n                    \"status_socket\": \"runtime/play_status.socket\",\n                    \"day_parts\": {\n                        \"morning\": range(6, 10),\n                        \"daytime\": range(10, 18),\n                        \"prime\": range(18, 23),\n                        \"late\": [23, 0, 1, 2],\n                        \"overnight\": range(2, 6),\n                    },\n                    \"time_format\": \"%H:%M\",\n                    \"date_time_format\": \"%Y-%m-%dT%H:%M:%S\",\n                    \"title_patterns\": [],\n                }\n                self._number_index = {}\n                self._name_index = {}\n                self.load_main_config()\n                self.load_json_stations()\n                            # Validate that the regex compiles\n                            re.compile(pattern_config[\"pattern\"])\n\n                    new_parts = {}\n                    for key in d[\"day_parts\"]:\n                        start_hour = d[\"day_parts\"][key][\"start_hour\"]\n                        end_hour = d[\"day_parts\"][key][\"end_hour\"]\n                        if end_hour > start_hour:\n                            new_parts[key] = range(start_hour, end_hour)\n                        else:\n            _l.error(\"*\" * 60)\n            _l.error(\"Error loading station configurations\")\n            _l.exception(e)\n            _l.error(\"*\" * 60)\n            exit(-1)\n\n    def _build_indexes(self):\n        Delegates to StationIO for all the work, then reloads.\n        \"\"\"\n        # Clear current stations and indexes\n        self.stations = []\n        self._name_index = {}\n        self._number_index = {}\n\n        # Reload from disk (this also rebuilds indexes)\n        self.load_json_stations()\n\n        # Re-apply tag smoothing for standard networks\n        for i in range(len(self.stations)):\n            station = self.stations[i]\n            if station[\"network_type\"] == \"standard\":\n                self.stations[i] = SlotReader.smooth_tags(station)\n",
+      "reason": "RepoDistill GraphRAG candidate (StationManager), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "StationManager"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "test\\test_custom_title_patterns.py",
+      "line_start": 64,
+      "line_end": 84,
+      "quote": "                with patch('fs42.station_manager.glob.glob', return_value=[]):\n                    manager = StationManager()\n",
+      "reason": "RepoDistill GraphRAG candidate (TestCustomTitlePatternsLoading.test_load_empty_custom_patterns), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "TestCustomTitlePatternsLoading.test_load_empty_custom_patterns"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\ux\\welcome_screen.py",
+      "line_start": 46,
+      "line_end": 83,
+      "quote": "        text = \"# FieldStation42 Summary\\n\"\n\n        for station in StationManager().stations:\n            network_name = station[\"network_name\"]\n            text += f\"## Network: {network_name} - Channel #{station['channel_number']} ({station['network_type']})\\n\"\n\n            if \"catalog_path\" in station and station[\"network_type\"] not in StationManager().no_catalog:\n                catalog_exists = False\n                try:",
+      "reason": "RepoDistill GraphRAG candidate (WelcomeScreen.populate_stats), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "WelcomeScreen.populate_stats"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "test\\test_custom_title_patterns.py",
+      "line_start": 118,
+      "line_end": 143,
+      "quote": "                with patch('fs42.station_manager.glob.glob', return_value=[]):\n                    # Should not crash, but pattern should be skipped\n                    manager = StationManager()\n",
+      "reason": "RepoDistill GraphRAG candidate (TestCustomTitlePatternsLoading.test_pattern_missing_pattern_field), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "TestCustomTitlePatternsLoading.test_pattern_missing_pattern_field"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "test\\test_custom_title_patterns.py",
+      "line_start": 145,
+      "line_end": 170,
+      "quote": "                with patch('fs42.station_manager.glob.glob', return_value=[]):\n                    # Should not crash, but pattern should be skipped\n                    manager = StationManager()\n",
+      "reason": "RepoDistill GraphRAG candidate (TestCustomTitlePatternsLoading.test_pattern_missing_group_field), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "TestCustomTitlePatternsLoading.test_pattern_missing_group_field"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "test\\test_custom_title_patterns.py",
+      "line_start": 86,
+      "line_end": 106,
+      "quote": "                with patch('fs42.station_manager.glob.glob', return_value=[]):\n                    manager = StationManager()\n",
+      "reason": "RepoDistill GraphRAG candidate (TestCustomTitlePatternsLoading.test_no_custom_patterns_in_config), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "TestCustomTitlePatternsLoading.test_no_custom_patterns_in_config"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\station_player.py",
+      "line_start": 585,
+      "line_end": 591,
+      "quote": "        schedule = LiquidSchedule(StationManager().station_by_name(network_name))\n        schedule.add_days(1)",
+      "reason": "RepoDistill GraphRAG candidate (StationPlayer.schedule_panic), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "StationPlayer.schedule_panic"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\guide_builder.py",
+      "line_start": 85,
+      "line_end": 144,
+      "quote": "                    entries = ScheduleQuery.query_slot(station[\"network_name\"], start_time, normalize)\n                except Exception:\n                    # Create a single block that spans the entire 1.5 hour viewing window (5400 seconds)\n                    placeholder = PreviewBlock(\"No programming data available\", width=5400)\n                    entries = [placeholder]\n\n            view[\"rows\"].append(entries)\n            network_name = station[\"network_name\"]\n            channel_number = station[\"channel_number\"]\n            view[\"meta\"].append({\"network_name\": network_name, \"channel_number\": channel_number})\n",
+      "reason": "RepoDistill GraphRAG candidate (GuideBuilder.build_view), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "GuideBuilder.build_view"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\fs42_server\\api\\schedules.py",
+      "line_start": 60,
+      "line_end": 72,
+      "quote": "    schedule_blocks = LiquidAPI.get_blocks(conf, sdt, edt)\n    return {\"network_name\": network_name, \"schedule_blocks\": schedule_blocks}",
+      "reason": "RepoDistill GraphRAG candidate (get_schedule), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "get_schedule"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\station_player.py",
+      "line_start": 231,
+      "line_end": 339,
+      "quote": "    def play_file(self, file_path, file_duration=None, current_time=None, is_stream=False, title=\"Unknown\", content_type=None, media_type=None):\n        try:\n            if os.path.exists(file_path) or is_stream or AutoBumpAgent.is_autobump_url(file_path):\n                self._l.debug(f\"%%%Attempting to play {file_path}\")\n                self.current_playing_file_path = file_path\n\n                if self.station_config:\n                    self._l.debug(\"Got station config, updating status socket\")\n                    if \"date_time_format\" in StationManager().server_conf:\n                        ts_format = StationManager().server_conf[\"date_time_format\"]\n                    else:\n                        ts_format = \"%Y-%m-%dT%H:%M:%S\"\n                    duration = (\n                        f\"{str(datetime.timedelta(seconds=int(current_time)))}/{str(datetime.timedelta(seconds=int(file_duration)))}\"\n                        if file_duration\n                        else \"n/a\"\n                    )\n                    update_status_socket(\n                        \"playing\",\n                        self.station_config[\"network_name\"],\n                        self.station_config[\"channel_number\"],\n                        title,\n                        timestamp=ts_format,\n                        duration=duration,\n                        file_path=file_path,\n                        content_type=content_type,\n                    )",
+      "reason": "RepoDistill GraphRAG candidate (StationPlayer.play_file), CAPO retention budget 50%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "StationPlayer.play_file"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "test\\test_custom_title_patterns.py",
+      "line_start": 172,
+      "line_end": 198,
+      "quote": "        config_data = {\n            \"title_patterns\": [\n                {\n                with patch('fs42.station_manager.glob.glob', return_value=[]):\n                    # Should not crash, but invalid pattern should be skipped\n                    manager = StationManager()\n",
+      "reason": "RepoDistill GraphRAG candidate (TestCustomTitlePatternsLoading.test_invalid_regex_pattern), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "TestCustomTitlePatternsLoading.test_invalid_regex_pattern"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "test\\test_custom_title_patterns.py",
+      "line_start": 108,
+      "line_end": 116,
+      "quote": "                assert \"title_patterns\" in manager.server_conf\n                assert manager.server_conf[\"title_patterns\"] == []",
+      "reason": "RepoDistill GraphRAG candidate (TestCustomTitlePatternsLoading.test_no_main_config_file), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "TestCustomTitlePatternsLoading.test_no_main_config_file"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\station_player.py",
+      "line_start": 45,
+      "line_end": 65,
+      "quote": "def update_status_socket(\n    status, network_name, channel, title=None, timestamp=\"%Y-%m-%dT%H:%M:%S\", duration=None, file_path=None, content_type=None\n):\n    status_obj = {",
+      "reason": "RepoDistill GraphRAG candidate (update_status_socket), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "update_status_socket"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "test\\test_custom_title_patterns.py",
+      "line_start": 200,
+      "line_end": 245,
+      "quote": "                    \"pattern\": r\"^(.+?)[\\s._-]+Valid.*$\",\n                    \"group\": 1,\n                    \"description\": \"Valid pattern 1\"\n                },\n                {\n                    \"group\": 1,  # Missing pattern field\n                    \"description\": \"Missing pattern\"\n                },\n                {\n                    assert \"title_patterns\" in manager.server_conf\n                    assert len(manager.server_conf[\"title_patterns\"]) == 2\n",
+      "reason": "RepoDistill GraphRAG candidate (TestCustomTitlePatternsLoading.test_mixed_valid_and_invalid_patterns), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "TestCustomTitlePatternsLoading.test_mixed_valid_and_invalid_patterns"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "test\\test_custom_title_patterns.py",
+      "line_start": 19,
+      "line_end": 62,
+      "quote": "            \"title_patterns\": [\n                {\n                # Mock glob to return no station configs\n                with patch('fs42.station_manager.glob.glob', return_value=[]):\n                    manager = StationManager()\n\n                    # Verify patterns were loaded\n                    assert \"title_patterns\" in manager.server_conf\n                    assert len(manager.server_conf[\"title_patterns\"]) == 2\n",
+      "reason": "RepoDistill GraphRAG candidate (TestCustomTitlePatternsLoading.test_load_valid_custom_patterns), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "TestCustomTitlePatternsLoading.test_load_valid_custom_patterns"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "station_42.py",
+      "line_start": 183,
+      "line_end": 600,
+      "quote": "                \n\n    if args.rebuild_sequences is not None:\n        _rebuild_list = []\n        try:\n            _rebuild_list = _get_arg_stations(args.rebuild_sequences)\n        except Exception as e:\n            console.print(f\"[red]Error getting list of stations to rebuild: {e}[/red]\")\n            _l.exception(e)\n            failure_messages.append(\n                \"Failed to get list of stations to rebuild sequences - check your arguments.\"\n            )\n\n        for station in _rebuild_list:\n            if station[\"_has_catalog\"]:\n                _l.info(f\"Rebuilding sequences for {station['network_name']}\")\n                try:\n                    SequenceAPI.rebuild_sequences(station)\n                    success_messages.append(\n                        f\"Successfully rebuilt sequences for {station['network_name']}\"\n                    )\n                except Exception as e:\n                    console.print(\n                        f\"[red]Error rebuilding sequences for {station['network_name']}: {e}[/red]\"\n                    )\n                    _l.exception(e)\n                    failure_messages.append(\n                        f\"Failed to rebuild sequences for {station['network_name']} - check logs.\"\n                    )\n\n    if args.break_detect_dir is not None:\n        _l.info(\"Scanning for break detection points in media files...\")\n        FluidBuilder().scan_breaks(args.break_detect_dir)\n        success_messages.append(\"I scanned for break detection points\")\n\n    if args.chapter_detect_dir is not None:\n        _l.info(\"Scanning for chapter markers in media files...\")\n        FluidBuilder().scan_chapters(args.chapter_detect_dir)\n        success_messages.append(\"I scanned for chapter markers\")\n\n    if args.add_day is not None:\n        _to_add_to = []\n        try:\n            _to_add_to = _get_arg_stations(args.add_day)\n        except Exception as e:\n            console.print(f\"[red]Error getting list of stations to add days: {e}[/red]\")\n            _l.exception(e)\n            failure_messages.append(\n                \"Failed to get list of stations to add days - check your arguments.\"\n            )\n\n        for station in _to_add_to:\n            if station[\"_has_schedule\"]:\n                try:\n                    liquid = LiquidSchedule(station)\n                    liquid.add_days(1)\n                    success_messages.append(\n               ",
+      "reason": "RepoDistill GraphRAG candidate (main), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "main"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\fs42_server\\api\\build.py",
+      "line_start": 82,
+      "line_end": 113,
+      "quote": "    def add_time_worker():\n        try:\n            with add_time_tasks_lock:\n                add_time_tasks[task_id][\"status\"] = \"running\"\n\n            # Determine which stations to process\n            to_process = []\n            if not network_name or network_name == \"all\":\n                to_process = StationManager().stations\n            else:",
+      "reason": "RepoDistill GraphRAG candidate (add_time_to_schedule.add_time_worker), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "add_time_to_schedule.add_time_worker"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\fs42_server\\api\\build.py",
+      "line_start": 24,
+      "line_end": 62,
+      "quote": "                command_queue = request.app.state.player_command_queue\n                if command_queue:\n                    command_queue.put({\"command\": \"reload_data\"})\n                else:\n                    LiquidManager().reload_schedules()\n            \n        except Exception as e:\n            with rebuild_tasks_lock:\n                rebuild_tasks[task_id][\"status\"] = \"error\"\n                rebuild_tasks[task_id][\"log\"] += f\"Error: {e}\\n\"",
+      "reason": "RepoDistill GraphRAG candidate (rebuild_catalog.rebuild_worker), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "rebuild_catalog.rebuild_worker"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\catalog.py",
+      "line_start": 41,
+      "line_end": 668,
+      "quote": "class ShowCatalog:\n    prebump = \"prebump\"\n    postbump = \"postbump\"\n\n    def __init__(self, config, rebuild_catalog=False, load=True, debug=False, force=False, skip_chapter_scan=False):\n        self.config = config\n        self._l = logging.getLogger(f\"{self.config['network_name']} - CAT\")\n\n        # the main index for videos\n        self.clip_index = {}\n        # the tag/duration cache index\n        self.tag_dur_cache = {}\n\n        # basically, a flattened list of clip_index keys\n        self.tags = []\n\n        self.__fluid_builder = None\n        self.min_gap = 3\n        self.skip_chapter_scan = skip_chapter_scan\n        if rebuild_catalog:\n            if force:\n                self._l.info(\"Rebuilding catalog with force flag - will delete existing catalog\")\n                CatalogAPI.delete_catalog(self.config)\n            self.build_catalog()\n        elif load:\n            self.load_catalog()\n\n    def _write_catalog(self):\n        # first, make them into a flat list\n        flat_list = []\n\n        for tag in self.clip_index:\n            try:\n                for entry in self.clip_index[tag]:\n                    if isinstance(entry, CatalogEntry):\n                        flat_list.append(entry)\n                    else:\n                        print(f\"Warning: Entry {entry} on {tag} is not a CatalogEntry instance. Skipping.\")\n\n            except Exception as e:\n                print(f\"Error processing tag '{tag}': {e}\")\n\n        CatalogAPI.set_entries(self.config, flat_list)\n\n    def load_catalog(self):\n        if self.config[\"network_type\"] == \"streaming\":\n            return\n\n        catalog_entries = CatalogAPI.get_entries(self.config)\n        \n        self.clip_index = {}\n\n        for entry in catalog_entries:\n            \n            if entry.tag not in self.clip_index:\n                self.clip_index[entry.tag] = []\n            self.clip_index[entry.tag].append(entry)\n\n    def build_catalog(self):\n        self._l.info(f\"Starting catalog build for {self.config['network_name']}\")\n\n        match self.config[\"network_type\"]:\n            case \"standard\":\n                # restrict content to fit and be valid (zero duration is likely not valid)\n                if (\n                    candidate.duration < seconds\n                    and candidate.duration >= 1\n                    and MediaProcessor._test_candidate_hints(candidate.hints, when)\n             ",
+      "reason": "RepoDistill GraphRAG candidate (ShowCatalog), CAPO retention budget 50%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "ShowCatalog"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\catalog.py",
+      "line_start": 136,
+      "line_end": 257,
+      "quote": "    def _build_standard(self):\n        self.clip_index = {}\n        self.tags = []\n\n        self._l.info(\"Standard network\")\n        start_bumps = {}\n        end_bumps = {}\n\n        # get the list of all tags\n        tags = {}\n        bump_overrides = {}\n        commercial_overrides = {}\n        for day in DAYS:\n            slots = self.config[day]\n            for k in slots:\n                # Validate that slots[k] is a dictionary\n                if not isinstance(slots[k], dict):\n                    self._l.error(f\"Invalid slot configuration for {day}[{k}]: expected dict, got {type(slots[k]).__name__}\")\n                    self._l.error(f\"This may be caused by media processing failures. Check logs above for errors.\")\n                    self._l.error(f\"Slot value: {slots[k]}\")\n                    raise TypeError(f\"Invalid slot configuration for {day}[{k}]: expected dict, got {type(slots[k]).__name__}. Check media processing logs for errors.\")\n\n                if \"tags\" in slots[k]:\n                    if type(slots[k][\"tags\"]) is list:\n                        for m in slots[k][\"tags\"]:\n                            tags[m] = True\n                    else:\n                        tags[slots[k][\"tags\"]] = True\n\n                # These checks should be outside the tags check - slots can have bump/commercial dirs without tags\n                if \"bump_dir\" in slots[k]:\n                    bump_overrides[slots[k][\"bump_dir\"]] = True\n                if \"commercial_dir\" in slots[k]:",
+      "reason": "RepoDistill GraphRAG candidate (ShowCatalog._build_standard), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "ShowCatalog._build_standard"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\catalog_entry.py",
+      "line_start": 15,
+      "line_end": 134,
+      "quote": "class CatalogEntry:\n    # CatalogEntry(row[2], row[3], float(row[4]), json.loads(row[6]) if row[6] else [])\n    def __init__(self, path, duration, tag, hints=[], count=0, content_type=\"feature\", media_type=\"video\"):\n        self.path = path\n        self.realpath = None\n        # get the show name from the path\n        self.title = os.path.splitext(os.path.basename(path))[0]\n        self.duration = duration\n        self.tag = tag\n        self.count = count\n        self.hints = hints\n        self.content_type = content_type\n        self.media_type = media_type\n        tup = (\n            json_data[\"dbid\"],\n            json_data[\"station\"],\n            json_data[\"path\"],\n            json_data[\"title\"],\n            json_data[\"duration\"],\n            json_data[\"tag\"],\n            json_data[\"count\"],\n            json_data[\"hints\"],\n            json_data.get(\"created_at\", None),\n            json_data.get(\"updated_at\", None),\n            json_data.get(\"realpath\", None),\n            json_data.get(\"content_type\", \"feature\"),\n            json_data.get(\"media_type\", \"video\"),\n        )\n        return CatalogEntry.from_db_row(tup)\n\n    @staticmethod\n    def from_db_row(row):\n\n        # Load hints from JSON\n        if hints_str:\n            try:\n                # Parse the JSON string back to list\n                loaded_hints = json.loads(hints_str)\n\n                if not isinstance(loaded_hints, list):\n                    loaded_hints = []\n\n                for hint_str in loaded_hints:\n                    hint = json.loads(hint_str)\n                    # Convert each hint JSON back to its object\n                    if isinstance(hint, dict) and \"type\" in hint:\n                        if hint[\"type\"] == \"day_part\":\n                            hints.append(schedule_hint.DayPartHint(hint[\"part\"]))\n                        elif hint[\"type\"] == \"bump\":\n                            hints.append(schedule_hint.BumpHint(hint[\"where\"]))\n                        elif hint[\"type\"] == \"range\":\n                            hints.append(schedule_hint.RangeHint(hint[\"range_string\"]))\n                        elif hint[\"type\"] == \"quarter\":\n                            hints.append(schedule_hint.QuarterHint(hint[\"quarter\"]))\n                        elif hint[\"type\"] == \"month\":\n                            hints.append(schedule_hint.MonthHint(hint[\"month\"]))\n                        else:\n     ",
+      "reason": "RepoDistill GraphRAG candidate (CatalogEntry), CAPO retention budget 50%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "CatalogEntry"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\ux\\schedule_screen.py",
+      "line_start": 15,
+      "line_end": 155,
+      "quote": "class ScheduleScreen(Screen):\n    CSS_PATH = \"catalog_screen.tcss\"\n\n    def compose(self) -> ComposeResult:\n                    self.app.push_screen(SelectStationErr())\n                else:\n                    self.dt.clear(True)\n                    (the_val, index) = self.options[val]\n\n                    schedule = LiquidManager().get_schedule_by_name(the_val)\n                    if schedule is None:\n                        self.dt.clear(True)\n                        self.dt.add_column(\"Schedule not found.\")\n                    else:\n                        # f\"{self.start_time.strftime('%m/%d %H:%M')} - {self.end_time.strftime('%H:%M')} - {self.title}\"\n                        self.dt.add_columns(\"Start Time\", \"End Time\", \"Title\", \"Duration\", \"Blocks\")\n                        for _block in schedule:\n                            duration = _block.end_time - _block.start_time\n                            self.dt.add_row(\n                                _block.start_time.strftime(\"%m/%d %H:%M\"),\n                                _block.end_time.strftime(\"%H:%M\"),\n                                _block.title,\n                                round(duration.total_seconds() / 60, 2),\n                                len(_block.plan),\n                            )\n\n            case \"rebuild_all\":\n                    ls = LoadingScreen()\n                    self.app.push_screen(ls)\n                    self.rebuild_all_thread()\n                else:",
+      "reason": "RepoDistill GraphRAG candidate (ScheduleScreen), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "ScheduleScreen"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\liquid_manager.py",
+      "line_start": 30,
+      "line_end": 212,
+      "quote": "class LiquidManager(object):\n    __we_are_all_one = {}\n    _initialized = False\n    station_configs = []\n\n    # NOTE: This is the borg singleton pattern - __we_are_all_one\n    def __init__(self):\n        self.__dict__ = self.__we_are_all_one\n        if not self._initialized:\n            self._initialized = True\n            self.reload_schedules()\n\n    def reload_schedules(self):\n        self.station_configs = StationManager().stations\n        self.schedules = {}\n        for station in self.station_configs:\n            if station[\"network_type\"] != \"guide\" and station[\"network_type\"] != \"streaming\":\n                _id = station[\"network_name\"]\n                self.schedules[_id] = LiquidAPI.get_blocks(station)\n\n    def get_schedule_by_name(self, network_name):\n        if network_name in self.schedules:\n            return self.schedules[network_name]\n        else:\n            return None\n\n    def reset_all_schedules(self):\n        for station_config in self.station_configs:\n            if station_config[\"_has_schedule\"]:\n                logging.getLogger(\"liquid\").info(f\"Deleting schedules for {station_config['network_name']}\")\n                self.reset_sequences(station_config)\n                LiquidAPI.delete_blocks(station_config)\n        self.reload_schedules()\n\n    def reset_schedule(self, station_config, force=False):",
+      "reason": "RepoDistill GraphRAG candidate (LiquidManager), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "LiquidManager"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\catalog_entry.py",
+      "line_start": 74,
+      "line_end": 134,
+      "quote": "    def from_db_row(row):\n\n            media_type = \"video\"  # Default for backward compatibility\n        elif len(row) == 11:  # Schema with realpath but no content_type or media_type\n            (dbid, station, path, title, duration, tag, count, hints_str, created, updated, realpath) = row\n            content_type = \"feature\"  # Default for backward compatibility\n            media_type = \"video\"  # Default for backward compatibility\n        else:  # Old schema without realpath\n            (dbid, station, path, title, duration, tag, count, hints_str, created, updated) = row\n            realpath = None\n            content_type = \"feature\"  # Default for backward compatibility\n            media_type = \"video\"  # Default for backward compatibility\n\n\n        entry = CatalogEntry(path, duration, tag, None, count, content_type, media_type)\n        entry.realpath = realpath\n        entry.count = count\n        entry.dbid = dbid\n        entry.station = station\n        entry.created_at = created\n        entry.updated_at = updated\n\n                # Parse the JSON string back to list\n                loaded_hints = json.loads(hints_str)\n\n                if not isinstance(loaded_hints, list):\n                    loaded_hints = []\n\n                for hint_str in loaded_hints:\n                    hint = json.loads(hint_str)\n                    # Convert each hint JSON back to its object\n                    if isinstance(hint, dict) and \"type\" in hint:\n                        if hint[\"type\"] == \"day_part\":",
+      "reason": "RepoDistill GraphRAG candidate (CatalogEntry.from_db_row), CAPO retention budget 50%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "CatalogEntry.from_db_row"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\media_processor.py",
+      "line_start": 123,
+      "line_end": 165,
+      "quote": "        # get video file length in seconds\n        duration = 0.0\n        result = None\n        try:\n                cached = fluid.check_file_cache(full_path)\n                if cached:\n                    duration = cached.duration\n\n            if not duration:\n                # then do the processing\n                duration = MediaProcessor._get_duration(fname)\n\n            # see if both returned 0\n            if duration <= 0.0:\n                _l.warning(f\"Could not get a duration for tag: {tag}  file: {fname}\")\n                _l.warning(\"Files with 0 length can't be added to the catalog.\")\n            else:\n                result.realpath = full_path\n                _l.debug(f\"--_process_media is done with {fname}: {show_clip}\")\n\n        except Exception as e:\n            _l.exception(e)\n            _l.error(f\"Error processing media file {fname}\")\n\n        return result",
+      "reason": "RepoDistill GraphRAG candidate (MediaProcessor.process_one), CAPO retention budget 50%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "MediaProcessor.process_one"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\catalog.py",
+      "line_start": 511,
+      "line_end": 575,
+      "quote": "    def make_reel_fill(self, when, length, use_bumpers=True, commercial_dir=None, bump_dir=None, strict_count=None):\n        target_break_duration = self.config[\"break_duration\"]\n\n        strategy =  self.config.get(\"break_strategy\", None)\n        if strategy == \"end\":\n            target_break_duration = length\n        blocks = []\n        keep_going = True\n        while remaining and keep_going:\n            block = None\n            try:\n                block = self.make_reel_block(\n                    when, use_bumpers, target_break_duration, commercial_dir=commercial_dir, bump_dir=bump_dir\n                )\n            except MatchingContentNotFound:\n                self._l.debug(\n                    f\"Could not find matching content for {remaining} seconds - will attempt to fill with BRB\"\n                )\n\n            if block and (remaining - block.duration) > 0:\n                remaining -= block.duration\n                blocks.append(block)\n\n                if strict_count and len(blocks) >= strict_count:\n                    keep_going = False\n\n            else:\n                keep_going = False\n\n        keep_going = True\n\n            candidate = None\n            try:\n                if not self.config[\"commercial_free\"]:\n                    candidate = self.find_commercial(seconds=remaining, when=when, commercial_dir=commercial_dir)\n                else:\n                    candidate = self.find_bump(remaining, when, \"fill\")\n            except MatchingContentNotFound:\n                if remaining > self.min_gap and \"be_right_back_media\" in self.config:\n                    brb = CatalogEntry(self.config[\"be_right_back_media\"], duration=remaining, tag=\"brb\")\n                    additional_reels.append(brb)\n                keep_going = False\n                remaining = 0\n\n        blocks.append(ReelBlock(None, additional_reels, None))\n\n        return blocks",
+      "reason": "RepoDistill GraphRAG candidate (ShowCatalog.make_reel_fill), CAPO retention budget 75%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "ShowCatalog.make_reel_fill"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\sequence_io.py",
+      "line_start": 7,
+      "line_end": 198,
+      "quote": "class SequenceIO:\n    def __init__(self):\n            \n            result = cursor.fetchone()\n            if result:\n                new_index = result[0]\n                cursor.execute(\"\"\"\n                    UPDATE named_sequence \n                    SET current_index = ? \n                    WHERE station = ? AND sequence_name = ? AND tag_path = ?\n                \"\"\", (new_index, station_name, sequence_name, tag_path))\n                connection.commit()\n                return True\n            return False\n\n    def clean_sequences(self):\n        \"\"\"\n        Clean up sequences by removing entries that are no longer valid.\n        This can be used to remove entries that have been deleted from the filesystem.\n        \"\"\"\n        with sqlite3.connect(self.db_path) as connection:\n            cursor = connection.cursor()\n            cursor.execute(\n                \"\"\"DELETE FROM sequence_entries\n                        WHERE NOT EXISTS (\n                            SELECT 1 FROM named_sequence\n                            WHERE named_sequence.id = sequence_entries.named_sequence_id\n                        );\"\"\"\n            )\n            connection.commit()\n            cursor.close()",
+      "reason": "RepoDistill GraphRAG candidate (SequenceIO), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "SequenceIO"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    }
+  ],
+  "usage": {
+    "llm_calls": 4,
+    "tool_calls": 42,
+    "input_tokens": 39735,
+    "output_tokens": 1110,
+    "total_tokens": 40845,
+    "estimated_cost_usd": 0.08835,
+    "wall_clock_seconds": 7195.270701885223,
+    "unique_files_inspected": 18,
+    "unique_symbols_inspected": 41
+  },
+  "termination_reason": "all_chunks_processed",
+  "metadata": {
+    "generation_model": "gpt-4.1",
+    "implementation": "paper-faithful RepoDistill (No-Training) reimplementation",
+    "paper_citation": "Yin, Ding, Zhang, Wang, Wang, Ni, Cui. \"RepoDistill: Distilling Repository Knowledge through Compression-Aware Budget Allocation and Policy Optimization.\" Findings of ACL 2026, pp. 4425-4443. https://aclanthology.org/2026.findings-acl.217/",
+    "upstream_code_note": "No code was ported. The paper's cited implementation link is an Anonymous-GitHub mirror that is dead/unreachable, and no trained checkpoint is published. This implementation is derived from the published paper text (sections 2.1/2.2/2.3 and Appendix A.1.2, read directly from the ACL Anthology PDF).",
+    "variant": "no_training",
+    "embedding_model": "BAAI/bge-small-en-v1.5",
+    "perplexity_model": "Qwen/Qwen2.5-Coder-0.5B",
+    "graph_nodes": 791,
+    "graph_edges": 1516,
+    "anchor_node_ids": [
+      "fs42\\station_manager.py::StationManager::6",
+      "fs42\\fs42_server\\api\\stations.py::StationConfigRequest.Config::17",
+      "fs42\\sequence_api.py::SequenceAPI._build_sequence::110",
+      "fs42\\ux\\schedule_screen.py::ScheduleScreen::15",
+      "test\\test_custom_title_patterns.py::TestCustomTitlePatternsLoading.test_load_empty_custom_patterns::64",
+      "fs42\\ux\\welcome_screen.py::WelcomeScreen.populate_stats::46",
+      "test\\test_custom_title_patterns.py::TestCustomTitlePatternsLoading::9",
+      "fs42\\catalog_entry.py::CatalogEntry::15"
+    ],
+    "top_k": 8,
+    "rerank_lambda": 0.5,
+    "mmr_lambda": 0.1,
+    "segmentation_alpha": 0.2,
+    "capo_chunk_tokens": 10000,
+    "n_candidates": 24,
+    "n_retrieved_units": 41,
+    "n_capo_turns": 3,
+    "capo_turn_cap_hit": false,
+    "retrieved_chunk_ids": [
+      "fs42\\station_manager.py:6-264",
+      "test\\test_custom_title_patterns.py:64-84",
+      "fs42\\ux\\welcome_screen.py:46-83",
+      "test\\test_custom_title_patterns.py:118-143",
+      "test\\test_custom_title_patterns.py:145-170",
+      "test\\test_custom_title_patterns.py:86-106",
+      "fs42\\station_player.py:585-591",
+      "fs42\\guide_builder.py:85-144",
+      "fs42\\fs42_server\\api\\schedules.py:60-72",
+      "fs42\\station_player.py:231-339",
+      "test\\test_custom_title_patterns.py:172-198",
+      "test\\test_custom_title_patterns.py:108-116",
+      "fs42\\station_player.py:45-65",
+      "test\\test_custom_title_patterns.py:200-245",
+      "test\\test_custom_title_patterns.py:19-62",
+      "station_42.py:183-600",
+      "fs42\\fs42_server\\api\\build.py:82-113",
+      "fs42\\fs42_server\\api\\build.py:24-62",
+      "fs42\\catalog.py:41-668",
+      "fs42\\catalog.py:136-257",
+      "fs42\\catalog_entry.py:15-134",
+      "test\\test_custom_title_patterns.py:9-276",
+      "fs42\\ux\\schedule_screen.py:15-155",
+      "fs42\\ux\\schedule_screen.py:117-123",
+      "fs42\\sequence_api.py:110-139",
+      "fs42\\sequence_api.py:96-107",
+      "fs42\\liquid_manager.py:30-212",
+      "fs42\\liquid_manager.py:120-128",
+      "fs42\\osd\\logo_display.py:608-621",
+      "fs42\\ux\\welcome_screen.py:36-41",
+      "fs42\\osd\\main.py:91-93",
+      "fs42\\ux\\welcome_screen.py:43-44",
+      "fs42\\catalog.py:656-659",
+      "fs42\\ux\\schedule_screen.py:134-143",
+      "fs42\\catalog_entry.py:74-134",
+      "fs42\\media_processor.py:123-165",
+      "fs42\\catalog.py:511-575",
+      "fs42\\autobump_agent.py:44-50",
+      "fs42\\autobump_agent.py:37-41",
+      "fs42\\sequence_io.py:8-10",
+      "fs42\\sequence_io.py:7-198"
+    ],
+    "retention_budgets": {
+      "fs42\\station_manager.py::StationManager::6": 0.25,
+      "test\\test_custom_title_patterns.py::TestCustomTitlePatternsLoading.test_load_empty_custom_patterns::64": 0.25,
+      "fs42\\ux\\welcome_screen.py::WelcomeScreen.populate_stats::46": 0.25,
+      "test\\test_custom_title_patterns.py::TestCustomTitlePatternsLoading.test_pattern_missing_pattern_field::118": 0.25,
+      "test\\test_custom_title_patterns.py::TestCustomTitlePatternsLoading.test_pattern_missing_group_field::145": 0.25,
+      "test\\test_custom_title_patterns.py::TestCustomTitlePatternsLoading.test_no_custom_patterns_in_config::86": 0.25,
+      "fs42\\station_player.py::StationPlayer.schedule_panic::585": 0.25,
+      "fs42\\guide_builder.py::GuideBuilder.build_view::85": 0.25,
+      "fs42\\fs42_server\\api\\schedules.py::get_schedule::60": 0.25,
+      "fs42\\station_player.py::StationPlayer.play_file::231": 0.5,
+      "test\\test_custom_title_patterns.py::TestCustomTitlePatternsLoading.test_invalid_regex_pattern::172": 0.25,
+      "test\\test_custom_title_patterns.py::TestCustomTitlePatternsLoading.test_no_main_config_file::108": 0.25,
+      "fs42\\station_player.py::update_status_socket::45": 0.25,
+      "test\\test_custom_title_patterns.py::TestCustomTitlePatternsLoading.test_mixed_valid_and_invalid_patterns::200": 0.25,
+      "test\\test_custom_title_patterns.py::TestCustomTitlePatternsLoading.test_load_valid_custom_patterns::19": 0.25,
+      "station_42.py::main::183": 0.25,
+      "fs42\\fs42_server\\api\\build.py::add_time_to_schedule.add_time_worker::82": 0.25,
+      "fs42\\fs42_server\\api\\build.py::rebuild_catalog.rebuild_worker::24": 0.25,
+      "fs42\\catalog.py::ShowCatalog::41": 0.5,
+      "fs42\\catalog.py::ShowCatalog._build_standard::136": 0.25,
+      "fs42\\catalog_entry.py::CatalogEntry::15": 0.5,
+      "test\\test_custom_title_patterns.py::TestCustomTitlePatternsLoading::9": 0.0,
+      "fs42\\ux\\schedule_screen.py::ScheduleScreen::15": 0.25,
+      "fs42\\ux\\schedule_screen.py::ScheduleScreen.addtime_thread::117": 0.0,
+      "fs42\\sequence_api.py::SequenceAPI._build_sequence::110": 0.0,
+      "fs42\\sequence_api.py::SequenceAPI.scan_sequences::96": 0.0,
+      "fs42\\liquid_manager.py::LiquidManager::30": 0.25,
+      "fs42\\liquid_manager.py::LiquidManager.get_extents::120": 0.0,
+      "fs42\\osd\\logo_display.py::LogoDisplay.update::608": 0.0,
+      "fs42\\ux\\welcome_screen.py::WelcomeScreen.on_mount::36": 0.0,
+      "fs42\\osd\\main.py::StatusDisplay.update::91": 0.0,
+      "fs42\\ux\\welcome_screen.py::WelcomeScreen.on_screen_resume::43": 0.0,
+      "fs42\\catalog.py::ShowCatalog.summary::656": 0.0,
+      "fs42\\ux\\schedule_screen.py::ScheduleScreen.all_catalogs_found::134": 0.0,
+      "fs42\\catalog_entry.py::CatalogEntry.from_db_row::74": 0.5,
+      "fs42\\media_processor.py::MediaProcessor.process_one::123": 0.5,
+      "fs42\\catalog.py::ShowCatalog.make_reel_fill::511": 0.75,
+      "fs42\\autobump_agent.py::AutoBumpAgent.next_up_bump::44": 0.0,
+      "fs42\\autobump_agent.py::AutoBumpAgent.message_bump::37": 0.0,
+      "fs42\\sequence_io.py::SequenceIO.__init__::8": 0.0,
+      "fs42\\sequence_io.py::SequenceIO::7": 0.25
+    },
+    "original_context_tokens": 26459,
+    "compressed_context_tokens": 7352,
+    "compression_ratio": 0.2778638648474999
+  }
+}

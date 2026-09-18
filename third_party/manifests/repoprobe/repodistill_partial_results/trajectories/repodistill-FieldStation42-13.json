@@ -1,0 +1,519 @@
+{
+  "benchmark": "repoprobe",
+  "task_id": "FieldStation42-13",
+  "method": "repodistill",
+  "final_answer": "Your intuition is correct: for FS42\u2019s scheduler, a show (like Knight Rider) must be in its own top-level folder (at the same level as \"shows\", not inside it) and have a matching unique tag if you want to schedule it explicitly (e.g., always 8pm). Only media inside a folder matching the schedule tag will be pulled for that timeslot.\n\nIf you leave a show inside the \"shows\" folder, it will only be considered for generic \"shows\" slots. If you move it out and make it a top-level folder (e.g., /action/knightrider), it can be scheduled directly by tag but won\u2019t be included in the generic \"shows\" slots unless you also tag those hours with \"knightrider\" specifically (or use both \"shows\" and \"knightrider\" as tags for an hour).\n\nTo have both:\n- Put each show you want to schedule explicitly into its own top-level folder.\n- Tag explicit hours with their show name (e.g., \"knightrider\"), and for generic hours, use \"shows\" or a list of tags (e.g., [\"shows\", \"knightrider\"]).\n- If you want a show in both the dedicated timeslot and the general pool, tag the relevant hours with both (e.g., [\"shows\", \"knightrider\"]) or use symlinks/duplicate files.\n\nThis is how FS42\u2019s folder/tag/schedule system is designed to work.",
+  "trajectory": [
+    {
+      "capo_turn": 0,
+      "n_documents": 8,
+      "document_ids": [
+        "fs42\\ux\\welcome_screen.py::WelcomeScreen.populate_stats::46",
+        "fs42\\catalog.py::ShowCatalog::41",
+        "fs42\\catalog.py::ShowCatalog._build_standard::136",
+        "fs42\\sequence_api.py::SequenceAPI.scan_sequences::96",
+        "fs42\\sequence_api.py::SequenceAPI._build_sequence::110",
+        "fs42\\sequence.py::NamedSequence::12",
+        "fs42\\station_manager.py::StationManager::6",
+        "fs42\\guide_builder.py::normalize_video_title::12"
+      ],
+      "assigned_budgets": {
+        "fs42\\ux\\welcome_screen.py::WelcomeScreen.populate_stats::46": 0.25,
+        "fs42\\catalog.py::ShowCatalog::41": 0.5,
+        "fs42\\catalog.py::ShowCatalog._build_standard::136": 0.25,
+        "fs42\\sequence_api.py::SequenceAPI.scan_sequences::96": 0.25,
+        "fs42\\sequence_api.py::SequenceAPI._build_sequence::110": 0.25,
+        "fs42\\sequence.py::NamedSequence::12": 0.25,
+        "fs42\\station_manager.py::StationManager::6": 0.25,
+        "fs42\\guide_builder.py::normalize_video_title::12": 0.0
+      },
+      "budget_parse_failures": 0,
+      "memory_after_turn": "This chunk primarily details how FieldStation42 handles the cataloging and scheduling of media content for TV station emulation, focusing on folder structures, tag-based organization, and scheduling logic. The ShowCatalog class manages media through tags that reflect folder and scheduling structure, and compiles all relevant entries for later use in the scheduler. The important insight is that each tag typically maps to a folder directly under the content directory, and scheduling a show at a specific time requires it to be tagged distinctly\u2014otherwise, its media won\u2019t also be included via a broader tag (e.g. 'shows'). Attempts to nest show folders under a common 'shows' tag can create catalog conflicts. This chunk also reaffirms that SequenceAPI and StationManager orchestrate tags, slots, and sequence-aware scheduling, while highlighting the constraints regarding nested tags and scheduling granularity."
+    },
+    {
+      "capo_turn": 1,
+      "n_documents": 6,
+      "document_ids": [
+        "fs42\\title_parser.py::TitleParser.parse_title::7",
+        "test\\test_title_parser.py::TestTitleParserCustomPatterns.test_custom_pattern_studio_prefix::136",
+        "fs42\\catalog.py::ShowCatalog.__init__::45",
+        "fs42\\fs42_server\\api\\build.py::rebuild_catalog.rebuild_worker::24",
+        "station_42.py::main::183",
+        "fs42\\osd\\logo_display.py::LogoDisplay.find_content_logo_dir::112"
+      ],
+      "assigned_budgets": {
+        "fs42\\title_parser.py::TitleParser.parse_title::7": 0.0,
+        "test\\test_title_parser.py::TestTitleParserCustomPatterns.test_custom_pattern_studio_prefix::136": 0.0,
+        "fs42\\catalog.py::ShowCatalog.__init__::45": 0.25,
+        "fs42\\fs42_server\\api\\build.py::rebuild_catalog.rebuild_worker::24": 0.25,
+        "station_42.py::main::183": 0.25,
+        "fs42\\osd\\logo_display.py::LogoDisplay.find_content_logo_dir::112": 0.25
+      },
+      "budget_parse_failures": 0,
+      "memory_after_turn": "This chunk details various FS42 code elements related to catalog and scheduling management, including catalog initialization, rebuilding, and handling of schedule resets. ShowCatalog initializes catalog structures, potentially rebuilding from scratch. There are processes to rebuild catalogs and reset schedules for one or multiple stations, and to trigger schedule and catalog operations (via CLI or API) for maintenance or state adjustments. The folder/tag mechanism is lightly referenced, as tags are derived from folder structure and match schedule slots, reinforcing that specific tagging (corresponding to folder locations) is essential for granular scheduling. There are utilities for resolving the active tag and mapping it to directories based on the current schedule, used for features such as finding content logos. These details support the prior summary by continuing to emphasize the tight coupling between folder/tag structures and FS42 scheduling behavior."
+    },
+    {
+      "capo_turn": 2,
+      "n_documents": 15,
+      "document_ids": [
+        "fs42\\osd\\logo_display.py::LogoDisplay::52",
+        "fs42\\osd\\logo_display.py::LogoDisplay.update::608",
+        "fs42\\catalog.py::ShowCatalog.build_catalog::99",
+        "test\\test_custom_title_patterns.py::TestCustomTitlePatternsLoading.test_invalid_regex_pattern::172",
+        "test\\test_custom_title_patterns.py::TestCustomTitlePatternsLoading::9",
+        "fs42\\osd\\logo_display.py::LogoDisplay.__init__::53",
+        "fs42\\liquid_manager.py::LiquidManager.reset_sequences::73",
+        "fs42\\ux\\catalog_screen.py::CatalogScreen.populate_stats::114",
+        "fs42\\ux\\schedule_screen.py::ScheduleScreen.all_catalogs_found::134",
+        "station_42.py::Station42.__init__::24",
+        "fs42\\ux\\catalog_screen.py::CatalogScreen.rebuild_all_thread::106",
+        "fs42\\ux\\catalog_screen.py::CatalogScreen.rebuild_thread::99",
+        "fs42\\ux\\catalog_screen.py::CatalogScreen.on_button_pressed::38",
+        "fs42\\liquid_schedule.py::LiquidSchedule.__init__::28",
+        "fs42\\osd\\logo_display.py::LogoDisplay.select_logo_for_channel::261"
+      ],
+      "assigned_budgets": {
+        "fs42\\osd\\logo_display.py::LogoDisplay::52": 0.5,
+        "fs42\\osd\\logo_display.py::LogoDisplay.update::608": 0.0,
+        "fs42\\catalog.py::ShowCatalog.build_catalog::99": 0.25,
+        "test\\test_custom_title_patterns.py::TestCustomTitlePatternsLoading.test_invalid_regex_pattern::172": 0.0,
+        "test\\test_custom_title_patterns.py::TestCustomTitlePatternsLoading::9": 0.0,
+        "fs42\\osd\\logo_display.py::LogoDisplay.__init__::53": 0.0,
+        "fs42\\liquid_manager.py::LiquidManager.reset_sequences::73": 0.0,
+        "fs42\\ux\\catalog_screen.py::CatalogScreen.populate_stats::114": 0.0,
+        "fs42\\ux\\schedule_screen.py::ScheduleScreen.all_catalogs_found::134": 0.0,
+        "station_42.py::Station42.__init__::24": 0.0,
+        "fs42\\ux\\catalog_screen.py::CatalogScreen.rebuild_all_thread::106": 0.0,
+        "fs42\\ux\\catalog_screen.py::CatalogScreen.rebuild_thread::99": 0.0,
+        "fs42\\ux\\catalog_screen.py::CatalogScreen.on_button_pressed::38": 0.0,
+        "fs42\\liquid_schedule.py::LiquidSchedule.__init__::28": 0.0,
+        "fs42\\osd\\logo_display.py::LogoDisplay.select_logo_for_channel::261": 0.75
+      },
+      "budget_parse_failures": 0,
+      "memory_after_turn": "This chunk provides detailed implementation logic for the FS42 logo display and selection process, with emphasis on how folder structure and schedule tags interact. The select_logo_for_channel method uses a prioritized hierarchy: folder selection is primarily driven by tags derived from the schedule, with fallback to time-based (month, weekday, daypart), and base directories. The method ensures that content assigned a specific tag in the schedule (e.g., 'knightrider') is mapped to corresponding directories (logo_dir/knightrider), confirming that moving shows out of a generic grouping and assigning dedicated tags/folders is core to FS42's granular scheduling and folder strategy. This reinforces prior observations that tag/directory matching and schedule configuration are tightly coupled for precise content placement."
+    },
+    {
+      "capo_turn": 3,
+      "n_documents": 6,
+      "document_ids": [
+        "fs42\\osd\\logo_display.py::LogoDisplay.load_logo_for_channel::545",
+        "fs42\\station_manager.py::StationManager.station_by_name::74",
+        "fs42\\sequence_io.py::SequenceIO.put_sequence::41",
+        "fs42\\sequence_io.py::SequenceIO::7",
+        "fs42\\sequence_api.py::SequenceAPI.get_sequence::21",
+        "fs42\\media_processor.py::MediaProcessor._rfind_media::262"
+      ],
+      "assigned_budgets": {
+        "fs42\\osd\\logo_display.py::LogoDisplay.load_logo_for_channel::545": 0.25,
+        "fs42\\station_manager.py::StationManager.station_by_name::74": 0.25,
+        "fs42\\sequence_io.py::SequenceIO.put_sequence::41": 0.25,
+        "fs42\\sequence_io.py::SequenceIO::7": 0.5,
+        "fs42\\sequence_api.py::SequenceAPI.get_sequence::21": 0.25,
+        "fs42\\media_processor.py::MediaProcessor._rfind_media::262": 0.25
+      },
+      "budget_parse_failures": 0,
+      "memory_after_turn": "This chunk provides further details on how FS42 manages media organization and scheduling through database-backed sequence management, logo selection, and station identification. The core logic for loading channel-specific logos relies on tags and station configuration, enforcing that only content in correctly tagged folders appears at scheduled times. The SequenceIO class supports persistent storage and retrieval of hierarchical media sequences per station, using folder paths and tags to map sequences, and updating or cleaning entries as needed. Media file detection is handled recursively based on filetype, facilitating dynamic cataloging. This reinforces that folder structure, tags, and database-backed scheduling are tightly coupled: a show's inclusion or exclusion in the schedule is determined by both its folder/tag placement and the explicit scheduling configuration. For precise, granular scheduling (e.g., a show at a specific hour), shows must reside in their own folders with matching tags; otherwise, they default to generic slots dictated by broader tags (like 'shows')."
+    }
+  ],
+  "evidence": [
+    {
+      "path": "fs42\\ux\\welcome_screen.py",
+      "line_start": 46,
+      "line_end": 83,
+      "quote": "    def populate_stats(self):\n        self.md.update(\"\")\n                    (start, end) = LiquidManager().get_extents(network_name)\n                except ValueError:\n                    text += \"* Catalog not configured or missing - check channel configuration.\"\n            text += \"\\n\"\n        self.md.update(text)",
+      "reason": "RepoDistill GraphRAG candidate (WelcomeScreen.populate_stats), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "WelcomeScreen.populate_stats"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\catalog.py",
+      "line_start": 41,
+      "line_end": 668,
+      "quote": "class ShowCatalog:\n    prebump = \"prebump\"\n    postbump = \"postbump\"\n\n    def __init__(self, config, rebuild_catalog=False, load=True, debug=False, force=False, skip_chapter_scan=False):\n        self.config = config\n        self._l = logging.getLogger(f\"{self.config['network_name']} - CAT\")\n\n        # the main index for videos\n        self.clip_index = {}\n        # the tag/duration cache index\n        self.tag_dur_cache = {}\n\n        # basically, a flattened list of clip_index keys\n        self.tags = []\n\n        self.__fluid_builder = None\n        self.min_gap = 3\n        self.skip_chapter_scan = skip_chapter_scan\n        if rebuild_catalog:\n            if force:\n                self._l.info(\"Rebuilding catalog with force flag - will delete existing catalog\")\n                CatalogAPI.delete_catalog(self.config)\n            self.build_catalog()\n        elif load:\n            self.load_catalog()\n\n    def _write_catalog(self):\n        # first, make them into a flat list\n        flat_list = []\n\n        for tag in self.clip_index:\n            try:\n                for entry in self.clip_index[tag]:\n                    if isinstance(entry, CatalogEntry):\n                        flat_list.append(entry)\n                    else:\n                        print(f\"Warning: Entry {entry} on {tag} is not a CatalogEntry instance. Skipping.\")\n\n            except Exception as e:\n                print(f\"Error processing tag '{tag}': {e}\")\n\n        CatalogAPI.set_entries(self.config, flat_list)\n\n    def load_catalog(self):\n        if self.config[\"network_type\"] == \"streaming\":\n            return\n\n        catalog_entries = CatalogAPI.get_entries(self.config)\n        \n        self.clip_index = {}\n\n        for entry in catalog_entries:\n            \n            if entry.tag not in self.clip_index:\n                self.clip_index[entry.tag] = []\n            self.clip_index[entry.tag].append(entry)\n\n    def build_catalog(self):\n        self._l.info(f\"Starting catalog build for {self.config['network_name']}\")\n\n        match self.config[\"network_type\"]:\n            case \"standard\":\n                # restrict content to fit and be valid (zero duration is likely not valid)\n                if (\n                    candidate.duration < seconds\n                    and candidate.duration >= 1\n                    and MediaProcessor._test_candidate_hints(candidate.hints, when)\n             ",
+      "reason": "RepoDistill GraphRAG candidate (ShowCatalog), CAPO retention budget 50%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "ShowCatalog"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\catalog.py",
+      "line_start": 136,
+      "line_end": 257,
+      "quote": "    def _build_standard(self):\n        self.clip_index = {}\n        self.tags = []\n\n        self._l.info(\"Standard network\")\n        start_bumps = {}\n        end_bumps = {}\n\n        # get the list of all tags\n        tags = {}\n        bump_overrides = {}\n        commercial_overrides = {}\n        for day in DAYS:\n            slots = self.config[day]\n            for k in slots:\n                # Validate that slots[k] is a dictionary\n                if not isinstance(slots[k], dict):\n                    self._l.error(f\"Invalid slot configuration for {day}[{k}]: expected dict, got {type(slots[k]).__name__}\")\n                    self._l.error(f\"This may be caused by media processing failures. Check logs above for errors.\")\n                    self._l.error(f\"Slot value: {slots[k]}\")\n                    raise TypeError(f\"Invalid slot configuration for {day}[{k}]: expected dict, got {type(slots[k]).__name__}. Check media processing logs for errors.\")\n\n                if \"tags\" in slots[k]:\n                    if type(slots[k][\"tags\"]) is list:\n                        for m in slots[k][\"tags\"]:\n                            tags[m] = True\n                    else:\n                        tags[slots[k][\"tags\"]] = True\n\n                # These checks should be outside the tags check - slots can have bump/commercial dirs without tags\n                if \"bump_dir\" in slots[k]:\n                    bump_overrides[slots[k][\"bump_dir\"]] = True\n                if \"commercial_dir\" in slots[k]:",
+      "reason": "RepoDistill GraphRAG candidate (ShowCatalog._build_standard), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "ShowCatalog._build_standard"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\sequence_api.py",
+      "line_start": 96,
+      "line_end": 107,
+      "quote": "    def scan_sequences(station_config):\n        for day in DAYS:\n            if day in station_config:",
+      "reason": "RepoDistill GraphRAG candidate (SequenceAPI.scan_sequences), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "SequenceAPI.scan_sequences"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\sequence_api.py",
+      "line_start": 110,
+      "line_end": 139,
+      "quote": "            \n            file_list = MediaProcessor._rfind_media(f\"{station_config['content_dir']}/{seq_tag}\")\n            \n            ns = NamedSequence(station_config[\"network_name\"], seq_name, seq_tag, seq_start, seq_end, 0, file_list)\n            SequenceIO().put_sequence(station_config[\"network_name\"], ns)",
+      "reason": "RepoDistill GraphRAG candidate (SequenceAPI._build_sequence), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "SequenceAPI._build_sequence"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\sequence.py",
+      "line_start": 12,
+      "line_end": 47,
+      "quote": "class NamedSequence:\n    def __init__(\n        self,\n        station_name: str,\n        sequence_name: str,\n        tag_path: str,\n        start_perc: float,\n        end_perc: float,\n        current_index: int,\n        file_list: list[str],\n    ):\n        self.station_name = station_name\n        self.sequence_name = sequence_name",
+      "reason": "RepoDistill GraphRAG candidate (NamedSequence), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "NamedSequence"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\station_manager.py",
+      "line_start": 6,
+      "line_end": 264,
+      "quote": "class StationManager(object):\n    # the borg singleton pattern\n    __we_are_all_one = {}\n    _initialized = False\n\n    __main_config_path = \"confs/main_config.json\"\n\n    no_catalog = {\"guide\", \"streaming\", \"web\"}\n    no_schedule = {\"guide\", \"streaming\", \"web\"}\n\n                    \"day_parts\": {\n                        \"morning\": range(6, 10),\n                        \"daytime\": range(10, 18),\n                        \"prime\": range(18, 23),\n                        \"late\": [23, 0, 1, 2],\n                        \"overnight\": range(2, 6),\n                    },\n                    \"time_format\": \"%H:%M\",\n                    \"date_time_format\": \"%Y-%m-%dT%H:%M:%S\",\n                    \"db_path\": \"runtime/fs42_fluid.db\",\n                    \"start_mpv\": True,\n                    \"server_host\": \"0.0.0.0\",\n                    \"server_port\": 4242,\n                            # Validate that the regex compiles\n                            re.compile(pattern_config[\"pattern\"])\n\n                    new_parts = {}\n                    for key in d[\"day_parts\"]:\n                        start_hour = d[\"day_parts\"][key][\"start_hour\"]\n                        end_hour = d[\"day_parts\"][key][\"end_hour\"]\n                        if end_hour > start_hour:\n                            new_parts[key] = range(start_hour, end_hour)\n                        else:\n                    # check the environment variable or set default then\n                    self.server_conf[\"date_time_format\"] = os.environ.get(\"FS42_TS\", \"%Y-%m-%dT%H:%M:%S\")\n                else:\n                    self.server_conf[\"date_time_format\"] = d[\"date_time_format\"]\n\n            except Exception as e:\n                print(e)\n                _l.exception(e)\n                _l.error(f\"Error loading main config overrides from {self.station_io.main_config_path}\")\n                exit(-1)\n        Delegates to StationIO for all the work, then reloads.\n        \"\"\"\n        # Reload from disk (this also rebuilds indexes)\n        self.load_json_stations()\n\n        # Re-apply tag smoothing for standard networks\n        for i in range(len(self.stations)):\n            station = self.stations[i]\n            if station[\"network_type\"] == \"standard\":\n                self.stations[i] = SlotReader.smooth_tags(station)\n",
+      "reason": "RepoDistill GraphRAG candidate (StationManager), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "StationManager"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\catalog.py",
+      "line_start": 45,
+      "line_end": 66,
+      "quote": "        self._l = logging.getLogger(f\"{self.config['network_name']} - CAT\")\n\n        # basically, a flattened list of clip_index keys\n        self.tags = []\n",
+      "reason": "RepoDistill GraphRAG candidate (ShowCatalog.__init__), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "ShowCatalog.__init__"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\fs42_server\\api\\build.py",
+      "line_start": 24,
+      "line_end": 62,
+      "quote": "                command_queue = request.app.state.player_command_queue\n                if command_queue:\n                    command_queue.put({\"command\": \"reload_data\"})\n                else:\n                    LiquidManager().reload_schedules()\n            \n        except Exception as e:\n            with rebuild_tasks_lock:\n                rebuild_tasks[task_id][\"status\"] = \"error\"\n                rebuild_tasks[task_id][\"log\"] += f\"Error: {e}\\n\"",
+      "reason": "RepoDistill GraphRAG candidate (rebuild_catalog.rebuild_worker), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "rebuild_catalog.rebuild_worker"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "station_42.py",
+      "line_start": 183,
+      "line_end": 600,
+      "quote": "def main():\n    _l = logging.getLogger(\"Station42\")\n    success_messages = []\n    failure_messages = []\n    console = Console(color_system=\"standard\", force_terminal=True)\n\n    def _get_arg_stations(args):\n        nonlocal _l\n        _rebuild_list = []\n        if len(args) == 0:\n            _rebuild_list = StationManager().stations\n        else:\n            for arg in args:\n                conf = StationManager().station_by_name(arg)\n                if conf:\n                    _rebuild_list.append(StationManager().station_by_name(arg))\n                else:\n                    raise ValueError(f\"Can't find station by name: {arg}\")\n        return _rebuild_list\n\n    def delete_schedules(_rebuild_list):\n        nonlocal success_messages, failure_messages, _l\n        _l.info(\"Starting schedule reset.\")\n        for station in _rebuild_list:\n            if station[\"_has_schedule\"]:\n                _l.info(f\"Resetting schedule for {station['network_name']}\")\n                try:\n                    LiquidManager().reset_schedule(station, args.force)\n                    success_messages.append(\n                        f\"Successfully reset schedule for {station['network_name']}\"\n                    )\n                except Exception as e:\n                    console.print(\n                        f\"[red]Error resetting schedule for {station['network_name']}: {e}[/red]\"\n                    )\n                    _l.exception(e)\n                    failure_messages.append(\n                        f\"Failed to reset schedule for {station['network_name']} - check logs.\"\n                    )\n\n    def rebuild_catalogs(_rebuild_list):\n        nonlocal success_messages, failure_messages, _l\n        _l.info(\"Starting catalog rebuild.\")\n        for station in _rebuild_list:\n            if station[\"_has_catalog\"]:\n                _l.info(f\"Rebuilding catalog for {station['network_name']}\")\n                try:\n                    # Chapter scanning is now opt-out via --skip_chapter_scan flag\n                    Station42(station, True, args.force, args.skip_chapter_scan)\n                    success_messages.append(\n                        f\"Successfully rebuilt catalog for {station['network_name']}\"\n                    )\n                except Exception as e:\n                    console.print(\n                        f\"[red]Error rebuilding catalog for {station['network_name']}",
+      "reason": "RepoDistill GraphRAG candidate (main), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "main"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\osd\\logo_display.py",
+      "line_start": 112,
+      "line_end": 166,
+      "quote": "    def find_content_logo_dir(self, base_dir: Path, station_data: dict) -> Path | None:\n        \"\"\"\n                    best_hour = str(eligible[-1])\n                    slot = day_schedule.get(best_hour)\n            except Exception:\n                slot = None\n\n        if not isinstance(slot, dict):\n            return None\n\n        val = slot.get(\"tags\") or slot.get(\"tag\")\n        if not val:\n            return None\n",
+      "reason": "RepoDistill GraphRAG candidate (LogoDisplay.find_content_logo_dir), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "LogoDisplay.find_content_logo_dir"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\osd\\logo_display.py",
+      "line_start": 52,
+      "line_end": 718,
+      "quote": "class LogoDisplay(object):\n    def __init__(self, window, config: LogoDisplayConfig):\n        self.config = config\n        self.window = window\n        self.window_width, self.window_height = glfw.get_framebuffer_size(window)\n        self.station_manager = StationManager()\n\n        self.current_frame_durations: list[float] = []\n        self.current_frame_index: int = 0\n        self.frame_timer: float = 0.0\n        self.is_animated: bool = False\n\n        self.is_displaying_osd_default_logo: bool = False\n\n        self.main_config: dict | None = None\n\n        self.check_status()\n\n    # -------------------------------------------------------------------------\n    # Helpers to load logos and config\n    # -------------------------------------------------------------------------\n\n    def get_available_logos(self, dir_path: Path) -> list[Path]:\n        extensions = [\"*.png\", \"*.jpg\", \"*.jpeg\", \"*.gif\", \"*.bmp\"]\n        found: list[str] = []\n        for ext in extensions:\n            found.extend(glob.glob(str(dir_path / ext)))\n            found.extend(glob.glob(str(dir_path / ext.upper())))\n        return [Path(p) for p in found]\n\n    def load_main_config(self) -> dict:\n        \"\"\"\n        Load main_config.json from confs/\n        \"\"\"\n        if self.main_config is not None:\n            return self.main_config\n\n        cfg_path = project_root / \"confs\" / \"main_config.json\"\n\n        try:\n            with open(cfg_path, \"r\") as f:\n                self.main_config = json.load(f)\n        except Exception:\n            self.main_config = {}\n\n        return self.main_config\n\n    # -------------------------------------------------------------------------\n    # Tag-based content directory: logo_dir/<first_tag>/\n    #    - tags derived from the station's schedule (day/hour-based)\n    # -------------------------------------------------------------------------\n\n    def find_content_logo_dir(self, base_dir: Path, station_data: dict) -> Path | None:\n        \"\"\"\n        Use the station's schedule to determine the active tag, and\n        map that tag to a subdirectory under base_dir.\n        \"\"\"\n        now = datetime.datetime.now()\n        day_key = now.strftime(\"%A\").lower()  # \"monday\", \"tuesday\", etc.\n        day_schedule = station_data.get(day_key)\n\n        if not isinstance(day_schedule, dict):\n            return None\n\n        # Try exact hour match first\n        hour_str = s",
+      "reason": "RepoDistill GraphRAG candidate (LogoDisplay), CAPO retention budget 50%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "LogoDisplay"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\catalog.py",
+      "line_start": 99,
+      "line_end": 120,
+      "quote": "    def build_catalog(self):\n        self._l.info(f\"Starting catalog build for {self.config['network_name']}\")\n\n        match self.config[\"network_type\"]:\n            case \"standard\":",
+      "reason": "RepoDistill GraphRAG candidate (ShowCatalog.build_catalog), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "ShowCatalog.build_catalog"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\osd\\logo_display.py",
+      "line_start": 261,
+      "line_end": 389,
+      "quote": "    def select_logo_for_channel(self, station_data: dict) -> Path | None:\n        \"\"\"\n        Selection hierarchy:\n\n            1. Tag-based folder:           logo_dir/<first_tag>/\n            2. Month + Weekday + daypart:  logo_dir/<Month>/<Weekday>/<day_part>/\n            3. Month + Weekday:            logo_dir/<Month>/<Weekday>/\n            4. Month + daypart:            logo_dir/<Month>/<day_part>/\n            5. Month-only:                 logo_dir/<Month>/ or month-range\n            6. Weekday + daypart:          logo_dir/<Weekday>/<day_part>/\n            7. Weekday-only:               logo_dir/<Weekday>/\n            8. daypart-only:               logo_dir/<day_part>/\n            9. Base directory              (original behavior)\n        \"\"\"\n        multi = station_data.get(\"multi_logo\", \"single\").lower()\n        if multi == \"off\":\n            multi = \"single\"\n        elif multi == \"random\":\n            multi = \"multi\"\n        if multi not in (\"single\", \"multi\"):\n            multi = \"single\"\n\n        content_dir = station_data.get(\"content_dir\")\n        logo_dir = station_data.get(\"logo_dir\")\n        default_logo_name = station_data.get(\"default_logo\")\n\n        # Original FS42 semantics: logo_dir relative to content_dir\n        # (catalog/<STATION>/<logo_dir>), all rooted at project_root.\n        if content_dir and logo_dir:\n            base_dir = project_root / content_dir / logo_dir\n        elif logo_dir:\n            p = Path(logo_dir)\n            base_dir = p if p.is_absolute() else project_root / logo_dir\n        else:\n            return None\n\n        override_dirs: list[Path] = []\n\n        # 1) Content tag override (derived from the station's schedule)\n        cdir = self.find_content_logo_dir(base_dir, station_data)\n        if cdir:\n            override_dirs.append(cdir)\n\n        # Temporal hints: month, weekday, day_part\n        month_dir = self.find_temporal_logo_dir(base_dir)\n        day_part_name = self.get_current_day_part()\n        weekday_name = self.get_current_weekday()\n\n        # Normalize day_part to filesystem-friendly name\n        day_part_folder = None\n        if day_part_name:\n            day_part_folder = day_part_name.replace(\" \", \"_\")\n\n        # Helper to add a candidate directory if it exists and isn't already listed\n        def add_candidate(path: Path):\n            if path and path.exists() and path.is_dir():\n                ",
+      "reason": "RepoDistill GraphRAG candidate (LogoDisplay.select_logo_for_channel), CAPO retention budget 75%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "LogoDisplay.select_logo_for_channel"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\osd\\logo_display.py",
+      "line_start": 545,
+      "line_end": 602,
+      "quote": "        self.channel_config = {}\n                station = self.station_manager.station_by_name(net)\n                if isinstance(station, dict):\n                    self.channel_config = station\n\n                    if station.get(\"show_logo\", True) is False:\n                        show_logo = False\n                        self.clear_logo_textures()\n                        return\n\n                    selected = self.select_logo_for_channel(station)\n                    if selected is not None:\n                        logo_path = selected\n                else:\n            if self.config.default_show_logo and self.config.default_logo:",
+      "reason": "RepoDistill GraphRAG candidate (LogoDisplay.load_logo_for_channel), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "LogoDisplay.load_logo_for_channel"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\station_manager.py",
+      "line_start": 74,
+      "line_end": 77,
+      "quote": "    def station_by_name(self, name):",
+      "reason": "RepoDistill GraphRAG candidate (StationManager.station_by_name), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "StationManager.station_by_name"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\sequence_io.py",
+      "line_start": 41,
+      "line_end": 71,
+      "quote": "    def put_sequence(self, station_name: str, named_sequence):\n        \"\"\"\n        Store a SeriesIndex in the database.\n        \"\"\"\n        with sqlite3.connect(self.db_path) as connection:\n            cursor = connection.cursor()",
+      "reason": "RepoDistill GraphRAG candidate (SequenceIO.put_sequence), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "SequenceIO.put_sequence"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\sequence_io.py",
+      "line_start": 7,
+      "line_end": 198,
+      "quote": "class SequenceIO:\n    def __init__(self):\n    \n    def update_current_index(self, station_name: str, sequence_name: str, tag_path: str, new_index: int):\n        with sqlite3.connect(self.db_path) as connection:\n            cursor = connection.cursor()\n            cursor.execute(\n                \"\"\"UPDATE named_sequence \n                              SET current_index = ? \n                              WHERE station = ? AND sequence_name = ? AND tag_path = ?\"\"\",\n                (new_index, station_name, sequence_name, tag_path),\n            )\n            cursor.close()\n            connection.commit()\n\n    def update_sequence_index_by_path(self, station_name: str, sequence_name: str, tag_path: str, episode_path: str):\n        with sqlite3.connect(self.db_path) as connection:\n            cursor = connection.cursor()\n            # Get the sequence_index for the episode_path\n            cursor.execute(\"\"\"\n                SELECT se.sequence_index \n                FROM sequence_entries se\n                JOIN named_sequence ns ON se.named_sequence_id = ns.id\n                WHERE ns.station = ? AND ns.sequence_name = ? AND ns.tag_path = ? AND se.fpath = ?\n            \"\"\", (station_name, sequence_name, tag_path, episode_path))\n            \n            result = cursor.fetchone()\n            if result:\n                new_index = result[0]\n                cursor.execute(\"\"\"\n                    UPDATE named_sequence \n                    SET current_index = ? \n                    WHERE station = ? AND sequence_name = ? AND tag_path = ?\n                \"\"\", (new_index, station_name, sequence_name, tag_path))\n                connection.commit()\n                return True\n            return False\n\n    def clean_sequences(self):\n        \"\"\"\n        Clean up sequences by removing entries that are no longer valid.\n        This can be used to remove entries that have been deleted from the filesystem.\n        \"\"\"\n        with sqlite3.connect(self.db_path) as connection:\n            cursor = connection.cursor()\n            cursor.execute(\n                \"\"\"DELETE FROM sequence_entries\n                        WHERE NOT EXISTS (\n                            SELECT 1 FROM named_sequence\n                            WHERE named_sequence.id = sequence_entries.named_sequence_id\n                        );\"\"\"\n            )\n            connection.commit()\n            cursor.close()",
+      "reason": "RepoDistill GraphRAG candidate (SequenceIO), CAPO retention budget 50%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "SequenceIO"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\sequence_api.py",
+      "line_start": 21,
+      "line_end": 30,
+      "quote": "    def get_sequence(station_config, sequence_name, tag_path) -> NamedSequence:",
+      "reason": "RepoDistill GraphRAG candidate (SequenceAPI.get_sequence), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "SequenceAPI.get_sequence"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\media_processor.py",
+      "line_start": 262,
+      "line_end": 281,
+      "quote": "    def _rfind_media(path, media_filter=\"video\") -> list[str]:\n        logging.getLogger(\"MEDIA\").debug(f\"_rfind_media scanning for media in {path} with filter={media_filter}\")\n",
+      "reason": "RepoDistill GraphRAG candidate (MediaProcessor._rfind_media), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "MediaProcessor._rfind_media"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    }
+  ],
+  "usage": {
+    "llm_calls": 5,
+    "tool_calls": 36,
+    "input_tokens": 40842,
+    "output_tokens": 1356,
+    "total_tokens": 42198,
+    "estimated_cost_usd": 0.092532,
+    "wall_clock_seconds": 4241.209625959396,
+    "unique_files_inspected": 18,
+    "unique_symbols_inspected": 35
+  },
+  "termination_reason": "all_chunks_processed",
+  "metadata": {
+    "generation_model": "gpt-4.1",
+    "implementation": "paper-faithful RepoDistill (No-Training) reimplementation",
+    "paper_citation": "Yin, Ding, Zhang, Wang, Wang, Ni, Cui. \"RepoDistill: Distilling Repository Knowledge through Compression-Aware Budget Allocation and Policy Optimization.\" Findings of ACL 2026, pp. 4425-4443. https://aclanthology.org/2026.findings-acl.217/",
+    "upstream_code_note": "No code was ported. The paper's cited implementation link is an Anonymous-GitHub mirror that is dead/unreachable, and no trained checkpoint is published. This implementation is derived from the published paper text (sections 2.1/2.2/2.3 and Appendix A.1.2, read directly from the ACL Anthology PDF).",
+    "variant": "no_training",
+    "embedding_model": "BAAI/bge-small-en-v1.5",
+    "perplexity_model": "Qwen/Qwen2.5-Coder-0.5B",
+    "graph_nodes": 791,
+    "graph_edges": 1516,
+    "anchor_node_ids": [
+      "fs42\\ux\\welcome_screen.py::WelcomeScreen.populate_stats::46",
+      "fs42\\osd\\logo_display.py::LogoDisplay.find_content_logo_dir::112",
+      "fs42\\sequence_api.py::SequenceAPI._build_sequence::110",
+      "fs42\\catalog.py::ShowCatalog::41",
+      "fs42\\sequence.py::NamedSequence::12",
+      "test\\test_custom_title_patterns.py::TestCustomTitlePatternsLoading::9",
+      "fs42\\catalog.py::ShowCatalog.__init__::45",
+      "test\\test_title_parser.py::TestTitleParserCustomPatterns.test_custom_pattern_studio_prefix::136"
+    ],
+    "top_k": 8,
+    "rerank_lambda": 0.5,
+    "mmr_lambda": 0.1,
+    "segmentation_alpha": 0.2,
+    "capo_chunk_tokens": 10000,
+    "n_candidates": 24,
+    "n_retrieved_units": 35,
+    "n_capo_turns": 4,
+    "capo_turn_cap_hit": false,
+    "retrieved_chunk_ids": [
+      "fs42\\ux\\welcome_screen.py:46-83",
+      "fs42\\catalog.py:41-668",
+      "fs42\\catalog.py:136-257",
+      "fs42\\sequence_api.py:96-107",
+      "fs42\\sequence_api.py:110-139",
+      "fs42\\sequence.py:12-47",
+      "fs42\\station_manager.py:6-264",
+      "fs42\\guide_builder.py:12-14",
+      "fs42\\title_parser.py:7-70",
+      "test\\test_title_parser.py:136-143",
+      "fs42\\catalog.py:45-66",
+      "fs42\\fs42_server\\api\\build.py:24-62",
+      "station_42.py:183-600",
+      "fs42\\osd\\logo_display.py:112-166",
+      "fs42\\osd\\logo_display.py:52-718",
+      "fs42\\osd\\logo_display.py:608-621",
+      "fs42\\catalog.py:99-120",
+      "test\\test_custom_title_patterns.py:172-198",
+      "test\\test_custom_title_patterns.py:9-276",
+      "fs42\\osd\\logo_display.py:53-76",
+      "fs42\\liquid_manager.py:73-118",
+      "fs42\\ux\\catalog_screen.py:114-129",
+      "fs42\\ux\\schedule_screen.py:134-143",
+      "station_42.py:24-32",
+      "fs42\\ux\\catalog_screen.py:106-112",
+      "fs42\\ux\\catalog_screen.py:99-103",
+      "fs42\\ux\\catalog_screen.py:38-79",
+      "fs42\\liquid_schedule.py:28-33",
+      "fs42\\osd\\logo_display.py:261-389",
+      "fs42\\osd\\logo_display.py:545-602",
+      "fs42\\station_manager.py:74-77",
+      "fs42\\sequence_io.py:41-71",
+      "fs42\\sequence_io.py:7-198",
+      "fs42\\sequence_api.py:21-30",
+      "fs42\\media_processor.py:262-281"
+    ],
+    "retention_budgets": {
+      "fs42\\ux\\welcome_screen.py::WelcomeScreen.populate_stats::46": 0.25,
+      "fs42\\catalog.py::ShowCatalog::41": 0.5,
+      "fs42\\catalog.py::ShowCatalog._build_standard::136": 0.25,
+      "fs42\\sequence_api.py::SequenceAPI.scan_sequences::96": 0.25,
+      "fs42\\sequence_api.py::SequenceAPI._build_sequence::110": 0.25,
+      "fs42\\sequence.py::NamedSequence::12": 0.25,
+      "fs42\\station_manager.py::StationManager::6": 0.25,
+      "fs42\\guide_builder.py::normalize_video_title::12": 0.0,
+      "fs42\\title_parser.py::TitleParser.parse_title::7": 0.0,
+      "test\\test_title_parser.py::TestTitleParserCustomPatterns.test_custom_pattern_studio_prefix::136": 0.0,
+      "fs42\\catalog.py::ShowCatalog.__init__::45": 0.25,
+      "fs42\\fs42_server\\api\\build.py::rebuild_catalog.rebuild_worker::24": 0.25,
+      "station_42.py::main::183": 0.25,
+      "fs42\\osd\\logo_display.py::LogoDisplay.find_content_logo_dir::112": 0.25,
+      "fs42\\osd\\logo_display.py::LogoDisplay::52": 0.5,
+      "fs42\\osd\\logo_display.py::LogoDisplay.update::608": 0.0,
+      "fs42\\catalog.py::ShowCatalog.build_catalog::99": 0.25,
+      "test\\test_custom_title_patterns.py::TestCustomTitlePatternsLoading.test_invalid_regex_pattern::172": 0.0,
+      "test\\test_custom_title_patterns.py::TestCustomTitlePatternsLoading::9": 0.0,
+      "fs42\\osd\\logo_display.py::LogoDisplay.__init__::53": 0.0,
+      "fs42\\liquid_manager.py::LiquidManager.reset_sequences::73": 0.0,
+      "fs42\\ux\\catalog_screen.py::CatalogScreen.populate_stats::114": 0.0,
+      "fs42\\ux\\schedule_screen.py::ScheduleScreen.all_catalogs_found::134": 0.0,
+      "station_42.py::Station42.__init__::24": 0.0,
+      "fs42\\ux\\catalog_screen.py::CatalogScreen.rebuild_all_thread::106": 0.0,
+      "fs42\\ux\\catalog_screen.py::CatalogScreen.rebuild_thread::99": 0.0,
+      "fs42\\ux\\catalog_screen.py::CatalogScreen.on_button_pressed::38": 0.0,
+      "fs42\\liquid_schedule.py::LiquidSchedule.__init__::28": 0.0,
+      "fs42\\osd\\logo_display.py::LogoDisplay.select_logo_for_channel::261": 0.75,
+      "fs42\\osd\\logo_display.py::LogoDisplay.load_logo_for_channel::545": 0.25,
+      "fs42\\station_manager.py::StationManager.station_by_name::74": 0.25,
+      "fs42\\sequence_io.py::SequenceIO.put_sequence::41": 0.25,
+      "fs42\\sequence_io.py::SequenceIO::7": 0.5,
+      "fs42\\sequence_api.py::SequenceAPI.get_sequence::21": 0.25,
+      "fs42\\media_processor.py::MediaProcessor._rfind_media::262": 0.25
+    },
+    "original_context_tokens": 27247,
+    "compressed_context_tokens": 8372,
+    "compression_ratio": 0.3072631849377913
+  }
+}

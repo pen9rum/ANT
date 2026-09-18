@@ -1,0 +1,583 @@
+{
+  "benchmark": "repoprobe",
+  "task_id": "FieldStation42-4",
+  "method": "repodistill",
+  "final_answer": "1. The play counter is tracked using the real (canonical) file path (i.e., following any symlinks), not the symlink path, ensuring that play counts are consistent for the same file regardless of which symlink or tag led to its selection.\n\n2. When using `random_tags: true`, the system randomly picks one tag from the provided tag list, then selects eligible content from within that single tag\u2014**it does not** pool all contents from all listed tags into a master list before picking.\n\nSo, with your described schedule, random_tags can result in the same movie being picked in consecutive slots if it appears under multiple tags, and each slot independently does a random tag pick, then a pick from within that tag. Since playcount is tracked by real file, low-played alternatives would only be favored if present in the picked tag.",
+  "trajectory": [
+    {
+      "capo_turn": 0,
+      "n_documents": 12,
+      "document_ids": [
+        "fs42\\slot_reader.py::SlotReader.get_tag_from_slot::26",
+        "fs42\\liquid_schedule.py::LiquidSchedule._fluid::183",
+        "fs42\\liquid_blocks.py::LiquidBlock.make_plan::102",
+        "fs42\\catalog.py::ShowCatalog.make_reel_fill::511",
+        "fs42\\catalog_entry.py::CatalogEntry::15",
+        "fs42\\media_processor.py::MediaProcessor.process_one::123",
+        "test\\test_title_parser.py::TestTitleParserCustomPatterns.test_multiple_custom_patterns::186",
+        "fs42\\title_parser.py::TitleParser.parse_title::7",
+        "fs42\\liquid_io.py::LiquidIO._build_block_from_row::164",
+        "fs42\\block_plan.py::BlockPlanEntry::1",
+        "fs42\\liquid_blocks.py::LiquidLoopBlock.make_plan::292",
+        "fs42\\catalog.py::ShowCatalog.gather_clip_content::577"
+      ],
+      "assigned_budgets": {
+        "fs42\\slot_reader.py::SlotReader.get_tag_from_slot::26": 0.25,
+        "fs42\\liquid_schedule.py::LiquidSchedule._fluid::183": 0.25,
+        "fs42\\liquid_blocks.py::LiquidBlock.make_plan::102": 0.25,
+        "fs42\\catalog.py::ShowCatalog.make_reel_fill::511": 0.0,
+        "fs42\\catalog_entry.py::CatalogEntry::15": 0.5,
+        "fs42\\media_processor.py::MediaProcessor.process_one::123": 0.0,
+        "test\\test_title_parser.py::TestTitleParserCustomPatterns.test_multiple_custom_patterns::186": 0.0,
+        "fs42\\title_parser.py::TitleParser.parse_title::7": 0.0,
+        "fs42\\liquid_io.py::LiquidIO._build_block_from_row::164": 0.0,
+        "fs42\\block_plan.py::BlockPlanEntry::1": 0.0,
+        "fs42\\liquid_blocks.py::LiquidLoopBlock.make_plan::292": 0.0,
+        "fs42\\catalog.py::ShowCatalog.gather_clip_content::577": 0.0
+      },
+      "budget_parse_failures": 0,
+      "memory_after_turn": "The code provides insight into how video play counts and random tag selection work within a scheduling system. When a schedule slot has random_tags enabled, the scheduler (Document_0) randomly picks one tag from the provided tag list for that slot, not a pooled selection from all tags. Play counts are updated for content at the end of scheduling (Document_1), but the specific key used for tracking counts (symlink path vs. real file path) is not clarified here. CatalogEntry objects (Document_4) hold both a 'path' (potentially a symlink) and 'realpath', but the playcount update mechanism's use of these fields is not shown. The system will, therefore, select a file from a randomly chosen tag, which can result in the same file (with different tags/symlinks) being played repeatedly if it appears in multiple tags. This behavior matches the observed issue in the problem description."
+    },
+    {
+      "capo_turn": 1,
+      "n_documents": 9,
+      "document_ids": [
+        "fs42\\catalog.py::ShowCatalog::41",
+        "fs42\\fs42_server\\api\\build.py::rebuild_catalog.rebuild_worker::24",
+        "fs42\\station_manager.py::StationManager::6",
+        "fs42\\guide_builder.py::normalize_video_title::12",
+        "fs42\\catalog.py::ShowCatalog._scan_directory::259",
+        "fs42\\slot_reader.py::SlotReader.get_slot::55",
+        "fs42\\slot_reader.py::SlotReader::8",
+        "fs42\\catalog.py::ShowCatalog.find_candidate::415",
+        "fs42\\media_processor.py::MediaProcessor._test_candidate_hints::334"
+      ],
+      "assigned_budgets": {
+        "fs42\\catalog.py::ShowCatalog::41": 0.5,
+        "fs42\\fs42_server\\api\\build.py::rebuild_catalog.rebuild_worker::24": 0.0,
+        "fs42\\station_manager.py::StationManager::6": 0.0,
+        "fs42\\guide_builder.py::normalize_video_title::12": 0.0,
+        "fs42\\catalog.py::ShowCatalog._scan_directory::259": 0.25,
+        "fs42\\slot_reader.py::SlotReader.get_slot::55": 0.0,
+        "fs42\\slot_reader.py::SlotReader::8": 0.5,
+        "fs42\\catalog.py::ShowCatalog.find_candidate::415": 0.25,
+        "fs42\\media_processor.py::MediaProcessor._test_candidate_hints::334": 0.0
+      },
+      "budget_parse_failures": 0,
+      "memory_after_turn": "The chunk provides key details on how video content is selected and playcounts are managed in the scheduling/catalog system. When random_tags is enabled for a schedule slot, the system (see SlotReader.get_tag_from_slot) randomly selects one tag from the provided list, and then content is drawn from that individual tag, not from a pooled list. In ShowCatalog.find_candidate, candidates from the chosen tag are filtered for duration and hints; the candidate with the lowest playcount (count field) is selected, but the playcount is associated with the candidate as indexed by tag, not necessarily by the canonical file path. The playcount update refers to result.path, the CatalogEntry's path, but it is not explicit if this is the symlink or the real file. The system thus may repeatedly select the same file under different tags if it appears in multiple tags with random_tags enabled, potentially leading to content being scheduled more than once in a row."
+    },
+    {
+      "capo_turn": 2,
+      "n_documents": 21,
+      "document_ids": [
+        "fs42\\media_processor.py::MediaProcessor::55",
+        "fs42\\station_manager.py::StationManager.__init__::24",
+        "fs42\\slot_reader.py::SlotReader.smooth_tags::66",
+        "fs42\\liquid_blocks.py::LiquidClipBlock.make_plan::222",
+        "fs42\\liquid_blocks.py::LiquidClipBlock::206",
+        "fs42\\liquid_schedule.py::LiquidSchedule._clip_fill::116",
+        "fs42\\catalog.py::ShowCatalog.get_offair::338",
+        "fs42\\catalog_entry.py::MatchingContentNotFound::7",
+        "fs42\\media_processor.py::MediaProcessor._process_media::168",
+        "fs42\\liquid_io.py::LiquidIO._block_factory::227",
+        "test\\test_title_parser.py::TestTitleParserCustomPatterns::133",
+        "test\\test_title_parser.py::TestTitleParserCustomPatterns.test_custom_pattern_complex_capture_group::215",
+        "fs42\\media_processor.py::MediaProcessor._get_duration::200",
+        "fs42\\fluid_statements.py::FluidStatements.check_file_cache::14",
+        "fs42\\fluid_statements.py::FluidStatements.add_file_entry::115",
+        "fs42\\fluid_statements.py::FluidStatements.update_file_entry::86",
+        "fs42\\fluid_builder.py::FluidBuilder.check_file_cache::31",
+        "fs42\\media_processor.py::MediaProcessor.get_media_type::64",
+        "fs42\\catalog.py::ShowCatalog._build_standard::136",
+        "fs42\\media_processor.py::MediaProcessor._process_subs::302",
+        "fs42\\media_processor.py::MediaProcessor._by_position::341"
+      ],
+      "assigned_budgets": {
+        "fs42\\media_processor.py::MediaProcessor::55": 0.25,
+        "fs42\\station_manager.py::StationManager.__init__::24": 0.25,
+        "fs42\\slot_reader.py::SlotReader.smooth_tags::66": 0.25,
+        "fs42\\liquid_blocks.py::LiquidClipBlock.make_plan::222": 0.0,
+        "fs42\\liquid_blocks.py::LiquidClipBlock::206": 0.0,
+        "fs42\\liquid_schedule.py::LiquidSchedule._clip_fill::116": 0.0,
+        "fs42\\catalog.py::ShowCatalog.get_offair::338": 0.0,
+        "fs42\\catalog_entry.py::MatchingContentNotFound::7": 0.0,
+        "fs42\\media_processor.py::MediaProcessor._process_media::168": 0.25,
+        "fs42\\liquid_io.py::LiquidIO._block_factory::227": 0.0,
+        "test\\test_title_parser.py::TestTitleParserCustomPatterns::133": 0.0,
+        "test\\test_title_parser.py::TestTitleParserCustomPatterns.test_custom_pattern_complex_capture_group::215": 0.0,
+        "fs42\\media_processor.py::MediaProcessor._get_duration::200": 0.25,
+        "fs42\\fluid_statements.py::FluidStatements.check_file_cache::14": 0.25,
+        "fs42\\fluid_statements.py::FluidStatements.add_file_entry::115": 0.25,
+        "fs42\\fluid_statements.py::FluidStatements.update_file_entry::86": 0.25,
+        "fs42\\fluid_builder.py::FluidBuilder.check_file_cache::31": 0.25,
+        "fs42\\media_processor.py::MediaProcessor.get_media_type::64": 0.25,
+        "fs42\\catalog.py::ShowCatalog._build_standard::136": 0.25,
+        "fs42\\media_processor.py::MediaProcessor._process_subs::302": 0.25,
+        "fs42\\media_processor.py::MediaProcessor._by_position::341": 0.0
+      },
+      "budget_parse_failures": 0,
+      "memory_after_turn": "This chunk offers key insight into how file metadata and playcounts are processed in the system. The MediaProcessor class provides static methods for extracting media metadata, calculating duration, and processing both audio and video files, with the ability to resolve real file paths (os.path.realpath). Integration with caching (via check_file_cache) and fluid database functions relies on these real paths. Catalog building and schedule operations operate on tags, and content can be registered under multiple tags pointing to the same file (even via symlinks). If random_tags is enabled, selection occurs tag-by-tag, possibly repeating files that appear under multiple tags because playcounts and file operations may be tracked per tag's file reference, not strictly by the canonical file path. FluidStatements provides mechanisms to cache file information using the real path as a unique identifier in the database."
+    },
+    {
+      "capo_turn": 3,
+      "n_documents": 2,
+      "document_ids": [
+        "fs42\\media_processor.py::MediaProcessor._find_media::224",
+        "fs42\\fluid_builder.py::FluidBuilder.scan_chapters_for_entries::116"
+      ],
+      "assigned_budgets": {
+        "fs42\\media_processor.py::MediaProcessor._find_media::224": 0.25,
+        "fs42\\fluid_builder.py::FluidBuilder.scan_chapters_for_entries::116": 0.5
+      },
+      "budget_parse_failures": 0,
+      "memory_after_turn": "This chunk reveals that media scanning and chapter detection rely on real file paths. MediaProcessor._find_media compiles a list of files by extension from a given directory, processing all matching formats. FluidBuilder.scan_chapters_for_entries verifies whether a file (by its real path) has previously had chapters scanned, and, if not, proceeds to detect and store chapter data using the realpath as a unique identifier in the database. These operations reinforce that, for purposes such as metadata extraction and chapter storage, the system consistently references real file paths, ensuring that operations (like play counting or chapter scanning) are not redundantly performed on multiple symlinked references to the same file. This addresses issues with repeated content\u2014such as duplicate play counts\u2014by tying core actions to the canonical file location. This maintains consistency with prior memory concerning tag selection and the risk of repeated playback due to overlapping tag associations, further clarifying file handling practices in the system."
+    }
+  ],
+  "evidence": [
+    {
+      "path": "fs42\\slot_reader.py",
+      "line_start": 26,
+      "line_end": 53,
+      "quote": "                    # make sure its not too long\n                    if current_segment >= num_tags:\n                        current_segment = num_tags-1\n                    return tags[current_segment]\n            else:\n                response = tags\n\n        return response",
+      "reason": "RepoDistill GraphRAG candidate (SlotReader.get_tag_from_slot), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "SlotReader.get_tag_from_slot"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\liquid_schedule.py",
+      "line_start": 183,
+      "line_end": 275,
+      "quote": "        new_blocks = []\n        current_mark = start_time\n\n        if current_mark is None:\n            current_mark = datetime.datetime.now()\n\n        forward_buffer = []\n\n                \n                if MarathonAgent.detect_marathon(slot_config):\n                    forward_buffer = MarathonAgent.fill_marathon(slot_config)\n\n                    except ClipShowKickBack as e:\n                        new_block, next_mark = self._clip_fill(e.clip_tag, current_mark, slot_config)\n                # we are offair, but assume no sign_off video this slot\n                sign_off = None\n\n                    sign_off = self.catalog.get_signoff()\n\n                candidate = self.catalog.get_offair()\n\n                    self._l.error(f\"Schedule logic error: no time slots configured for {current_mark}\")\n                    self._l.error(\"This indicates that the station is offair, but offair content is not configured\")\n                    self._l.error(f\"Configure 'off_air_video' or 'off_air_image' for {self.conf['network_name']}\")\n                    sys.exit(-1)\n\n                # make it for one hour.",
+      "reason": "RepoDistill GraphRAG candidate (LiquidSchedule._fluid), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "LiquidSchedule._fluid"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\liquid_blocks.py",
+      "line_start": 102,
+      "line_end": 203,
+      "quote": "    def make_plan(self, catalog):\n        # first, collect any reels (commercials and bumps) we might need to buffer to the requested duration\n        diff = self.playback_duration() - self.content_duration()\n\n        _fluid = FluidBuilder()\n\n        # Prefer chapter markers over black detection\n        break_points = _fluid.get_chapters(self.content.realpath)\n        if not break_points:\n            # Fall back to black detection if no chapters\n            break_points = _fluid.get_breaks(self.content.realpath)\n\n                commercial_dir=self.commercial_override,\n                bump_dir=self.bump_override,\n                strict_count=strict_count,\n            )\n        self.plan = ReelCutter.cut_reels_into_base(\n            base_clip=self.content,\n            reel_blocks=self.reel_blocks,\n            base_offset=0,\n            base_duration=self.content_duration(),\n            break_strategy=self.break_strategy,\n            start_bump=self.start_bump,\n            end_bump=self.end_bump,\n            break_points=break_points,\n        )",
+      "reason": "RepoDistill GraphRAG candidate (LiquidBlock.make_plan), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "LiquidBlock.make_plan"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\catalog_entry.py",
+      "line_start": 15,
+      "line_end": 134,
+      "quote": "class CatalogEntry:\n    # CatalogEntry(row[2], row[3], float(row[4]), json.loads(row[6]) if row[6] else [])\n    def __init__(self, path, duration, tag, hints=[], count=0, content_type=\"feature\", media_type=\"video\"):\n        self.path = path\n        self.realpath = None\n        # get the show name from the path\n        self.title = os.path.splitext(os.path.basename(path))[0]\n        self.duration = duration\n        self.tag = tag\n        self.count = count\n        self.hints = hints\n        self.content_type = content_type\n        self.media_type = media_type\n        tup = (\n            json_data[\"dbid\"],\n            json_data[\"station\"],\n            json_data[\"path\"],\n            json_data[\"title\"],\n            json_data[\"duration\"],\n            json_data[\"tag\"],\n            json_data[\"count\"],\n            json_data[\"hints\"],\n            json_data.get(\"created_at\", None),\n            json_data.get(\"updated_at\", None),\n            json_data.get(\"realpath\", None),\n            json_data.get(\"content_type\", \"feature\"),\n            json_data.get(\"media_type\", \"video\"),\n        )\n        return CatalogEntry.from_db_row(tup)\n\n    @staticmethod\n    def from_db_row(row):\n\n        # Load hints from JSON\n        if hints_str:\n            try:\n                # Parse the JSON string back to list\n                loaded_hints = json.loads(hints_str)\n\n                if not isinstance(loaded_hints, list):\n                    loaded_hints = []\n\n                for hint_str in loaded_hints:\n                    hint = json.loads(hint_str)\n                    # Convert each hint JSON back to its object\n                    if isinstance(hint, dict) and \"type\" in hint:\n                        if hint[\"type\"] == \"day_part\":\n                            hints.append(schedule_hint.DayPartHint(hint[\"part\"]))\n                        elif hint[\"type\"] == \"bump\":\n                            hints.append(schedule_hint.BumpHint(hint[\"where\"]))\n                        elif hint[\"type\"] == \"range\":\n                            hints.append(schedule_hint.RangeHint(hint[\"range_string\"]))\n                        elif hint[\"type\"] == \"quarter\":\n                            hints.append(schedule_hint.QuarterHint(hint[\"quarter\"]))\n                        elif hint[\"type\"] == \"month\":\n                            hints.append(schedule_hint.MonthHint(hint[\"month\"]))\n                        else:\n     ",
+      "reason": "RepoDistill GraphRAG candidate (CatalogEntry), CAPO retention budget 50%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "CatalogEntry"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\catalog.py",
+      "line_start": 41,
+      "line_end": 668,
+      "quote": "        \n        self.clip_index = {}\n\n        for entry in catalog_entries:\n            \n            if entry.tag not in self.clip_index:\n                self.clip_index[entry.tag] = []\n            self.clip_index[entry.tag].append(entry)\n\n    def build_catalog(self):\n        self._l.info(f\"Starting catalog build for {self.config['network_name']}\")\n\n        match self.config[\"network_type\"]:\n            case \"standard\":\n                if FF_USE_FLUID_FILE_CACHE:\n                    from fs42.fluid_builder import FluidBuilder\n\n                    self.__fluid_builder = FluidBuilder()\n                    media_filter = self.config.get(\"media_filter\", \"video\")\n                    self._l.info(\"Initializing fluid file cache...\")\n                    self.__fluid_builder.scan_file_cache(self.config[\"content_dir\"], media_filter)\n                    self._l.info(\"Fluid file cache updated - continuing build\")\n\n                return self._build_standard()\n            case \"loop\":\n                return self._build_single()\n            case \"guide\":\n                raise NotImplementedError(\"Guide catalog not supported yet.\")\n            case \"streaming\":\n                # just return for now\n                return\n\n    def _build_single(self, tag=\"content\"):\n        self.clip_index = {}\n        self.tags = []\n        # for station types with all files in a single directory\n        media_filter = self.config.get(\"media_filter\", \"video\")\n        self._l.info(f\"Checking for media in {self.config['content_dir']} for single directory with filter={media_filter}\")\n        file_list = MediaProcessor._find_media(self.config[\"content_dir\"], media_filter)\n        self.clip_index[tag] = MediaProcessor._process_media(file_list, tag, content_type=\"feature\")\n        self._l.info(f\"Building complete - processed {len(file_list)} files\")\n        self._write_catalog()\n\n    def _build_tags(self):\n        self.tags = list(self.clip_index.keys())\n\n    def _build_standard(self):\n        self.clip_index = {}\n        self.tags = []\n\n        self._l.info(\"Standard network\")\n        start_bumps = {}\n        end_bumps = {}\n\n        # get the list of all tags\n        tags = {}\n        bump_overrides = {}\n        commercial_overrides = {}\n        for day in DAYS:\n            slots = self.config[day]\n            for k in slots:\n                # Validate that slots[k] is a dictionary\n           ",
+      "reason": "RepoDistill GraphRAG candidate (ShowCatalog), CAPO retention budget 50%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "ShowCatalog"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\catalog.py",
+      "line_start": 259,
+      "line_end": 304,
+      "quote": "           \n                count_added += len(pre) + len(fill) + len(post)\n            else:\n                self.clip_index[tag] += subdir_clips\n                count_added += len(self.clip_index[tag])\n        return count_added",
+      "reason": "RepoDistill GraphRAG candidate (ShowCatalog._scan_directory), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "ShowCatalog._scan_directory"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\slot_reader.py",
+      "line_start": 8,
+      "line_end": 79,
+      "quote": "class SlotReader:\n    @staticmethod\n    def get_tag(conf, when: datetime):\n        response = None\n        slot = SlotReader.get_slot(conf, when)\n        if slot and \"tags\" in slot:\n            tags = slot[\"tags\"]\n\n            if type(tags) is list:\n                if len(tags) == 1 or when.minute < 30:\n                    response = tags[0]\n                else:\n                    response = tags[1]\n            else:\n                response = tags\n\n        return response\n\n    def get_tag_from_slot(slot, when: datetime):\n        response = None\n        if slot and \"tags\" in slot:\n            tags = slot[\"tags\"]\n\n            is_random = False\n\n            if \"random_tags\" in slot and slot[\"random_tags\"]:\n                is_random = True\n\n            if type(tags) is list:\n                if is_random:\n                    response = random.choice(tags)\n                else:\n        day_str = timings.DAYS[when.weekday()]\n        slot_number = str(when.hour)\n        response = None\n        if day_str in conf:\n            if slot_number in conf[day_str]:\n                response = conf[day_str][slot_number]\n\n        return response\n\n    @staticmethod\n    def smooth_tags(conf):",
+      "reason": "RepoDistill GraphRAG candidate (SlotReader), CAPO retention budget 50%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "SlotReader"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\catalog.py",
+      "line_start": 415,
+      "line_end": 436,
+      "quote": "                err = f\"Could not find candidate video for tag={tag} under {seconds} in len - maybe add some shorter content?\"\n                raise (MatchingContentNotFound(err))\n            result = self._lowest_count(matches)",
+      "reason": "RepoDistill GraphRAG candidate (ShowCatalog.find_candidate), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "ShowCatalog.find_candidate"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\media_processor.py",
+      "line_start": 55,
+      "line_end": 525,
+      "quote": "class MediaProcessor:\n    # Define media type extensions\n    VIDEO_FORMATS = [\"mp4\", \"mpg\", \"mpeg\", \"avi\", \"mov\", \"mkv\", \"ts\", \"m4v\", \"webm\", \"wmv\"]\n    AUDIO_FORMATS = [\"mp3\", \"m4a\", \"flac\", \"wav\", \"aac\", \"ogg\", \"opus\", \"wma\"]\n\n        if mutagen is None:\n            logging.getLogger(\"MEDIA\").warning(\"mutagen library not available, skipping audio metadata extraction\")\n            return {}\n\n        try:\n            audio = mutagen.File(file_path)\n            if audio is None:\n                return {}\n\n            metadata = {}\n\n                # Map of ID3v2 frame names to our simple tag names\n                # Different formats use different tag names:\n                # MP3 uses ID3v2 (TIT2, TPE1, etc)\n                # MP4/M4A uses \\xa9nam, \\xa9ART, etc\n                # FLAC/OGG use vorbis comments (title, artist, etc)\n                tag_mappings = {\n                    'title': ['TIT2', 'title', '\\xa9nam'],\n                    'artist': ['TPE1', 'artist', '\\xa9ART'],\n                    'album': ['TALB', 'album', '\\xa9alb'],\n                    'date': ['TDRC', 'date', '\\xa9day', 'year'],\n                    'genre': ['TCON', 'genre', '\\xa9gen']\n                }\n\n                for tag_name, possible_keys in tag_mappings.items():\n                    for key in possible_keys:\n                        value = audio.tags.get(key)\n                        if value:\n                            # Convert to string, handle list values\n                            if isinstance(value, list) and len(value) > 0:\n                                metadata[tag_name] = str(value[0])\n                            else:\n                                metadata[tag_name] = str(value)\n                            break  # Found it, move to next tag\n\n            # Return basic metadata from filename\n            return {\n                'title': os.path.splitext(os.path.basename(file_path))[0]\n            }\n\n                cached = fluid.check_file_cache(full_path)\n                if cached:\n                    duration = cached.duration\n\n            if not duration:\n                # then do the processing\n                duration = MediaProcessor._get_duration(fname)\n\n                result.realpath = full_path\n                _l.debug(f\"--_process_media is done with {fname}: {show_clip}\")\n\n        except Exception as e:\n            _l.exception(e)\n            _l.error(f\"",
+      "reason": "RepoDistill GraphRAG candidate (MediaProcessor), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "MediaProcessor"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\station_manager.py",
+      "line_start": 24,
+      "line_end": 72,
+      "quote": "    def __init__(self):\n                    \"channel_socket\": \"runtime/channel.socket\",\n                    \"status_socket\": \"runtime/play_status.socket\",\n                    \"title_patterns\": [],\n                }\n                self._number_index = {}\n                self._name_index = {}\n                self.load_main_config()\n                self.load_json_stations()\n                    logging.getLogger().info(\"Loading and checking guide channel\")\n                    from fs42.guide_tk import GuideWindowConf\n\n                    gconf = GuideWindowConf()\n                        logging.getLogger().info(\"Guide channel checks completed.\")",
+      "reason": "RepoDistill GraphRAG candidate (StationManager.__init__), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "StationManager.__init__"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\slot_reader.py",
+      "line_start": 66,
+      "line_end": 79,
+      "quote": "    def smooth_tags(conf):\n        # this function smooths tags through slot boundaries - so if not specified will use previous slots tag.\n        last_tag = None",
+      "reason": "RepoDistill GraphRAG candidate (SlotReader.smooth_tags), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "SlotReader.smooth_tags"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\media_processor.py",
+      "line_start": 168,
+      "line_end": 197,
+      "quote": "        show_clip_list = []\n\n        # collect list of files that fail\n        failed = []\n",
+      "reason": "RepoDistill GraphRAG candidate (MediaProcessor._process_media), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "MediaProcessor._process_media"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\media_processor.py",
+      "line_start": 200,
+      "line_end": 221,
+      "quote": "    def _get_duration(file_name) -> float:\n            # This should never happen now due to startup check, but just in case\n            _l.error(f\"ffmpeg module error - you may have the wrong package installed: {e}\")",
+      "reason": "RepoDistill GraphRAG candidate (MediaProcessor._get_duration), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "MediaProcessor._get_duration"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\fluid_statements.py",
+      "line_start": 14,
+      "line_end": 25,
+      "quote": "        result = None\n        if row:",
+      "reason": "RepoDistill GraphRAG candidate (FluidStatements.check_file_cache), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "FluidStatements.check_file_cache"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\fluid_statements.py",
+      "line_start": 115,
+      "line_end": 143,
+      "quote": "        entry.first_added = now\n        entry.last_checked = now\n        entry.last_updates = now\n\n        processed = MediaProcessor.process_one(entry.path, \"processing\", [])\n        if not processed:\n            return False\n\n        entry.duration = processed.duration\n",
+      "reason": "RepoDistill GraphRAG candidate (FluidStatements.add_file_entry), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "FluidStatements.add_file_entry"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\fluid_statements.py",
+      "line_start": 86,
+      "line_end": 112,
+      "quote": "        processed = MediaProcessor.process_one(entry.path, \"processing\", [])\n        if not processed:\n            return False\n        entry.duration = processed.duration\n",
+      "reason": "RepoDistill GraphRAG candidate (FluidStatements.update_file_entry), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "FluidStatements.update_file_entry"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\fluid_builder.py",
+      "line_start": 31,
+      "line_end": 35,
+      "quote": "    def check_file_cache(self, full_path):",
+      "reason": "RepoDistill GraphRAG candidate (FluidBuilder.check_file_cache), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "FluidBuilder.check_file_cache"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\media_processor.py",
+      "line_start": 64,
+      "line_end": 69,
+      "quote": "        else:\n            return 'video'",
+      "reason": "RepoDistill GraphRAG candidate (MediaProcessor.get_media_type), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "MediaProcessor.get_media_type"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\catalog.py",
+      "line_start": 136,
+      "line_end": 257,
+      "quote": "    def _build_standard(self):\n        self.clip_index = {}\n        self.tags = []\n\n        self._l.info(\"Standard network\")\n        start_bumps = {}\n        end_bumps = {}\n\n        # get the list of all tags\n        tags = {}\n        bump_overrides = {}\n        commercial_overrides = {}\n        for day in DAYS:\n            slots = self.config[day]\n            for k in slots:\n                # Validate that slots[k] is a dictionary\n                if not isinstance(slots[k], dict):\n                    self._l.error(f\"Invalid slot configuration for {day}[{k}]: expected dict, got {type(slots[k]).__name__}\")\n                    self._l.error(f\"This may be caused by media processing failures. Check logs above for errors.\")\n                    self._l.error(f\"Slot value: {slots[k]}\")\n                    raise TypeError(f\"Invalid slot configuration for {day}[{k}]: expected dict, got {type(slots[k]).__name__}. Check media processing logs for errors.\")\n\n                if \"tags\" in slots[k]:\n                    if type(slots[k][\"tags\"]) is list:\n                        for m in slots[k][\"tags\"]:\n                            tags[m] = True\n                    else:\n                        tags[slots[k][\"tags\"]] = True\n\n                # These checks should be outside the tags check - slots can have bump/commercial dirs without tags\n                if \"bump_dir\" in slots[k]:\n                    bump_overrides[slots[k][\"bump_dir\"]] = True\n                if \"commercial_dir\" in slots[k]:",
+      "reason": "RepoDistill GraphRAG candidate (ShowCatalog._build_standard), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "ShowCatalog._build_standard"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\media_processor.py",
+      "line_start": 302,
+      "line_end": 331,
+      "quote": "    def _process_subs(dir_path, tag, bumpdir=False, fluid=None, content_type=\"feature\", media_filter=\"video\"):\n        \"\"\"Process all subdirectories recursively, collecting hints from all levels\"\"\"\n        from collections import defaultdict\n\n        # Get all media files recursively",
+      "reason": "RepoDistill GraphRAG candidate (MediaProcessor._process_subs), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "MediaProcessor._process_subs"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\media_processor.py",
+      "line_start": 224,
+      "line_end": 244,
+      "quote": "    def _find_media(path, media_filter=\"video\") -> list[str]:\n        logging.getLogger(\"MEDIA\").debug(f\"_find_media scanning for media in {path} with filter={media_filter}\")\n",
+      "reason": "RepoDistill GraphRAG candidate (MediaProcessor._find_media), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "MediaProcessor._find_media"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\fluid_builder.py",
+      "line_start": 116,
+      "line_end": 132,
+      "quote": "    def scan_chapters_for_entries(self, entries):\n        \"\"\"Scan chapter markers for a list of catalog entries that don't have them yet\"\"\"\n        with sqlite3.connect(self.db_path) as connection:\n            cursor = connection.cursor()\n            for entry in entries:\n                if hasattr(entry, 'realpath') and entry.realpath:\n                        chapters = MediaProcessor.chapter_detect(entry.realpath, entry.duration)\n                        # Always store result, even if empty or None",
+      "reason": "RepoDistill GraphRAG candidate (FluidBuilder.scan_chapters_for_entries), CAPO retention budget 50%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "FluidBuilder.scan_chapters_for_entries"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    }
+  ],
+  "usage": {
+    "llm_calls": 5,
+    "tool_calls": 45,
+    "input_tokens": 37226,
+    "output_tokens": 1370,
+    "total_tokens": 38596,
+    "estimated_cost_usd": 0.085412,
+    "wall_clock_seconds": 2670.7419497966766,
+    "unique_files_inspected": 15,
+    "unique_symbols_inspected": 44
+  },
+  "termination_reason": "all_chunks_processed",
+  "metadata": {
+    "generation_model": "gpt-4.1",
+    "implementation": "paper-faithful RepoDistill (No-Training) reimplementation",
+    "paper_citation": "Yin, Ding, Zhang, Wang, Wang, Ni, Cui. \"RepoDistill: Distilling Repository Knowledge through Compression-Aware Budget Allocation and Policy Optimization.\" Findings of ACL 2026, pp. 4425-4443. https://aclanthology.org/2026.findings-acl.217/",
+    "upstream_code_note": "No code was ported. The paper's cited implementation link is an Anonymous-GitHub mirror that is dead/unreachable, and no trained checkpoint is published. This implementation is derived from the published paper text (sections 2.1/2.2/2.3 and Appendix A.1.2, read directly from the ACL Anthology PDF).",
+    "variant": "no_training",
+    "embedding_model": "BAAI/bge-small-en-v1.5",
+    "perplexity_model": "Qwen/Qwen2.5-Coder-0.5B",
+    "graph_nodes": 791,
+    "graph_edges": 1516,
+    "anchor_node_ids": [
+      "fs42\\catalog.py::ShowCatalog.gather_clip_content::577",
+      "test\\test_title_parser.py::TestTitleParserCustomPatterns.test_multiple_custom_patterns::186",
+      "fs42\\slot_reader.py::SlotReader.get_tag_from_slot::26",
+      "fs42\\media_processor.py::MediaProcessor.process_one::123",
+      "test\\test_title_parser.py::TestTitleParserCustomPatterns::133",
+      "fs42\\liquid_blocks.py::LiquidClipBlock::206",
+      "fs42\\slot_reader.py::SlotReader::8",
+      "fs42\\catalog.py::ShowCatalog._scan_directory::259"
+    ],
+    "top_k": 8,
+    "rerank_lambda": 0.5,
+    "mmr_lambda": 0.1,
+    "segmentation_alpha": 0.2,
+    "capo_chunk_tokens": 10000,
+    "n_candidates": 24,
+    "n_retrieved_units": 44,
+    "n_capo_turns": 4,
+    "capo_turn_cap_hit": false,
+    "retrieved_chunk_ids": [
+      "fs42\\slot_reader.py:26-53",
+      "fs42\\liquid_schedule.py:183-275",
+      "fs42\\liquid_blocks.py:102-203",
+      "fs42\\catalog.py:511-575",
+      "fs42\\catalog_entry.py:15-134",
+      "fs42\\media_processor.py:123-165",
+      "test\\test_title_parser.py:186-204",
+      "fs42\\title_parser.py:7-70",
+      "fs42\\liquid_io.py:164-224",
+      "fs42\\block_plan.py:1-14",
+      "fs42\\liquid_blocks.py:292-315",
+      "fs42\\catalog.py:577-654",
+      "fs42\\catalog.py:41-668",
+      "fs42\\fs42_server\\api\\build.py:24-62",
+      "fs42\\station_manager.py:6-264",
+      "fs42\\guide_builder.py:12-14",
+      "fs42\\catalog.py:259-304",
+      "fs42\\slot_reader.py:55-63",
+      "fs42\\slot_reader.py:8-79",
+      "fs42\\catalog.py:415-436",
+      "fs42\\media_processor.py:334-338",
+      "fs42\\media_processor.py:55-525",
+      "fs42\\station_manager.py:24-72",
+      "fs42\\slot_reader.py:66-79",
+      "fs42\\liquid_blocks.py:222-258",
+      "fs42\\liquid_blocks.py:206-258",
+      "fs42\\liquid_schedule.py:116-136",
+      "fs42\\catalog.py:338-343",
+      "fs42\\catalog_entry.py:7-8",
+      "fs42\\media_processor.py:168-197",
+      "fs42\\liquid_io.py:227-238",
+      "test\\test_title_parser.py:133-253",
+      "test\\test_title_parser.py:215-222",
+      "fs42\\media_processor.py:200-221",
+      "fs42\\fluid_statements.py:14-25",
+      "fs42\\fluid_statements.py:115-143",
+      "fs42\\fluid_statements.py:86-112",
+      "fs42\\fluid_builder.py:31-35",
+      "fs42\\media_processor.py:64-69",
+      "fs42\\catalog.py:136-257",
+      "fs42\\media_processor.py:302-331",
+      "fs42\\media_processor.py:341-361",
+      "fs42\\media_processor.py:224-244",
+      "fs42\\fluid_builder.py:116-132"
+    ],
+    "retention_budgets": {
+      "fs42\\slot_reader.py::SlotReader.get_tag_from_slot::26": 0.25,
+      "fs42\\liquid_schedule.py::LiquidSchedule._fluid::183": 0.25,
+      "fs42\\liquid_blocks.py::LiquidBlock.make_plan::102": 0.25,
+      "fs42\\catalog.py::ShowCatalog.make_reel_fill::511": 0.0,
+      "fs42\\catalog_entry.py::CatalogEntry::15": 0.5,
+      "fs42\\media_processor.py::MediaProcessor.process_one::123": 0.0,
+      "test\\test_title_parser.py::TestTitleParserCustomPatterns.test_multiple_custom_patterns::186": 0.0,
+      "fs42\\title_parser.py::TitleParser.parse_title::7": 0.0,
+      "fs42\\liquid_io.py::LiquidIO._build_block_from_row::164": 0.0,
+      "fs42\\block_plan.py::BlockPlanEntry::1": 0.0,
+      "fs42\\liquid_blocks.py::LiquidLoopBlock.make_plan::292": 0.0,
+      "fs42\\catalog.py::ShowCatalog.gather_clip_content::577": 0.0,
+      "fs42\\catalog.py::ShowCatalog::41": 0.5,
+      "fs42\\fs42_server\\api\\build.py::rebuild_catalog.rebuild_worker::24": 0.0,
+      "fs42\\station_manager.py::StationManager::6": 0.0,
+      "fs42\\guide_builder.py::normalize_video_title::12": 0.0,
+      "fs42\\catalog.py::ShowCatalog._scan_directory::259": 0.25,
+      "fs42\\slot_reader.py::SlotReader.get_slot::55": 0.0,
+      "fs42\\slot_reader.py::SlotReader::8": 0.5,
+      "fs42\\catalog.py::ShowCatalog.find_candidate::415": 0.25,
+      "fs42\\media_processor.py::MediaProcessor._test_candidate_hints::334": 0.0,
+      "fs42\\media_processor.py::MediaProcessor::55": 0.25,
+      "fs42\\station_manager.py::StationManager.__init__::24": 0.25,
+      "fs42\\slot_reader.py::SlotReader.smooth_tags::66": 0.25,
+      "fs42\\liquid_blocks.py::LiquidClipBlock.make_plan::222": 0.0,
+      "fs42\\liquid_blocks.py::LiquidClipBlock::206": 0.0,
+      "fs42\\liquid_schedule.py::LiquidSchedule._clip_fill::116": 0.0,
+      "fs42\\catalog.py::ShowCatalog.get_offair::338": 0.0,
+      "fs42\\catalog_entry.py::MatchingContentNotFound::7": 0.0,
+      "fs42\\media_processor.py::MediaProcessor._process_media::168": 0.25,
+      "fs42\\liquid_io.py::LiquidIO._block_factory::227": 0.0,
+      "test\\test_title_parser.py::TestTitleParserCustomPatterns::133": 0.0,
+      "test\\test_title_parser.py::TestTitleParserCustomPatterns.test_custom_pattern_complex_capture_group::215": 0.0,
+      "fs42\\media_processor.py::MediaProcessor._get_duration::200": 0.25,
+      "fs42\\fluid_statements.py::FluidStatements.check_file_cache::14": 0.25,
+      "fs42\\fluid_statements.py::FluidStatements.add_file_entry::115": 0.25,
+      "fs42\\fluid_statements.py::FluidStatements.update_file_entry::86": 0.25,
+      "fs42\\fluid_builder.py::FluidBuilder.check_file_cache::31": 0.25,
+      "fs42\\media_processor.py::MediaProcessor.get_media_type::64": 0.25,
+      "fs42\\catalog.py::ShowCatalog._build_standard::136": 0.25,
+      "fs42\\media_processor.py::MediaProcessor._process_subs::302": 0.25,
+      "fs42\\media_processor.py::MediaProcessor._by_position::341": 0.0,
+      "fs42\\media_processor.py::MediaProcessor._find_media::224": 0.25,
+      "fs42\\fluid_builder.py::FluidBuilder.scan_chapters_for_entries::116": 0.5
+    },
+    "original_context_tokens": 26014,
+    "compressed_context_tokens": 5709,
+    "compression_ratio": 0.21945875297916506
+  }
+}

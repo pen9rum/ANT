@@ -1,0 +1,501 @@
+{
+  "benchmark": "repoprobe",
+  "task_id": "FieldStation42-6",
+  "method": "repodistill",
+  "final_answer": "Tags do not need to be limited to single words\u2014you can use multi-part or highly specific tags like \"news_morning\", \"news_night\", \"cartoons_saturday_morning\", \"cartoons_disney_afternoon\", or \"sitcom_70s_rerun\". You can also create tags or folders for individual shows or for shows at specific times as needed. The system supports any granularity you prefer for organizing and filtering your content.",
+  "trajectory": [
+    {
+      "capo_turn": 0,
+      "n_documents": 24,
+      "document_ids": [
+        "test\\test_title_parser.py::TestTitleParserCustomPatterns.test_custom_pattern_studio_prefix::136",
+        "fs42\\title_parser.py::TitleParser.parse_title::7",
+        "test\\test_title_parser.py::TestTitleParserCustomPatterns.test_empty_custom_patterns_list::224",
+        "test\\test_title_parser.py::TestTitleParserCustomPatterns.test_none_custom_patterns::231",
+        "test\\test_title_parser.py::TestTitleParserCustomPatterns.test_custom_pattern_with_dots_as_separators::206",
+        "test\\test_title_parser.py::TestTitleParserCustomPatterns.test_custom_pattern_complex_capture_group::215",
+        "test\\test_title_parser.py::TestTitleParserCustomPatterns.test_custom_pattern_underscore_separator::246",
+        "test\\test_title_parser.py::TestTitleParserCustomPatterns.test_custom_pattern_remaster_suffix::154",
+        "test\\test_title_parser.py::TestTitleParserCustomPatterns.test_custom_pattern_priority_over_builtin::163",
+        "test\\test_title_parser.py::TestTitleParserCustomPatterns.test_custom_pattern_preserves_title_case_conversion::237",
+        "test\\test_title_parser.py::TestTitleParserCustomPatterns.test_multiple_custom_patterns::186",
+        "test\\test_title_parser.py::TestTitleParser.test_title_parser_episode_pattern_separated::17",
+        "test\\test_title_parser.py::TestTitleParser.test_title_parser_title10_suffix::122",
+        "test\\test_title_parser.py::TestTitleParser.test_title_parser_episode_format_with_space::72",
+        "test\\test_title_parser.py::TestTitleParserCustomPatterns.test_custom_pattern_fallback_to_builtin::175",
+        "test\\test_title_parser.py::TestTitleParser.test_title_parser_title1_suffix_lowercase::107",
+        "test\\test_title_parser.py::TestTitleParser.test_title_parser_just_title_multiple_spaces::52",
+        "fs42\\title_parser.py::TitleParser::5",
+        "fs42\\catalog_entry.py::CatalogEntry.__str__::33",
+        "fs42\\catalog_entry.py::CatalogEntry::15",
+        "fs42\\catalog_entry.py::CatalogEntry.from_db_row::74",
+        "fs42\\catalog_io.py::CatalogIO.entry_by_id::87",
+        "fs42\\catalog_api.py::CatalogAPI.get_entry_by_id::52",
+        "fs42\\liquid_io.py::LiquidIO._build_block_from_row::164"
+      ],
+      "assigned_budgets": {
+        "test\\test_title_parser.py::TestTitleParserCustomPatterns.test_custom_pattern_studio_prefix::136": 0.25,
+        "fs42\\title_parser.py::TitleParser.parse_title::7": 0.75,
+        "test\\test_title_parser.py::TestTitleParserCustomPatterns.test_empty_custom_patterns_list::224": 0.25,
+        "test\\test_title_parser.py::TestTitleParserCustomPatterns.test_none_custom_patterns::231": 0.25,
+        "test\\test_title_parser.py::TestTitleParserCustomPatterns.test_custom_pattern_with_dots_as_separators::206": 0.25,
+        "test\\test_title_parser.py::TestTitleParserCustomPatterns.test_custom_pattern_complex_capture_group::215": 0.25,
+        "test\\test_title_parser.py::TestTitleParserCustomPatterns.test_custom_pattern_underscore_separator::246": 0.25,
+        "test\\test_title_parser.py::TestTitleParserCustomPatterns.test_custom_pattern_remaster_suffix::154": 0.25,
+        "test\\test_title_parser.py::TestTitleParserCustomPatterns.test_custom_pattern_priority_over_builtin::163": 0.25,
+        "test\\test_title_parser.py::TestTitleParserCustomPatterns.test_custom_pattern_preserves_title_case_conversion::237": 0.25,
+        "test\\test_title_parser.py::TestTitleParserCustomPatterns.test_multiple_custom_patterns::186": 0.5,
+        "test\\test_title_parser.py::TestTitleParser.test_title_parser_episode_pattern_separated::17": 0.25,
+        "test\\test_title_parser.py::TestTitleParser.test_title_parser_title10_suffix::122": 0.25,
+        "test\\test_title_parser.py::TestTitleParser.test_title_parser_episode_format_with_space::72": 0.25,
+        "test\\test_title_parser.py::TestTitleParserCustomPatterns.test_custom_pattern_fallback_to_builtin::175": 0.25,
+        "test\\test_title_parser.py::TestTitleParser.test_title_parser_title1_suffix_lowercase::107": 0.25,
+        "test\\test_title_parser.py::TestTitleParser.test_title_parser_just_title_multiple_spaces::52": 0.25,
+        "fs42\\title_parser.py::TitleParser::5": 0.75,
+        "fs42\\catalog_entry.py::CatalogEntry.__str__::33": 0.25,
+        "fs42\\catalog_entry.py::CatalogEntry::15": 0.5,
+        "fs42\\catalog_entry.py::CatalogEntry.from_db_row::74": 0.5,
+        "fs42\\catalog_io.py::CatalogIO.entry_by_id::87": 0.25,
+        "fs42\\catalog_api.py::CatalogAPI.get_entry_by_id::52": 0.25,
+        "fs42\\liquid_io.py::LiquidIO._build_block_from_row::164": 0.5
+      },
+      "budget_parse_failures": 0,
+      "memory_after_turn": "This chunk centers on parsing and cataloging titles for media entries, providing both code logic and essential unit tests. The TitleParser class (and related static method) defines how custom patterns and built-in regex are used to extract show titles from file names, supporting flexible separator handling and priority for user-supplied patterns. The system supports organization by tags, allowing flexible, multi-part, or time-based tags like 'news_morning' or 'cartoons_saturday_morning'. Test cases validate extraction with various naming conventions and custom patterns. CatalogEntry and related functions facilitate database interaction, entry instantiation from rows or JSON, and proper hint decoding\u2014important for accurate metadata. Title parsing is also normalized in the content block pipeline, allowing adaptable and granular entry organization, supporting the needs outlined in the problem (e.g., very specific or combined tags). Aggressive compression can be applied to repetitive or formulaic unit tests, but full code and logic lines, as well as unique use cases, are preserved for context."
+    }
+  ],
+  "evidence": [
+    {
+      "path": "test\\test_title_parser.py",
+      "line_start": 136,
+      "line_end": 143,
+      "quote": "    def test_custom_pattern_studio_prefix(self):\n        \"\"\"Test custom pattern that handles [Studio] prefix\"\"\"",
+      "reason": "RepoDistill GraphRAG candidate (TestTitleParserCustomPatterns.test_custom_pattern_studio_prefix), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "TestTitleParserCustomPatterns.test_custom_pattern_studio_prefix"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\title_parser.py",
+      "line_start": 7,
+      "line_end": 70,
+      "quote": "            return \"\"  # Consider defaulting to No Information or No Data to match TV Guides\n\n        filename = in_str.strip()\n\n        # Remove file extension\n        filename = Path(filename).stem\n\n        # Define separator pattern - spaces, dots, underscores, dashes\n        sep = r\"[\\s._-]+\"\n\n        # Default built-in patterns\n        default_patterns = [\n            # Title + separators + \"Title\" + number suffix (e.g., \"Show Name - Title1\", \"Show Name TITLE2\")\n            (r\"^(.+?)\" + sep + r\"[tT][iI][tT][lL][eE]\\d+$\", 1),\n            # Title (including sequels) + year in parentheses - strip the year\n            (r\"^(.+?)\\s*\\(\\d{4}\\)$\", 1),\n            # Title + separators + season/episode pattern + optional extra (including duplicate episodes like s01e03e03)\n            (r\"^(.+?)\" + sep + r\"(?:[sS]\\d+(?:\" + sep + r\"?[eE]\\d+)+|[sS]\\d+[eE]\\d+(?:[eE]\\d+)*|\\d+[xX]\\d+)(?:\" + sep + r\".*)?$\", 1),\n            # Title (Year) + separators + season/episode pattern + separators + episode name + separators + extras\n            (\n                r\"^(.+?)(?:\\s\\(\\d{4}\\))\"\n                + sep\n                + r\"(?:[sS]\\d+\"\n                + sep\n                + r\"?[eE]\\d+|[sS]\\d+[eE]\\d+|\\d+[xX]\\d+)(?:\"\n                + sep\n                + r\".*)?$\",\n                1,\n            ),\n            # Title + version/volume format (show_title_V1-0003) - before simple episode\n            (r\"^(.+?)[\\s._-]+V\\d+[\\s._-]+\\d+$\", 1),\n            # Title + separators + simple episode number (but only if followed by episode-like content, not years)\n            (r\"^(.+?)\" + sep + r\"\\d{1,3}(?:\" + sep + r\"(?!\\d{4}(?:\\s|$)).+)+$\", 1),\n            # Just title (fallback)\n            (r\"^(.+)$\", 1),\n        ]\n\n                # Clean up the title\n                title = re.sub(r\"[._-]\", \" \", title)  # Replace dots, dashes and underscores with spaces\n                title = re.sub(r\"\\s+\", \" \", title)  # Normalize multiple spaces\n                title = title.strip()\n                # Convert to title case\n                return \" \".join(word.capitalize() for word in title.split())\n\n        # Fallback: return cleaned filename\n        cleaned = re.sub(r\"[._-]\", \" \", filename)\n        cleaned = re.sub(r\"\\s+\", \" \", cleaned).strip()\n        return \" \".join(word.capitalize() for word in cleaned.split())",
+      "reason": "RepoDistill GraphRAG candidate (TitleParser.parse_title), CAPO retention budget 75%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "TitleParser.parse_title"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "test\\test_title_parser.py",
+      "line_start": 224,
+      "line_end": 229,
+      "quote": "        episode = \"Buffy the Vampire Slayer - s01e05\"",
+      "reason": "RepoDistill GraphRAG candidate (TestTitleParserCustomPatterns.test_empty_custom_patterns_list), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "TestTitleParserCustomPatterns.test_empty_custom_patterns_list"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "test\\test_title_parser.py",
+      "line_start": 231,
+      "line_end": 235,
+      "quote": "    def test_none_custom_patterns(self):",
+      "reason": "RepoDistill GraphRAG candidate (TestTitleParserCustomPatterns.test_none_custom_patterns), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "TestTitleParserCustomPatterns.test_none_custom_patterns"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "test\\test_title_parser.py",
+      "line_start": 206,
+      "line_end": 213,
+      "quote": "        episode = \"[Release].Great.Show.Special.2023\"\n        custom_patterns = [",
+      "reason": "RepoDistill GraphRAG candidate (TestTitleParserCustomPatterns.test_custom_pattern_with_dots_as_separators), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "TestTitleParserCustomPatterns.test_custom_pattern_with_dots_as_separators"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "test\\test_title_parser.py",
+      "line_start": 215,
+      "line_end": 222,
+      "quote": "    def test_custom_pattern_complex_capture_group(self):\n        \"\"\"Test custom pattern with specific capture group\"\"\"",
+      "reason": "RepoDistill GraphRAG candidate (TestTitleParserCustomPatterns.test_custom_pattern_complex_capture_group), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "TestTitleParserCustomPatterns.test_custom_pattern_complex_capture_group"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "test\\test_title_parser.py",
+      "line_start": 246,
+      "line_end": 253,
+      "quote": "        episode = \"Show_Name_CUSTOM_TAG_05\"\n        custom_patterns = [",
+      "reason": "RepoDistill GraphRAG candidate (TestTitleParserCustomPatterns.test_custom_pattern_underscore_separator), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "TestTitleParserCustomPatterns.test_custom_pattern_underscore_separator"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "test\\test_title_parser.py",
+      "line_start": 154,
+      "line_end": 161,
+      "quote": "        episode = \"Classic Movie_REMASTER_2023\"\n        custom_patterns = [",
+      "reason": "RepoDistill GraphRAG candidate (TestTitleParserCustomPatterns.test_custom_pattern_remaster_suffix), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "TestTitleParserCustomPatterns.test_custom_pattern_remaster_suffix"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "test\\test_title_parser.py",
+      "line_start": 163,
+      "line_end": 173,
+      "quote": "    def test_custom_pattern_priority_over_builtin(self):\n        \"\"\"Test that custom patterns have priority over built-in patterns\"\"\"",
+      "reason": "RepoDistill GraphRAG candidate (TestTitleParserCustomPatterns.test_custom_pattern_priority_over_builtin), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "TestTitleParserCustomPatterns.test_custom_pattern_priority_over_builtin"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "test\\test_title_parser.py",
+      "line_start": 237,
+      "line_end": 244,
+      "quote": "        episode = \"[STUDIO] my great SHOW - special\"\n        custom_patterns = [",
+      "reason": "RepoDistill GraphRAG candidate (TestTitleParserCustomPatterns.test_custom_pattern_preserves_title_case_conversion), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "TestTitleParserCustomPatterns.test_custom_pattern_preserves_title_case_conversion"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "test\\test_title_parser.py",
+      "line_start": 186,
+      "line_end": 204,
+      "quote": "        episode1 = \"[STUDIO] Show Name - 2023 - 01\"\n        assert TitleParser.parse_title(episode1, custom_patterns) == \"Show Name\"\n\n        # Test second pattern\n        episode2 = \"Old Movie - REMASTERED - Edition\"\n        assert TitleParser.parse_title(episode2, custom_patterns) == \"Old Movie\"\n\n        # Test third pattern\n        episode3 = \"Nature Documentary - HD - 720p\"\n        assert TitleParser.parse_title(episode3, custom_patterns) == \"Nature Documentary\"",
+      "reason": "RepoDistill GraphRAG candidate (TestTitleParserCustomPatterns.test_multiple_custom_patterns), CAPO retention budget 50%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "TestTitleParserCustomPatterns.test_multiple_custom_patterns"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "test\\test_title_parser.py",
+      "line_start": 17,
+      "line_end": 20,
+      "quote": "    def test_title_parser_episode_pattern_separated(self):",
+      "reason": "RepoDistill GraphRAG candidate (TestTitleParser.test_title_parser_episode_pattern_separated), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "TestTitleParser.test_title_parser_episode_pattern_separated"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "test\\test_title_parser.py",
+      "line_start": 122,
+      "line_end": 125,
+      "quote": "    def test_title_parser_title10_suffix(self):",
+      "reason": "RepoDistill GraphRAG candidate (TestTitleParser.test_title_parser_title10_suffix), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "TestTitleParser.test_title_parser_title10_suffix"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "test\\test_title_parser.py",
+      "line_start": 72,
+      "line_end": 75,
+      "quote": "    def test_title_parser_episode_format_with_space(self):",
+      "reason": "RepoDistill GraphRAG candidate (TestTitleParser.test_title_parser_episode_format_with_space), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "TestTitleParser.test_title_parser_episode_format_with_space"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "test\\test_title_parser.py",
+      "line_start": 175,
+      "line_end": 184,
+      "quote": "    def test_custom_pattern_fallback_to_builtin(self):\n        \"\"\"Test that built-in patterns work when custom pattern doesn't match\"\"\"",
+      "reason": "RepoDistill GraphRAG candidate (TestTitleParserCustomPatterns.test_custom_pattern_fallback_to_builtin), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "TestTitleParserCustomPatterns.test_custom_pattern_fallback_to_builtin"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "test\\test_title_parser.py",
+      "line_start": 107,
+      "line_end": 110,
+      "quote": "    def test_title_parser_title1_suffix_lowercase(self):",
+      "reason": "RepoDistill GraphRAG candidate (TestTitleParser.test_title_parser_title1_suffix_lowercase), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "TestTitleParser.test_title_parser_title1_suffix_lowercase"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "test\\test_title_parser.py",
+      "line_start": 52,
+      "line_end": 55,
+      "quote": "        episode = \"Buffy the Vampire       Slayer\"",
+      "reason": "RepoDistill GraphRAG candidate (TestTitleParser.test_title_parser_just_title_multiple_spaces), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "TestTitleParser.test_title_parser_just_title_multiple_spaces"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\title_parser.py",
+      "line_start": 5,
+      "line_end": 70,
+      "quote": "            # Title + separators + \"Title\" + number suffix (e.g., \"Show Name - Title1\", \"Show Name TITLE2\")\n            (r\"^(.+?)\" + sep + r\"[tT][iI][tT][lL][eE]\\d+$\", 1),\n            # [Group] Title - Episode (release group prefix)\n            (r\"^\\[.+?\\]\" + sep + r\"(.+?)\" + sep + r\"\\d+.*$\", 1),\n            # Title (including sequels) + year in parentheses - strip the year\n            (r\"^(.+?)\\s*\\(\\d{4}\\)$\", 1),\n            # Title + separators + season/episode pattern + optional extra (including duplicate episodes like s01e03e03)\n            (r\"^(.+?)\" + sep + r\"(?:[sS]\\d+(?:\" + sep + r\"?[eE]\\d+)+|[sS]\\d+[eE]\\d+(?:[eE]\\d+)*|\\d+[xX]\\d+)(?:\" + sep + r\".*)?$\", 1),\n            # Title (Year) + separators + season/episode pattern + separators + episode name + separators + extras\n            (\n                r\"^(.+?)(?:\\s\\(\\d{4}\\))\"\n                + sep\n                + r\"(?:[sS]\\d+\"\n                + sep\n                + r\"?[eE]\\d+|[sS]\\d+[eE]\\d+|\\d+[xX]\\d+)(?:\"\n                + sep\n                + r\".*)?$\",\n                1,\n            ),\n            # Title + separators + simple episode number (but only if followed by episode-like content, not years)\n            (r\"^(.+?)\" + sep + r\"\\d{1,3}(?:\" + sep + r\"(?!\\d{4}(?:\\s|$)).+)+$\", 1),\n            # Just title (fallback)\n            (r\"^(.+)$\", 1),\n        ]\n\n        # Prepend custom patterns so they are tried first (higher priority)\n        if custom_patterns:\n            patterns = custom_patterns + default_patterns\n        else:\n            patterns = default_patterns\n\n        for pattern, group in patterns:\n            match = re.match(pattern, filename)\n            if match:\n                title = match.group(group)\n                # Clean up the title\n                title = re.sub(r\"[._-]\", \" \", title)  # Replace dots, dashes and underscores with spaces\n                title = re.sub(r\"\\s+\", \" \", title)  # Normalize multiple spaces\n                title = title.strip()\n                # Convert to title case\n                return \" \".join(word.capitalize() for word in title.split())\n\n        # Fallback: return cleaned filename\n        cleaned = re.sub(r\"[._-]\", \" \", filename)\n        cleaned = re.sub(r\"\\s+\", \" \", cleaned).strip()\n        return \" \".join(word.capitalize() for word in cleaned.split())",
+      "reason": "RepoDistill GraphRAG candidate (TitleParser), CAPO retention budget 75%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "TitleParser"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\catalog_entry.py",
+      "line_start": 33,
+      "line_end": 35,
+      "quote": "    def __str__(self):",
+      "reason": "RepoDistill GraphRAG candidate (CatalogEntry.__str__), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "CatalogEntry.__str__"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\catalog_entry.py",
+      "line_start": 15,
+      "line_end": 134,
+      "quote": "class CatalogEntry:\n    # CatalogEntry(row[2], row[3], float(row[4]), json.loads(row[6]) if row[6] else [])\n    def __init__(self, path, duration, tag, hints=[], count=0, content_type=\"feature\", media_type=\"video\"):\n        self.path = path\n        self.realpath = None\n        # get the show name from the path\n        self.title = os.path.splitext(os.path.basename(path))[0]\n        self.duration = duration\n        self.tag = tag\n        self.count = count\n        self.hints = hints\n        self.content_type = content_type\n        self.media_type = media_type\n        tup = (\n            json_data[\"dbid\"],\n            json_data[\"station\"],\n            json_data[\"path\"],\n            json_data[\"title\"],\n            json_data[\"duration\"],\n            json_data[\"tag\"],\n            json_data[\"count\"],\n            json_data[\"hints\"],\n            json_data.get(\"created_at\", None),\n            json_data.get(\"updated_at\", None),\n            json_data.get(\"realpath\", None),\n            json_data.get(\"content_type\", \"feature\"),\n            json_data.get(\"media_type\", \"video\"),\n        )\n        return CatalogEntry.from_db_row(tup)\n\n    @staticmethod\n    def from_db_row(row):\n\n        # Load hints from JSON\n        if hints_str:\n            try:\n                # Parse the JSON string back to list\n                loaded_hints = json.loads(hints_str)\n\n                if not isinstance(loaded_hints, list):\n                    loaded_hints = []\n\n                for hint_str in loaded_hints:\n                    hint = json.loads(hint_str)\n                    # Convert each hint JSON back to its object\n                    if isinstance(hint, dict) and \"type\" in hint:\n                        if hint[\"type\"] == \"day_part\":\n                            hints.append(schedule_hint.DayPartHint(hint[\"part\"]))\n                        elif hint[\"type\"] == \"bump\":\n                            hints.append(schedule_hint.BumpHint(hint[\"where\"]))\n                        elif hint[\"type\"] == \"range\":\n                            hints.append(schedule_hint.RangeHint(hint[\"range_string\"]))\n                        elif hint[\"type\"] == \"quarter\":\n                            hints.append(schedule_hint.QuarterHint(hint[\"quarter\"]))\n                        elif hint[\"type\"] == \"month\":\n                            hints.append(schedule_hint.MonthHint(hint[\"month\"]))\n                        else:\n     ",
+      "reason": "RepoDistill GraphRAG candidate (CatalogEntry), CAPO retention budget 50%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "CatalogEntry"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\catalog_entry.py",
+      "line_start": 74,
+      "line_end": 134,
+      "quote": "    def from_db_row(row):\n\n            media_type = \"video\"  # Default for backward compatibility\n        elif len(row) == 11:  # Schema with realpath but no content_type or media_type\n            (dbid, station, path, title, duration, tag, count, hints_str, created, updated, realpath) = row\n            content_type = \"feature\"  # Default for backward compatibility\n            media_type = \"video\"  # Default for backward compatibility\n        else:  # Old schema without realpath\n            (dbid, station, path, title, duration, tag, count, hints_str, created, updated) = row\n            realpath = None\n            content_type = \"feature\"  # Default for backward compatibility\n            media_type = \"video\"  # Default for backward compatibility\n\n\n        entry = CatalogEntry(path, duration, tag, None, count, content_type, media_type)\n        entry.realpath = realpath\n        entry.count = count\n        entry.dbid = dbid\n        entry.station = station\n        entry.created_at = created\n        entry.updated_at = updated\n\n                # Parse the JSON string back to list\n                loaded_hints = json.loads(hints_str)\n\n                if not isinstance(loaded_hints, list):\n                    loaded_hints = []\n\n                for hint_str in loaded_hints:\n                    hint = json.loads(hint_str)\n                    # Convert each hint JSON back to its object\n                    if isinstance(hint, dict) and \"type\" in hint:\n                        if hint[\"type\"] == \"day_part\":",
+      "reason": "RepoDistill GraphRAG candidate (CatalogEntry.from_db_row), CAPO retention budget 50%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "CatalogEntry.from_db_row"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\catalog_io.py",
+      "line_start": 87,
+      "line_end": 101,
+      "quote": "            cursor.close()\n\n            if row:\n                return CatalogEntry.from_db_row(row)\n\n            return None",
+      "reason": "RepoDistill GraphRAG candidate (CatalogIO.entry_by_id), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "CatalogIO.entry_by_id"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\catalog_api.py",
+      "line_start": 52,
+      "line_end": 53,
+      "quote": "    def get_entry_by_id(entry_id):",
+      "reason": "RepoDistill GraphRAG candidate (CatalogAPI.get_entry_by_id), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "CatalogAPI.get_entry_by_id"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\liquid_io.py",
+      "line_start": 164,
+      "line_end": 224,
+      "quote": "    def _build_block_from_row(row, content_cache: dict = None):\n        \"\"\"\n        Helper method to build a LiquidBlock from a database row.\n        If content_cache is provided, uses it for batch lookups instead of individual CatalogAPI calls.\n        \"\"\"\n        _id = row[0]\n        _station = row[1]\n        _liquid_type = row[2]\n        _start_time = datetime.fromisoformat(row[3])\n        _end_time = datetime.fromisoformat(row[4])\n        _break_strategy = row[5]\n        _title = row[6]\n        _sequence_key = json.loads(row[7]) if row[7] else None\n        _break_info = json.loads(row[8]) if row[8] else None \n        _content_json = json.loads(row[9]) if row[9] else None\n        _plan_json = json.loads(row[10]) if row[10] else []",
+      "reason": "RepoDistill GraphRAG candidate (LiquidIO._build_block_from_row), CAPO retention budget 50%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "LiquidIO._build_block_from_row"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    }
+  ],
+  "usage": {
+    "llm_calls": 2,
+    "tool_calls": 25,
+    "input_tokens": 10599,
+    "output_tokens": 527,
+    "total_tokens": 11126,
+    "estimated_cost_usd": 0.025414,
+    "wall_clock_seconds": 1097.7010140419006,
+    "unique_files_inspected": 6,
+    "unique_symbols_inspected": 24
+  },
+  "termination_reason": "all_chunks_processed",
+  "metadata": {
+    "generation_model": "gpt-4.1",
+    "implementation": "paper-faithful RepoDistill (No-Training) reimplementation",
+    "paper_citation": "Yin, Ding, Zhang, Wang, Wang, Ni, Cui. \"RepoDistill: Distilling Repository Knowledge through Compression-Aware Budget Allocation and Policy Optimization.\" Findings of ACL 2026, pp. 4425-4443. https://aclanthology.org/2026.findings-acl.217/",
+    "upstream_code_note": "No code was ported. The paper's cited implementation link is an Anonymous-GitHub mirror that is dead/unreachable, and no trained checkpoint is published. This implementation is derived from the published paper text (sections 2.1/2.2/2.3 and Appendix A.1.2, read directly from the ACL Anthology PDF).",
+    "variant": "no_training",
+    "embedding_model": "BAAI/bge-small-en-v1.5",
+    "perplexity_model": "Qwen/Qwen2.5-Coder-0.5B",
+    "graph_nodes": 791,
+    "graph_edges": 1516,
+    "anchor_node_ids": [
+      "test\\test_title_parser.py::TestTitleParserCustomPatterns.test_custom_pattern_studio_prefix::136",
+      "fs42\\catalog_entry.py::CatalogEntry.__str__::33",
+      "test\\test_title_parser.py::TestTitleParserCustomPatterns.test_none_custom_patterns::231",
+      "fs42\\title_parser.py::TitleParser::5",
+      "test\\test_title_parser.py::TestTitleParserCustomPatterns.test_custom_pattern_with_dots_as_separators::206",
+      "test\\test_title_parser.py::TestTitleParserCustomPatterns.test_custom_pattern_complex_capture_group::215",
+      "test\\test_title_parser.py::TestTitleParserCustomPatterns.test_empty_custom_patterns_list::224",
+      "fs42\\title_parser.py::TitleParser.parse_title::7"
+    ],
+    "top_k": 8,
+    "rerank_lambda": 0.5,
+    "mmr_lambda": 0.1,
+    "segmentation_alpha": 0.2,
+    "capo_chunk_tokens": 10000,
+    "n_candidates": 24,
+    "n_retrieved_units": 24,
+    "n_capo_turns": 1,
+    "capo_turn_cap_hit": false,
+    "retrieved_chunk_ids": [
+      "test\\test_title_parser.py:136-143",
+      "fs42\\title_parser.py:7-70",
+      "test\\test_title_parser.py:224-229",
+      "test\\test_title_parser.py:231-235",
+      "test\\test_title_parser.py:206-213",
+      "test\\test_title_parser.py:215-222",
+      "test\\test_title_parser.py:246-253",
+      "test\\test_title_parser.py:154-161",
+      "test\\test_title_parser.py:163-173",
+      "test\\test_title_parser.py:237-244",
+      "test\\test_title_parser.py:186-204",
+      "test\\test_title_parser.py:17-20",
+      "test\\test_title_parser.py:122-125",
+      "test\\test_title_parser.py:72-75",
+      "test\\test_title_parser.py:175-184",
+      "test\\test_title_parser.py:107-110",
+      "test\\test_title_parser.py:52-55",
+      "fs42\\title_parser.py:5-70",
+      "fs42\\catalog_entry.py:33-35",
+      "fs42\\catalog_entry.py:15-134",
+      "fs42\\catalog_entry.py:74-134",
+      "fs42\\catalog_io.py:87-101",
+      "fs42\\catalog_api.py:52-53",
+      "fs42\\liquid_io.py:164-224"
+    ],
+    "retention_budgets": {
+      "test\\test_title_parser.py::TestTitleParserCustomPatterns.test_custom_pattern_studio_prefix::136": 0.25,
+      "fs42\\title_parser.py::TitleParser.parse_title::7": 0.75,
+      "test\\test_title_parser.py::TestTitleParserCustomPatterns.test_empty_custom_patterns_list::224": 0.25,
+      "test\\test_title_parser.py::TestTitleParserCustomPatterns.test_none_custom_patterns::231": 0.25,
+      "test\\test_title_parser.py::TestTitleParserCustomPatterns.test_custom_pattern_with_dots_as_separators::206": 0.25,
+      "test\\test_title_parser.py::TestTitleParserCustomPatterns.test_custom_pattern_complex_capture_group::215": 0.25,
+      "test\\test_title_parser.py::TestTitleParserCustomPatterns.test_custom_pattern_underscore_separator::246": 0.25,
+      "test\\test_title_parser.py::TestTitleParserCustomPatterns.test_custom_pattern_remaster_suffix::154": 0.25,
+      "test\\test_title_parser.py::TestTitleParserCustomPatterns.test_custom_pattern_priority_over_builtin::163": 0.25,
+      "test\\test_title_parser.py::TestTitleParserCustomPatterns.test_custom_pattern_preserves_title_case_conversion::237": 0.25,
+      "test\\test_title_parser.py::TestTitleParserCustomPatterns.test_multiple_custom_patterns::186": 0.5,
+      "test\\test_title_parser.py::TestTitleParser.test_title_parser_episode_pattern_separated::17": 0.25,
+      "test\\test_title_parser.py::TestTitleParser.test_title_parser_title10_suffix::122": 0.25,
+      "test\\test_title_parser.py::TestTitleParser.test_title_parser_episode_format_with_space::72": 0.25,
+      "test\\test_title_parser.py::TestTitleParserCustomPatterns.test_custom_pattern_fallback_to_builtin::175": 0.25,
+      "test\\test_title_parser.py::TestTitleParser.test_title_parser_title1_suffix_lowercase::107": 0.25,
+      "test\\test_title_parser.py::TestTitleParser.test_title_parser_just_title_multiple_spaces::52": 0.25,
+      "fs42\\title_parser.py::TitleParser::5": 0.75,
+      "fs42\\catalog_entry.py::CatalogEntry.__str__::33": 0.25,
+      "fs42\\catalog_entry.py::CatalogEntry::15": 0.5,
+      "fs42\\catalog_entry.py::CatalogEntry.from_db_row::74": 0.5,
+      "fs42\\catalog_io.py::CatalogIO.entry_by_id::87": 0.25,
+      "fs42\\catalog_api.py::CatalogAPI.get_entry_by_id::52": 0.25,
+      "fs42\\liquid_io.py::LiquidIO._build_block_from_row::164": 0.5
+    },
+    "original_context_tokens": 5568,
+    "compressed_context_tokens": 2791,
+    "compression_ratio": 0.501257183908046
+  }
+}

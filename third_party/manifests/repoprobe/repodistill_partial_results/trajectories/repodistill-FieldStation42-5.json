@@ -1,0 +1,635 @@
+{
+  "benchmark": "repoprobe",
+  "task_id": "FieldStation42-5",
+  "method": "repodistill",
+  "final_answer": "1. Yes, FS42 fully supports your \"chaos channel\" use case: you can configure multiple channels, all pulling randomly from the same pool of media without any scheduling, tags, or filler content. This is supported natively via the \"loop\" or \"standard\" network/channel types, allowing unscheduled random playback across multiple \"channels,\" matching your current Raspberry Pi/AV switch setup.\n\n2. FS42 provides mechanisms to prevent \"unintentional marathons\": you can define content tags or organize videos into folders, then use tag overrides and scheduling logic to enforce rules such as \"do not replay another item from this folder for X hours.\" While this isn't a single built-in switch, the system's tag-based cataloging and override options allow this type of logic\u2014and these can be tightened over time as your archive grows.\n\n3. For future library organization, FS42 works best if you begin sorting your media into folders by logical groups, themes, or categories (even loosely at first), and/or applying simple tags. When migrated into FS42, these folders can map directly to tags, enabling later specialization, anti-marathon logic, or easier channel assignment. Even basic folder structure (by source, format, topic, or length) now will save significant effort as your library grows.",
+  "trajectory": [
+    {
+      "capo_turn": 0,
+      "n_documents": 11,
+      "document_ids": [
+        "fs42\\autobump_agent.py::main::112",
+        "fs42\\autobump_agent.py::AutoBumpAgent.gen_bumps::14",
+        "fs42\\catalog.py::ShowCatalog.make_reel_block::467",
+        "fs42\\catalog.py::ShowCatalog::41",
+        "fs42\\catalog.py::ShowCatalog.gather_clip_content::577",
+        "fs42\\catalog.py::ShowCatalog._build_single::122",
+        "fs42\\catalog.py::ShowCatalog.make_reel_fill::511",
+        "fs42\\liquid_blocks.py::LiquidBlock.make_plan::102",
+        "fs42\\liquid_blocks.py::LiquidClipBlock.make_plan::222",
+        "fs42\\autobump_agent.py::AutoBumpAgent::9",
+        "fs42\\autobump_agent.py::AutoBumpAgent.extract_url::33"
+      ],
+      "assigned_budgets": {
+        "fs42\\autobump_agent.py::main::112": 0.0,
+        "fs42\\autobump_agent.py::AutoBumpAgent.gen_bumps::14": 0.25,
+        "fs42\\catalog.py::ShowCatalog.make_reel_block::467": 0.5,
+        "fs42\\catalog.py::ShowCatalog::41": 0.75,
+        "fs42\\catalog.py::ShowCatalog.gather_clip_content::577": 0.25,
+        "fs42\\catalog.py::ShowCatalog._build_single::122": 0.25,
+        "fs42\\catalog.py::ShowCatalog.make_reel_fill::511": 0.5,
+        "fs42\\liquid_blocks.py::LiquidBlock.make_plan::102": 0.5,
+        "fs42\\liquid_blocks.py::LiquidClipBlock.make_plan::222": 0.25,
+        "fs42\\autobump_agent.py::AutoBumpAgent::9": 0.5,
+        "fs42\\autobump_agent.py::AutoBumpAgent.extract_url::33": 0.0
+      },
+      "budget_parse_failures": 0,
+      "memory_after_turn": "This chunk provides extensive details about the FS42 project's catalog and playback logic, especially regarding multi-channel support, media cataloging, and the role of bumpers and commercials. The ShowCatalog class supports different network types, including 'loop', ideal for users wanting a simple video pool with no scheduled order. The system allows playing media from a shared pool across several channels, aligning with the user's 'chaos' setup. Catalog building routines accommodate unsorted media and can aggregate all content in a flat directory if needed. Automated bumpers (AutoBumpAgent) and break planning are highly configurable, but the system allows disabling or limiting these, fitting users wishing to avoid scheduled breaks or marathons. The config-based approach means users can later organize media using folders, tags, or override directories as their library grows. The system's design accommodates both unstructured and structured use-cases, with options for future extensibility."
+    },
+    {
+      "capo_turn": 1,
+      "n_documents": 4,
+      "document_ids": [
+        "fs42\\station_player.py::StationPlayer.play_file::231",
+        "field_player.py::main_loop::84",
+        "fs42\\station_player.py::StationPlayer::83",
+        "fs42\\fs42_server\\api\\build.py::rebuild_catalog.rebuild_worker::24"
+      ],
+      "assigned_budgets": {
+        "fs42\\station_player.py::StationPlayer.play_file::231": 0.25,
+        "field_player.py::main_loop::84": 0.25,
+        "fs42\\station_player.py::StationPlayer::83": 0.5,
+        "fs42\\fs42_server\\api\\build.py::rebuild_catalog.rebuild_worker::24": 0.25
+      },
+      "budget_parse_failures": 0,
+      "memory_after_turn": "This chunk details the FS42 StationPlayer logic, showing that the player flexibly handles channel playback, accepts a station config for each channel, and can play random or scheduled media via play_file and related methods. The system includes routines for playing files, streams, shuffled playlists, or web/guide overlays, and exposes extensible hooks for per-channel effects, overlays, and seamless switching. The main loop (main_loop) supports multiple channels and changes channels by updating the player config and saves state for continuity. Catalog rebuild logic (rebuild_worker) allows dynamic reorganization or reset of station catalogs and schedules, supporting evolving or chaotic media libraries. User configurations (including disabling bumpers, commercials, or strict schedules) are applied at the channel/station level. The design supports both structured and chaotic playback (such as multiple channels pulling random selections from a shared pool), and can evolve to more specialized setups if the media library grows. Channel/thread/playlist orchestration is robust to failures and user interrupts."
+    },
+    {
+      "capo_turn": 2,
+      "n_documents": 20,
+      "document_ids": [
+        "fs42\\station_manager.py::StationManager::6",
+        "fs42\\station_player.py::StationPlayer.show_web::514",
+        "fs42\\liquid_schedule.py::LiquidSchedule._clip_fill::116",
+        "fs42\\liquid_schedule.py::LiquidSchedule::27",
+        "fs42\\station_player.py::StationPlayer.schedule_panic::585",
+        "fs42\\station_player.py::StationPlayer._apply_vfx::396",
+        "fs42\\slot_reader.py::SlotReader.get_slot::55",
+        "fs42\\liquid_schedule.py::LiquidSchedule._fluid::183",
+        "fs42\\fs42_server\\api\\ppv.py::play_file::287",
+        "fs42\\station_player.py::StationPlayer.play_and_wait::341",
+        "field_player.py::input_check::40",
+        "fs42\\station_player.py::StationPlayer.show_guide::434",
+        "field_player.py::main_loop.signal_handler::123",
+        "fs42\\station_player.py::StationPlayer.load_up::144",
+        "fs42\\station_player.py::StationPlayer.play_slot::593",
+        "fs42\\station_player.py::update_status_socket::45",
+        "fs42\\reception.py::ReceptionStatus::44",
+        "fs42\\station_player.py::StationPlayer.update_filters::219",
+        "fs42\\station_manager.py::StationManager.index_from_channel::84",
+        "fs42\\station_player.py::StationPlayer.get_current_path::715"
+      ],
+      "assigned_budgets": {
+        "fs42\\station_manager.py::StationManager::6": 0.25,
+        "fs42\\station_player.py::StationPlayer.show_web::514": 0.25,
+        "fs42\\liquid_schedule.py::LiquidSchedule._clip_fill::116": 0.25,
+        "fs42\\liquid_schedule.py::LiquidSchedule::27": 0.5,
+        "fs42\\station_player.py::StationPlayer.schedule_panic::585": 0.25,
+        "fs42\\station_player.py::StationPlayer._apply_vfx::396": 0.25,
+        "fs42\\slot_reader.py::SlotReader.get_slot::55": 0.25,
+        "fs42\\liquid_schedule.py::LiquidSchedule._fluid::183": 0.25,
+        "fs42\\fs42_server\\api\\ppv.py::play_file::287": 0.25,
+        "fs42\\station_player.py::StationPlayer.play_and_wait::341": 0.25,
+        "field_player.py::input_check::40": 0.25,
+        "fs42\\station_player.py::StationPlayer.show_guide::434": 0.25,
+        "field_player.py::main_loop.signal_handler::123": 0.25,
+        "fs42\\station_player.py::StationPlayer.load_up::144": 0.0,
+        "fs42\\station_player.py::StationPlayer.play_slot::593": 0.25,
+        "fs42\\station_player.py::update_status_socket::45": 0.25,
+        "fs42\\reception.py::ReceptionStatus::44": 0.25,
+        "fs42\\station_player.py::StationPlayer.update_filters::219": 0.0,
+        "fs42\\station_manager.py::StationManager.index_from_channel::84": 0.0,
+        "fs42\\station_player.py::StationPlayer.get_current_path::715": 0.0
+      },
+      "budget_parse_failures": 0,
+      "memory_after_turn": "This chunk details components around station and playback management for FS42, including the StationManager responsible for loading, indexing, and managing channel configurations, and LiquidSchedule, which controls scheduling logic for different types of channels (standard, loop, guide). The system flexibly supports both structured scheduling and random 'chaotic' playback across multiple channels, with dynamic reloading and reconfiguration. Playback logic accommodates user interventions and supports both direct file play and scheduled playlists. Additional elements manage playback state, audio/visual effects, and reception quality, and expose APIs for external control (e.g., playing specific files via an API command). These components collectively ensure the FS42 system can accommodate chaotic, minimally scheduled multi-channel setups, answering user needs for flexible, unscheduled random playback with potential for future structured growth."
+    }
+  ],
+  "evidence": [
+    {
+      "path": "fs42\\autobump_agent.py",
+      "line_start": 14,
+      "line_end": 26,
+      "quote": "        # first, check duration:\n        if \"duration\" not in ab_config or not ab_config[\"duration\"]:\n            ab_config[\"duration\"] = 7\n",
+      "reason": "RepoDistill GraphRAG candidate (AutoBumpAgent.gen_bumps), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "AutoBumpAgent.gen_bumps"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\catalog.py",
+      "line_start": 467,
+      "line_end": 507,
+      "quote": "    def make_reel_block(self, when, bumpers=True, target_duration=120, commercial_dir=None, bump_dir=None):\n        reels = []\n        remaining = target_duration\n        start_candidate = None\n        end_candidate = None\n        \n        # INSERT AUTO BUMPER LOGIC HERE\n        if bumpers:\n            if \"autobump\" not in self.config:\n            \n            remaining -= start_candidate.duration\n            remaining -= end_candidate.duration\n\n        # aim for lower and should average close over time since the returned can be larger\n        while remaining > (target_duration * 0.1):\n            if not self.config[\"commercial_free\"]:\n                candidate = self.find_commercial(target_duration, when, commercial_dir)\n            else:\n                candidate = self.find_bump(target_duration, when, None, bump_dir)\n            remaining -= candidate.duration\n            reels.append(candidate)\n\n        return ReelBlock(start_candidate, reels, end_candidate)",
+      "reason": "RepoDistill GraphRAG candidate (ShowCatalog.make_reel_block), CAPO retention budget 50%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "ShowCatalog.make_reel_block"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\catalog.py",
+      "line_start": 41,
+      "line_end": 668,
+      "quote": "        \n        self.clip_index = {}\n\n        for entry in catalog_entries:\n            \n            if entry.tag not in self.clip_index:\n                self.clip_index[entry.tag] = []\n            self.clip_index[entry.tag].append(entry)\n\n    def build_catalog(self):\n        self._l.info(f\"Starting catalog build for {self.config['network_name']}\")\n\n        match self.config[\"network_type\"]:\n            case \"standard\":\n                if FF_USE_FLUID_FILE_CACHE:\n                    from fs42.fluid_builder import FluidBuilder\n\n                    self.__fluid_builder = FluidBuilder()\n                    media_filter = self.config.get(\"media_filter\", \"video\")\n                    self._l.info(\"Initializing fluid file cache...\")\n                    self.__fluid_builder.scan_file_cache(self.config[\"content_dir\"], media_filter)\n                    self._l.info(\"Fluid file cache updated - continuing build\")\n\n                return self._build_standard()\n            case \"loop\":\n                return self._build_single()\n            case \"guide\":\n                raise NotImplementedError(\"Guide catalog not supported yet.\")\n            case \"streaming\":\n                # just return for now\n                return\n\n    def _build_single(self, tag=\"content\"):\n        self.clip_index = {}\n        self.tags = []\n        # for station types with all files in a single directory\n        media_filter = self.config.get(\"media_filter\", \"video\")\n        self._l.info(f\"Checking for media in {self.config['content_dir']} for single directory with filter={media_filter}\")\n        file_list = MediaProcessor._find_media(self.config[\"content_dir\"], media_filter)\n        self.clip_index[tag] = MediaProcessor._process_media(file_list, tag, content_type=\"feature\")\n        self._l.info(f\"Building complete - processed {len(file_list)} files\")\n        self._write_catalog()\n\n    def _build_tags(self):\n        self.tags = list(self.clip_index.keys())\n\n    def _build_standard(self):\n        self.clip_index = {}\n        self.tags = []\n\n        self._l.info(\"Standard network\")\n        start_bumps = {}\n        end_bumps = {}\n\n        # get the list of all tags\n        tags = {}\n        bump_overrides = {}\n        commercial_overrides = {}\n        for day in DAYS:\n            slots = self.config[day]\n            for k in slots:\n                # Validate that slots[k] is a dictionary\n           ",
+      "reason": "RepoDistill GraphRAG candidate (ShowCatalog), CAPO retention budget 75%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "ShowCatalog"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\catalog.py",
+      "line_start": 577,
+      "line_end": 654,
+      "quote": "    def gather_clip_content(self, tag, duration, when, start_clip, end_clip):\n        current_duration = 0\n        keep_going = True\n        clips = []\n\n        # industry standard content ratios for television shows\n        # 40 minutes per hour (0.67) to 48 minutes per hour (0.80)\n        CONTENT_RATIO_MIN = 0.67\n        CONTENT_RATIO_MAX = 0.80\n\n                    raise MatchingContentNotFound()\n                current_duration += candidate.duration\n                clips.append(candidate)\n            except MatchingContentNotFound as e:\n                # No suitable start clip even though one was requested\n                raise e\n\n                # this prevents returning empty clip lists\n                if len(clips) == 0:",
+      "reason": "RepoDistill GraphRAG candidate (ShowCatalog.gather_clip_content), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "ShowCatalog.gather_clip_content"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\catalog.py",
+      "line_start": 122,
+      "line_end": 131,
+      "quote": "    def _build_single(self, tag=\"content\"):\n        self.clip_index = {}\n        self.tags = []\n        self._write_catalog()",
+      "reason": "RepoDistill GraphRAG candidate (ShowCatalog._build_single), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "ShowCatalog._build_single"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\catalog.py",
+      "line_start": 511,
+      "line_end": 575,
+      "quote": "    def make_reel_fill(self, when, length, use_bumpers=True, commercial_dir=None, bump_dir=None, strict_count=None):\n        target_break_duration = self.config[\"break_duration\"]\n\n        blocks = []\n        keep_going = True\n        while remaining and keep_going:\n            block = None\n            try:\n                block = self.make_reel_block(\n                    when, use_bumpers, target_break_duration, commercial_dir=commercial_dir, bump_dir=bump_dir\n                )\n            except MatchingContentNotFound:\n                self._l.debug(\n                    f\"Could not find matching content for {remaining} seconds - will attempt to fill with BRB\"\n                )\n\n            if block and (remaining - block.duration) > 0:\n                remaining -= block.duration\n                blocks.append(block)\n\n                if strict_count and len(blocks) >= strict_count:\n                    keep_going = False\n\n            else:\n                keep_going = False\n\n        keep_going = True\n\n            candidate = None\n            try:\n                if not self.config[\"commercial_free\"]:\n                    candidate = self.find_commercial(seconds=remaining, when=when, commercial_dir=commercial_dir)\n                else:",
+      "reason": "RepoDistill GraphRAG candidate (ShowCatalog.make_reel_fill), CAPO retention budget 50%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "ShowCatalog.make_reel_fill"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\liquid_blocks.py",
+      "line_start": 102,
+      "line_end": 203,
+      "quote": "    def make_plan(self, catalog):\n        # first, collect any reels (commercials and bumps) we might need to buffer to the requested duration\n        diff = self.playback_duration() - self.content_duration()\n\n        _fluid = FluidBuilder()\n\n        # Prefer chapter markers over black detection\n        break_points = _fluid.get_chapters(self.content.realpath)\n        if not break_points:\n            # Fall back to black detection if no chapters\n            break_points = _fluid.get_breaks(self.content.realpath)\n\n                commercial_dir=self.commercial_override,\n                bump_dir=self.bump_override,\n                strict_count=strict_count,\n            )\n            \n        else:\n            self.reel_blocks = []\n\n        if strict_count:\n            rec = 0\n            for reel in self.reel_blocks:\n                rec += reel.duration\n\n            if strict_count == len(self.reel_blocks):\n                pass\n            elif strict_count > len(self.reel_blocks):\n                # only clip break_points if we have reel blocks to work with\n                # if reel_blocks is empty (e.g., diff <= 2), we don't need chapter-based breaks\n                if len(self.reel_blocks) > 0:\n                    break_points = self.clip_break_points(break_points, len(self.reel_blocks), self.content_duration())\n                else:\n                    # no reel blocks = no buffer time = no breaks needed, clear break_points\n                    break_points = []\n            else:\n                # do nothing for now, they will play at end\n                pass\n\n        self.plan = ReelCutter.cut_reels_into_base(\n            base_clip=self.content,\n            reel_blocks=self.reel_blocks,\n            base_offset=0,\n            base_duration=self.content_duration(),\n            break_strategy=self.break_strategy,\n            start_bump=self.start_bump,\n            end_bump=self.end_bump,\n            break_points=break_points,\n        )",
+      "reason": "RepoDistill GraphRAG candidate (LiquidBlock.make_plan), CAPO retention budget 50%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "LiquidBlock.make_plan"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\liquid_blocks.py",
+      "line_start": 222,
+      "line_end": 258,
+      "quote": "        # first, collect any reels (commercials and bumps) we might need to buffer to the requested duration\n        diff = self.playback_duration() - self.content_duration()\n\n            self.reel_blocks = catalog.make_reel_fill(\n                self.start_time, diff, commercial_dir=self.commercial_override, bump_dir=self.bump_override, strict_count=strict_count\n            )\n        else:\n            self.reel_blocks = []\n",
+      "reason": "RepoDistill GraphRAG candidate (LiquidClipBlock.make_plan), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "LiquidClipBlock.make_plan"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\autobump_agent.py",
+      "line_start": 9,
+      "line_end": 109,
+      "quote": "                - title (required): Main station name/title\n                - subtitle: Station tagline or description\n                - variation: Visual style ('modern', 'retro', 'corporate', 'terminal')\n                - detail1, detail2, detail3: Custom detail lines\n                - bg_color: Background color (hex format, e.g., '#ff0000')\n                - fg_color: Text color (hex format, e.g., '#ffffff')\n                - bg: Background image URL\n                - css: URL to custom CSS override file\n                - next_network: Network name to fetch next 3 upcoming shows\n                - duration: Auto-hide after specified milliseconds (0 = no auto-hide)\n                - bg_music: Background music URL or filename (e.g., 'retro.mp3' or full URL)\n\n        Returns:\n            Query string for bump.html\n        \"\"\"\n        if \"title\" not in config:\n            raise ValueError(\"title is required\")\n\n        params = {}\n\n        # Map dictionary keys to URL parameter names\n        key_mapping = {\n            \"title\": \"title\",\n            \"subtitle\": \"subtitle\",\n            \"variation\": \"variation\",\n            \"detail1\": \"detail1\",\n            \"detail2\": \"detail2\",\n            \"detail3\": \"detail3\",\n            \"bg_color\": \"bg_color\",\n            \"fg_color\": \"fg_color\",\n            \"bg\": \"bg\",\n            \"css\": \"css\",\n            \"next_network\": \"next_network\",\n            \"duration\": \"duration\",\n            \"bg_music\": \"bg_music\",\n        }\n\n        # Process each config item\n        for key, url_param in key_mapping.items():\n            if key in config and config[key] is not None:\n                value = config[key]\n                if key == \"duration\":\n                    value = str(value*1000)\n                elif key == \"bg_music\":\n                    # Convert filename to full URL if not already a URL\n                    if not str(value).startswith(\"http\"):\n                        value = f\"http://127.0.0.1:4242/static/bump/music/{value}\"\n                params[url_param] = value\n\n        # Generate query string\n        return urllib.parse.urlencode(params, quote_via=urllib.parse.quote)",
+      "reason": "RepoDistill GraphRAG candidate (AutoBumpAgent), CAPO retention budget 50%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "AutoBumpAgent"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\station_player.py",
+      "line_start": 231,
+      "line_end": 339,
+      "quote": "    def play_file(self, file_path, file_duration=None, current_time=None, is_stream=False, title=\"Unknown\", content_type=None, media_type=None):\n        try:\n            if os.path.exists(file_path) or is_stream or AutoBumpAgent.is_autobump_url(file_path):\n                self._l.debug(f\"%%%Attempting to play {file_path}\")\n                self.current_playing_file_path = file_path\n\n                if self.station_config:\n                    self._l.debug(\"Got station config, updating status socket\")\n                    if \"date_time_format\" in StationManager().server_conf:\n                        ts_format = StationManager().server_conf[\"date_time_format\"]\n                    else:\n                        ts_format = \"%Y-%m-%dT%H:%M:%S\"\n                    duration = (\n                        f\"{str(datetime.timedelta(seconds=int(current_time)))}/{str(datetime.timedelta(seconds=int(file_duration)))}\"\n                        if file_duration\n                        else \"n/a\"\n                    )\n                    update_status_socket(\n                        \"playing\",\n                        self.station_config[\"network_name\"],\n                        self.station_config[\"channel_number\"],\n                        title,",
+      "reason": "RepoDistill GraphRAG candidate (StationPlayer.play_file), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "StationPlayer.play_file"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "field_player.py",
+      "line_start": 84,
+      "line_end": 283,
+      "quote": "    reception.degrade()\n    player.update_filters()\n    player.play_file(stand_by)\n\n    player.load_up()\n\n    def signal_handler(sig, frame):\n        logger.critical(\"Received sig-int signal, attempting to exit gracefully...\")\n        player.shutdown()\n\n            #if we got anything, we'll tune up one channel\n            tune_up = True\n                                \n                                if channel_index < 0:\n                                    channel_index = stations_len-1\n                                if not station_cache[channel_index][\"hidden\"]:\n                                    found = True\n\n\n                except Exception as e:\n                    logger.exception(e)\n                    logger.warning(\n                        \"Got payload on channel change, but JSON convert failed\"\n                    )\n\n            if tune_up:\n                logger.info(\"Starting channel change\")\n                found = False\n                while not found:\n                    channel_index += 1\n                    channel_index = channel_index if channel_index < stations_len else 0\n                    found = not station_cache[channel_index][\"hidden\"]\n\n            # save the player state\n            with shelve.open(STATE_SHELVE) as s:\n                s[\"channel_index\"] = channel_index\n            channel_conf = station_cache[channel_index]\n            player.station_config = channel_conf\n\n            print(\"Got playfile!\", player_state.payload )\n            skip_play = True\n            player_state = player.play_and_wait(player_state.payload)\n\n        elif player_state.status == PlayerState.FAILED:\n            stuck_timer += 1\n\n            # only put it up once after 2 seconds of being stuck\n            if stuck_timer == 2:\n                stand_by = channel_conf.get(\"standby_image\", StationManager().server_conf.get(\"standby_image\", \"runtime/standby.png\"))\n                player.play_file(stand_by)",
+      "reason": "RepoDistill GraphRAG candidate (main_loop), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "main_loop"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\station_player.py",
+      "line_start": 83,
+      "line_end": 720,
+      "quote": "class StationPlayer:\n    scramble_effects = {\n        \"horizontal_line\": \"lavfi=[geq='if(mod(floor(Y/4),2),p(X,Y+20*sin(2*PI*X/50)),p(X,Y))']\",\n        \"diagonal_lines\": \"lavfi=[geq='p(X+10*sin(2*PI*Y/30),Y)']\",\n        \"static_overlay\": \"lavfi=[geq='if(gt(random(X+Y*W),0.85),128+127*random(X*Y),if(mod(floor(Y/4),2),p(X+20,Y),p(X,Y)))']\",\n        \"pixel_block\": \"lavfi=[scale=160:120,scale=640:480:flags=neighbor,geq='if(gt(random(floor(X/40)*floor(Y/30)),0.7),128,p(X,Y))']\",\n        \"color_inversion\": \"lavfi=[geq='if(mod(floor(Y/16),2),255-p(X,Y),p(X,Y))']\",\n        \"severe_noise\": \"lavfi=[geq='if(gt(random(X*Y),0.7),random(255),p(X,Y))']\",\n        \"wavy\": \"lavfi=[geq='p(X+15*sin(2*PI*Y/40),Y+10*cos(2*PI*X/60))']\",\n        \"random_block\": \"lavfi=[geq='if(gt(random(floor(X/20)*floor(Y/20)),0.6),p(X+random(100)-20,Y+random(70)-20),p(X,Y))']\",\n        \"chunky_scramble\": \"lavfi=[scale=320:240,split[base][aux];[aux]geq=r='p(X+floor((random(1000+floor(N*0.05)+floor(Y/16))-0.5)*W*0.4),Y)':g='p(X+floor((random(2000+floor(N*0.05)+floor(Y/16))-0.5)*W*0.4),Y)':b='p(X+floor((random(3000+floor(N*0.05)+floor(Y/16))-0.5)*W*0.4),Y)'[warped];[base][warped]overlay,scale=640:480]\",\n        \"spicy\" : (\n            \"lavfi=[\"\n            \"scale=720:480:flags=fast_bilinear,\"\n            \"noise=alls=12:allf=t,\"\n            \"eq=contrast=1.10:brightness=-0.04:saturation=2.4,\"\n            \"geq=\"\n            \"r='p(X + 40*sin(2*PI*Y/60) + 12*sin(2*PI*N/10), Y)':\"\n            \"g='p(X + 32*sin(2*PI*Y/64) + 10*sin(2*PI*N/11), Y)':\"\n            \"b='p(X + 24*sin(2*PI*Y/68) +  8*sin(2*PI*N/12), Y)',\"\n            \"scale=640:480:flags=neighbor\"\n            \"]\"\n        )\n    }\n\n    def __init__(self, station_config, input_check_fn, mpv=None):\n        self._l = logging.getLogger(\"FieldPlayer\")\n\n        start_it = True\n\n        if \"start_mpv\" in StationManager().server_conf:\n            start_it = StationManager().server_conf[\"start_mpv\"]\n\n        if not mpv:\n            self._l.info(\"Starting MPV instance\")\n            # command on client: mpv --input-ipc-server=/tmp/mpvsocket --idle --force-window \n\n            # if not running on trixie\n            self.mpv = MPV(\n                start_mpv=start_it,\n                ipc_socket=\"/tmp/mpvsocket\",\n                input_default_bindings=False,\n                fs=True,\n                idle=True,\n                force_window=True,\n                scrip",
+      "reason": "RepoDistill GraphRAG candidate (StationPlayer), CAPO retention budget 50%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "StationPlayer"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\fs42_server\\api\\build.py",
+      "line_start": 24,
+      "line_end": 62,
+      "quote": "                command_queue = request.app.state.player_command_queue\n                if command_queue:\n                    command_queue.put({\"command\": \"reload_data\"})\n                else:\n                    LiquidManager().reload_schedules()\n            \n        except Exception as e:\n            with rebuild_tasks_lock:\n                rebuild_tasks[task_id][\"status\"] = \"error\"\n                rebuild_tasks[task_id][\"log\"] += f\"Error: {e}\\n\"",
+      "reason": "RepoDistill GraphRAG candidate (rebuild_catalog.rebuild_worker), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "rebuild_catalog.rebuild_worker"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\station_manager.py",
+      "line_start": 6,
+      "line_end": 264,
+      "quote": "class StationManager(object):\n    no_catalog = {\"guide\", \"streaming\", \"web\"}\n    no_schedule = {\"guide\", \"streaming\", \"web\"}\n\n                    \"day_parts\": {\n                        \"morning\": range(6, 10),\n                        \"daytime\": range(10, 18),\n                        \"prime\": range(18, 23),\n                        \"late\": [23, 0, 1, 2],\n                        \"overnight\": range(2, 6),\n                    },\n                    \"time_format\": \"%H:%M\",\n                    \"date_time_format\": \"%Y-%m-%dT%H:%M:%S\",\n                    \"db_path\": \"runtime/fs42_fluid.db\",\n                    \"start_mpv\": True,\n                    \"server_host\": \"0.0.0.0\",\n                    \"server_port\": 4242,\n                    logging.getLogger().info(\"Loading and checking guide channel\")\n                    \"normalize_titles\",\n                    \"tmdb_api_key\",\n                            # Validate that the regex compiles\n                            re.compile(pattern_config[\"pattern\"])\n\n        Delegates to StationIO for all the work, then reloads.\n        \"\"\"\n        # Let StationIO handle validation, uniqueness checks, and file writing\n        success, message, file_path = self.station_io.save_station_config(\n            network_name, config_data, self.stations, is_update\n        )\n\n        if success:\n            # Reload the station configuration\n            self._reload_stations()\n\n        return success, message, file_path\n\n    def delete_station_config(self, network_name):\n        \"\"\"\n        Delete a station configuration.\n        Delegates to StationIO for all the work, then reloads.\n        \"\"\"\n        # Let StationIO handle existence checks and file deletion\n        success, message = self.station_io.remove_station_config(network_name, self.stations)\n\n        if success:\n            # Reload stations\n            self._reload_stations()\n\n        return success, message\n\n    def _reload_stations(self):\n        \"\"\"Reload all station configurations from disk.\"\"\"\n        _l = logging.getLogger(\"STATIONMANAGER\")\n        _l.info(\"Reloading station configurations...\")\n\n        # Re-apply tag smoothing for standard networks\n        for i in range(len(self.stations)):\n            station = self.stations[i]\n            if station[\"network_type\"] == \"standard\":\n                self.stations[i] = SlotReader.smooth_tags(station)\n",
+      "reason": "RepoDistill GraphRAG candidate (StationManager), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "StationManager"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\station_player.py",
+      "line_start": 514,
+      "line_end": 583,
+      "quote": "            return PlayerOutcome(PlayerState.EXIT_COMMAND, msg)\n\n        # create the pipe to communicate with the web channel\n        self.web_queue = multiprocessing.Queue()\n        self.web_process = multiprocessing.Process(\n            target=web_render_runner,\n            args=(\n                web_config,\n                self.web_queue,\n            ),\n        )\n        self.web_process.start()\n\n        update_status_socket(\n            \"playing\",\n            self.station_config[\"network_name\"],\n            self.station_config[\"channel_number\"],\n            self.station_config[\"network_name\"],\n            timestamp=StationManager().server_conf[\"date_time_format\"],\n            content_type=\"web\",\n        )\n",
+      "reason": "RepoDistill GraphRAG candidate (StationPlayer.show_web), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "StationPlayer.show_web"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\liquid_schedule.py",
+      "line_start": 116,
+      "line_end": 136,
+      "quote": "        # handle clip show\n        clip_config = self.conf[\"clip_shows\"][tag_str]\n            raise MatchingContentNotFound(\n                f\"Could not find content for tag {tag_str} - please add content, check your configuration and retry\"\n            )\n        else:",
+      "reason": "RepoDistill GraphRAG candidate (LiquidSchedule._clip_fill), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "LiquidSchedule._clip_fill"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\liquid_schedule.py",
+      "line_start": 27,
+      "line_end": 330,
+      "quote": "class LiquidSchedule:\n    def __init__(self, conf):\n        self._l = logging.getLogger(\"Liquid\")\n        # self.conf = TagHintReader.smooth_tags(conf)\n        self.conf = conf\n        self.catalog = ShowCatalog(conf)\n        self._load_blocks()\n\n    def _calc_target_duration(self, duration, increment=None):\n        # get the target duration for the show based on the schedule increment\n        if increment is None:\n            increment = self.conf[\"schedule_increment\"]\n        multiple = increment * 60\n        if multiple == 0:\n            return duration\n        return multiple * math.ceil(duration / multiple)\n\n    def _load_blocks(self):\n        self._blocks = LiquidAPI.get_blocks(self.conf)\n\n    def _end_time(self):\n        # get the lastest time in the schedule\n        if len(self._blocks) > 0:\n            return self._blocks[-1].end_time\n        else:\n            return None\n\n    def _flood(self, start_time, end_target):\n        # flood the schedule - this is used for loop channels\n        diff = end_target - start_time\n        content = self.catalog.get_all_by_tag(\"content\")\n        new_blocks = []\n\n            \n            if the_match:\n                raise ClipShowKickBack(the_match, the_match)\n\n            break_info, break_strategy, increment = self._break_info(slot_config, tag_str, candidate.path)\n\n            target_duration = self._calc_target_duration(candidate.duration, increment)\n            next_mark = current_mark + datetime.timedelta(seconds=target_duration)\n            new_block = LiquidBlock(candidate, current_mark, next_mark, candidate.title, break_strategy, break_info)\n            # add sequence information\n            if seq_key:\n                new_block.sequence_key = seq_key\n        else:\n            # this should only happen on an error (have a tag, but no candidate)\n            raise MatchingContentNotFound(\n                f\"Could not find content for tag {tag_str} - please add content, check your configuration and retry\"\n            )\n        return (new_block, next_mark)\n\n    def _clip_fill(self, tag_str, current_mark, slot_config) -> LiquidClipBlock:\n        new_block = None\n        next_mark = None\n        # handle clip show\n        clip_config = self.conf[\"clip_shows\"][tag_str]\n        clip_content = self.catalog.gather_clip_content(\n            tag_str, clip_config.get(\"duration\"), current_mark, clip_config.get(\"start_cl",
+      "reason": "RepoDistill GraphRAG candidate (LiquidSchedule), CAPO retention budget 50%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "LiquidSchedule"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\station_player.py",
+      "line_start": 585,
+      "line_end": 591,
+      "quote": "    def schedule_panic(self, network_name):\n        self._l.critical(\"*********************Schedule Panic*********************\")",
+      "reason": "RepoDistill GraphRAG candidate (StationPlayer.schedule_panic), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "StationPlayer.schedule_panic"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\station_player.py",
+      "line_start": 396,
+      "line_end": 429,
+      "quote": "    def _apply_vfx(self, current_time):\n        vfx = None\n            self.scramble_effects[\"station_fx\"] = self.station_config[\"station_fx\"]\n\n                self.skip_reception_check = True\n                if vfx == \"horizontal_line\":\n                elif vfx == \"chunky_scramble\":\n                    self.scrambler = ChunkyScrambledVideoFilter()\n            else:",
+      "reason": "RepoDistill GraphRAG candidate (StationPlayer._apply_vfx), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "StationPlayer._apply_vfx"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\slot_reader.py",
+      "line_start": 55,
+      "line_end": 63,
+      "quote": "    def get_slot(conf, when: datetime):",
+      "reason": "RepoDistill GraphRAG candidate (SlotReader.get_slot), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "SlotReader.get_slot"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\liquid_schedule.py",
+      "line_start": 183,
+      "line_end": 275,
+      "quote": "        new_blocks = []\n        current_mark = start_time\n\n        if current_mark is None:\n            current_mark = datetime.datetime.now()\n\n        forward_buffer = []\n\n                \n                if MarathonAgent.detect_marathon(slot_config):\n                    forward_buffer = MarathonAgent.fill_marathon(slot_config)\n\n                # we are offair, but assume no sign_off video this slot\n                sign_off = None\n\n                    sign_off = self.catalog.get_signoff()\n\n                candidate = self.catalog.get_offair()\n\n                    self._l.error(f\"Schedule logic error: no time slots configured for {current_mark}\")\n                    self._l.error(\"This indicates that the station is offair, but offair content is not configured\")\n                    self._l.error(f\"Configure 'off_air_video' or 'off_air_image' for {self.conf['network_name']}\")\n                    sys.exit(-1)\n\n                # make it for one hour.\n            # here\n            new_blocks.append(new_block)\n            current_mark = next_mark\n        self._l.info(\"Content and reel schedules are completed\")\n",
+      "reason": "RepoDistill GraphRAG candidate (LiquidSchedule._fluid), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "LiquidSchedule._fluid"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\fs42_server\\api\\ppv.py",
+      "line_start": 287,
+      "line_end": 342,
+      "quote": "    Play a file by sending a command to the player via the command queue.\n\n    Args:\n        request: FastAPI Request object (to access app state)\n    \"\"\"\n    logger = logging.getLogger(\"PPV_API\")\n\n    try:\n        logger.info(f\"Sending play command for file: {play_request.file_path}\")\n\n        # Put the command in the queue\n        command_queue.put(command)\n\n        logger.info(f\"Successfully queued play command for: {play_request.file_path}\")\n",
+      "reason": "RepoDistill GraphRAG candidate (play_file), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "play_file"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\station_player.py",
+      "line_start": 341,
+      "line_end": 357,
+      "quote": "        self.mpv.vf = \"\"\n        self.mpv.command(\"playlist-clear\")\n        self.mpv.command(\"loadfile\", file_path, \"replace\")",
+      "reason": "RepoDistill GraphRAG candidate (StationPlayer.play_and_wait), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "StationPlayer.play_and_wait"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "field_player.py",
+      "line_start": 40,
+      "line_end": 79,
+      "quote": "def input_check():\n                    return PlayerOutcome(PlayerState.EXIT_COMMAND)\n                case \"reload_data\":\n                    LiquidManager().reload_schedules()\n                case \"guide\":",
+      "reason": "RepoDistill GraphRAG candidate (input_check), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "input_check"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\station_player.py",
+      "line_start": 434,
+      "line_end": 510,
+      "quote": "    def show_guide(self, guide_config):\n        # create the pipe to communicate with the guide channel\n        queue = multiprocessing.Queue()\n        guide_process = multiprocessing.Process(\n            target=guide_channel_runner,\n            args=(\n                guide_config,\n                queue,\n            ),\n        )\n        guide_process.start()\n\n        if \"play_sound\" in guide_config and guide_config[\"play_sound\"]:\n            sound_to_play = guide_config[\"sound_to_play\"]\n\n            # Normalize sound_to_play to always be a list\n            if isinstance(sound_to_play, str):\n        keep_going = True\n        while keep_going:\n            time.sleep(0.05)\n                queue.put(GuideCommands.hide_window)\n                guide_process.join()\n                return response\n\n        return PlayerOutcome(PlayerState.SUCCESS)",
+      "reason": "RepoDistill GraphRAG candidate (StationPlayer.show_guide), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "StationPlayer.show_guide"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "field_player.py",
+      "line_start": 123,
+      "line_end": 134,
+      "quote": "        player.shutdown()\n\n        logger.info(\"Shutdown completed as expected - exiting application\")\n        exit(0)",
+      "reason": "RepoDistill GraphRAG candidate (main_loop.signal_handler), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "main_loop.signal_handler"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\station_player.py",
+      "line_start": 593,
+      "line_end": 610,
+      "quote": "        except (ScheduleNotFound, ScheduleQueryNotInBounds):\n            self.schedule_panic(network_name)",
+      "reason": "RepoDistill GraphRAG candidate (StationPlayer.play_slot), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "StationPlayer.play_slot"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\station_player.py",
+      "line_start": 45,
+      "line_end": 65,
+      "quote": "def update_status_socket(\n    status, network_name, channel, title=None, timestamp=\"%Y-%m-%dT%H:%M:%S\", duration=None, file_path=None, content_type=None\n):\n    status_obj = {",
+      "reason": "RepoDistill GraphRAG candidate (update_status_socket), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "update_status_socket"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\reception.py",
+      "line_start": 44,
+      "line_end": 95,
+      "quote": "class ReceptionStatus(object):\n    __we_are_all_one = {}\n    chaos = 0\n    thresh = 0.01\n    degrade_amount = 0.05\n    improve_amount = 0.05\n\n            return f\"lavfi=[noise=alls={noise}:allf=t+u, scroll=h=0:v={v_scroll}]\"\n        else:\n            return \"\"",
+      "reason": "RepoDistill GraphRAG candidate (ReceptionStatus), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "ReceptionStatus"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    }
+  ],
+  "usage": {
+    "llm_calls": 4,
+    "tool_calls": 36,
+    "input_tokens": 43889,
+    "output_tokens": 1169,
+    "total_tokens": 45058,
+    "estimated_cost_usd": 0.09713,
+    "wall_clock_seconds": 4978.3240377902985,
+    "unique_files_inspected": 11,
+    "unique_symbols_inspected": 35
+  },
+  "termination_reason": "all_chunks_processed",
+  "metadata": {
+    "generation_model": "gpt-4.1",
+    "implementation": "paper-faithful RepoDistill (No-Training) reimplementation",
+    "paper_citation": "Yin, Ding, Zhang, Wang, Wang, Ni, Cui. \"RepoDistill: Distilling Repository Knowledge through Compression-Aware Budget Allocation and Policy Optimization.\" Findings of ACL 2026, pp. 4425-4443. https://aclanthology.org/2026.findings-acl.217/",
+    "upstream_code_note": "No code was ported. The paper's cited implementation link is an Anonymous-GitHub mirror that is dead/unreachable, and no trained checkpoint is published. This implementation is derived from the published paper text (sections 2.1/2.2/2.3 and Appendix A.1.2, read directly from the ACL Anthology PDF).",
+    "variant": "no_training",
+    "embedding_model": "BAAI/bge-small-en-v1.5",
+    "perplexity_model": "Qwen/Qwen2.5-Coder-0.5B",
+    "graph_nodes": 791,
+    "graph_edges": 1516,
+    "anchor_node_ids": [
+      "fs42\\autobump_agent.py::main::112",
+      "fs42\\catalog.py::ShowCatalog.gather_clip_content::577",
+      "field_player.py::main_loop::84",
+      "fs42\\station_player.py::StationPlayer::83",
+      "fs42\\liquid_blocks.py::LiquidBlock.make_plan::102",
+      "fs42\\liquid_blocks.py::LiquidClipBlock.make_plan::222",
+      "fs42\\station_player.py::StationPlayer.show_web::514",
+      "fs42\\catalog.py::ShowCatalog._build_single::122"
+    ],
+    "top_k": 8,
+    "rerank_lambda": 0.5,
+    "mmr_lambda": 0.1,
+    "segmentation_alpha": 0.2,
+    "capo_chunk_tokens": 10000,
+    "n_candidates": 24,
+    "n_retrieved_units": 35,
+    "n_capo_turns": 3,
+    "capo_turn_cap_hit": false,
+    "retrieved_chunk_ids": [
+      "fs42\\autobump_agent.py:112-156",
+      "fs42\\autobump_agent.py:14-26",
+      "fs42\\catalog.py:467-507",
+      "fs42\\catalog.py:41-668",
+      "fs42\\catalog.py:577-654",
+      "fs42\\catalog.py:122-131",
+      "fs42\\catalog.py:511-575",
+      "fs42\\liquid_blocks.py:102-203",
+      "fs42\\liquid_blocks.py:222-258",
+      "fs42\\autobump_agent.py:9-109",
+      "fs42\\autobump_agent.py:33-34",
+      "fs42\\station_player.py:231-339",
+      "field_player.py:84-283",
+      "fs42\\station_player.py:83-720",
+      "fs42\\fs42_server\\api\\build.py:24-62",
+      "fs42\\station_manager.py:6-264",
+      "fs42\\station_player.py:514-583",
+      "fs42\\liquid_schedule.py:116-136",
+      "fs42\\liquid_schedule.py:27-330",
+      "fs42\\station_player.py:585-591",
+      "fs42\\station_player.py:396-429",
+      "fs42\\slot_reader.py:55-63",
+      "fs42\\liquid_schedule.py:183-275",
+      "fs42\\fs42_server\\api\\ppv.py:287-342",
+      "fs42\\station_player.py:341-357",
+      "field_player.py:40-79",
+      "fs42\\station_player.py:434-510",
+      "field_player.py:123-134",
+      "fs42\\station_player.py:144-148",
+      "fs42\\station_player.py:593-610",
+      "fs42\\station_player.py:45-65",
+      "fs42\\reception.py:44-95",
+      "fs42\\station_player.py:219-220",
+      "fs42\\station_manager.py:84-90",
+      "fs42\\station_player.py:715-720"
+    ],
+    "retention_budgets": {
+      "fs42\\autobump_agent.py::main::112": 0.0,
+      "fs42\\autobump_agent.py::AutoBumpAgent.gen_bumps::14": 0.25,
+      "fs42\\catalog.py::ShowCatalog.make_reel_block::467": 0.5,
+      "fs42\\catalog.py::ShowCatalog::41": 0.75,
+      "fs42\\catalog.py::ShowCatalog.gather_clip_content::577": 0.25,
+      "fs42\\catalog.py::ShowCatalog._build_single::122": 0.25,
+      "fs42\\catalog.py::ShowCatalog.make_reel_fill::511": 0.5,
+      "fs42\\liquid_blocks.py::LiquidBlock.make_plan::102": 0.5,
+      "fs42\\liquid_blocks.py::LiquidClipBlock.make_plan::222": 0.25,
+      "fs42\\autobump_agent.py::AutoBumpAgent::9": 0.5,
+      "fs42\\autobump_agent.py::AutoBumpAgent.extract_url::33": 0.0,
+      "fs42\\station_player.py::StationPlayer.play_file::231": 0.25,
+      "field_player.py::main_loop::84": 0.25,
+      "fs42\\station_player.py::StationPlayer::83": 0.5,
+      "fs42\\fs42_server\\api\\build.py::rebuild_catalog.rebuild_worker::24": 0.25,
+      "fs42\\station_manager.py::StationManager::6": 0.25,
+      "fs42\\station_player.py::StationPlayer.show_web::514": 0.25,
+      "fs42\\liquid_schedule.py::LiquidSchedule._clip_fill::116": 0.25,
+      "fs42\\liquid_schedule.py::LiquidSchedule::27": 0.5,
+      "fs42\\station_player.py::StationPlayer.schedule_panic::585": 0.25,
+      "fs42\\station_player.py::StationPlayer._apply_vfx::396": 0.25,
+      "fs42\\slot_reader.py::SlotReader.get_slot::55": 0.25,
+      "fs42\\liquid_schedule.py::LiquidSchedule._fluid::183": 0.25,
+      "fs42\\fs42_server\\api\\ppv.py::play_file::287": 0.25,
+      "fs42\\station_player.py::StationPlayer.play_and_wait::341": 0.25,
+      "field_player.py::input_check::40": 0.25,
+      "fs42\\station_player.py::StationPlayer.show_guide::434": 0.25,
+      "field_player.py::main_loop.signal_handler::123": 0.25,
+      "fs42\\station_player.py::StationPlayer.load_up::144": 0.0,
+      "fs42\\station_player.py::StationPlayer.play_slot::593": 0.25,
+      "fs42\\station_player.py::update_status_socket::45": 0.25,
+      "fs42\\reception.py::ReceptionStatus::44": 0.25,
+      "fs42\\station_player.py::StationPlayer.update_filters::219": 0.0,
+      "fs42\\station_manager.py::StationManager.index_from_channel::84": 0.0,
+      "fs42\\station_player.py::StationPlayer.get_current_path::715": 0.0
+    },
+    "original_context_tokens": 27674,
+    "compressed_context_tokens": 10892,
+    "compression_ratio": 0.39358242393582427
+  }
+}

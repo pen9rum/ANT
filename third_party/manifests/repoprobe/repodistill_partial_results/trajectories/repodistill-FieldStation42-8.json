@@ -1,0 +1,483 @@
+{
+  "benchmark": "repoprobe",
+  "task_id": "FieldStation42-8",
+  "method": "repodistill",
+  "final_answer": "No, there is currently no configuration option to force the scheduler to prevent programs from running long and exceeding their block boundaries. The scheduling system does not enforce strict duration limits for blocks, allowing overlong shows to spill over and causing cumulative schedule drift.",
+  "trajectory": [
+    {
+      "capo_turn": 0,
+      "n_documents": 25,
+      "document_ids": [
+        "fs42\\liquid_blocks.py::LiquidClipBlock.make_plan::222",
+        "fs42\\liquid_schedule.py::LiquidSchedule._flood::54",
+        "fs42\\liquid_schedule.py::LiquidSchedule::27",
+        "fs42\\station_player.py::StationPlayer.schedule_panic::585",
+        "fs42\\liquid_blocks.py::LiquidBlock.playback_duration::46",
+        "fs42\\guide_builder.py::ScheduleQuery.query_slot::33",
+        "fs42\\guide_builder.py::ScheduleQuery::31",
+        "fs42\\liquid_blocks.py::LiquidBlock.make_plan::102",
+        "fs42\\catalog.py::ShowCatalog.make_reel_fill::511",
+        "fs42\\catalog.py::ShowCatalog.make_reel_block::467",
+        "fs42\\autobump_agent.py::AutoBumpAgent.gen_bumps::14",
+        "test\\test_autobump_agent.py::TestAutoBumpAgent.test_gen_bumps_with_custom_duration::152",
+        "fs42\\liquid_blocks.py::ReelBlock::318",
+        "fs42\\liquid_blocks.py::ReelBlock.duration::328",
+        "fs42\\liquid_schedule.py::LiquidSchedule._increment::277",
+        "fs42\\liquid_blocks.py::LiquidLoopBlock.make_plan::292",
+        "fs42\\liquid_blocks.py::LiquidLoopBlock::288",
+        "fs42\\liquid_schedule.py::LiquidSchedule._load_blocks::44",
+        "fs42\\liquid_api.py::LiquidAPI.add_blocks::7",
+        "fs42\\catalog.py::ShowCatalog.get_all_by_tag::409",
+        "fs42\\liquid_schedule.py::LiquidSchedule._fluid::183",
+        "fs42\\liquid_blocks.py::LiquidBlock.content_duration::43",
+        "fs42\\liquid_blocks.py::LiquidClipBlock.content_duration::216",
+        "fs42\\reel_cutter.py::ReelCutter.cut_reels_into_base::6",
+        "fs42\\reel_cutter.py::ReelCutter.cut_reels_into_clips::79"
+      ],
+      "assigned_budgets": {
+        "fs42\\liquid_blocks.py::LiquidClipBlock.make_plan::222": 0.25,
+        "fs42\\liquid_schedule.py::LiquidSchedule._flood::54": 0.25,
+        "fs42\\liquid_schedule.py::LiquidSchedule::27": 0.5,
+        "fs42\\station_player.py::StationPlayer.schedule_panic::585": 0.25,
+        "fs42\\liquid_blocks.py::LiquidBlock.playback_duration::46": 0.25,
+        "fs42\\guide_builder.py::ScheduleQuery.query_slot::33": 0.25,
+        "fs42\\guide_builder.py::ScheduleQuery::31": 0.25,
+        "fs42\\liquid_blocks.py::LiquidBlock.make_plan::102": 0.5,
+        "fs42\\catalog.py::ShowCatalog.make_reel_fill::511": 0.5,
+        "fs42\\catalog.py::ShowCatalog.make_reel_block::467": 0.25,
+        "fs42\\autobump_agent.py::AutoBumpAgent.gen_bumps::14": 0.25,
+        "test\\test_autobump_agent.py::TestAutoBumpAgent.test_gen_bumps_with_custom_duration::152": 0.0,
+        "fs42\\liquid_blocks.py::ReelBlock::318": 0.25,
+        "fs42\\liquid_blocks.py::ReelBlock.duration::328": 0.0,
+        "fs42\\liquid_schedule.py::LiquidSchedule._increment::277": 0.25,
+        "fs42\\liquid_blocks.py::LiquidLoopBlock.make_plan::292": 0.25,
+        "fs42\\liquid_blocks.py::LiquidLoopBlock::288": 0.25,
+        "fs42\\liquid_schedule.py::LiquidSchedule._load_blocks::44": 0.0,
+        "fs42\\liquid_api.py::LiquidAPI.add_blocks::7": 0.0,
+        "fs42\\catalog.py::ShowCatalog.get_all_by_tag::409": 0.0,
+        "fs42\\liquid_schedule.py::LiquidSchedule._fluid::183": 0.5,
+        "fs42\\liquid_blocks.py::LiquidBlock.content_duration::43": 0.0,
+        "fs42\\liquid_blocks.py::LiquidClipBlock.content_duration::216": 0.0,
+        "fs42\\reel_cutter.py::ReelCutter.cut_reels_into_base::6": 0.25,
+        "fs42\\reel_cutter.py::ReelCutter.cut_reels_into_clips::79": 0.25
+      },
+      "budget_parse_failures": 0,
+      "memory_after_turn": "This chunk centers on how the scheduling system computes start/end times for shows and fills gaps (e.g., with commercials, bumps) based on configuration and block durations. Core logic checks if program content is too long for a block and raises errors or buffers with filler as needed. The scheduling algorithm (_fluid, _flood) builds each day's blocks, ensures accurate transitions, and adjusts show durations based on increments (e.g., multiples of 15 minutes). Break and bump logic helps align show blocks to the configured schedule. No explicit config currently enforces max program length to block size: overruns are possible, but logic exists to buffer shortfalls. The issue of timing drift arises when a show slightly overruns its block; this ripple is reflected in how subsequent blocks are scheduled, suggesting that further constraints or checks may be required in the scheduling/planning logic to strictly enforce block boundaries."
+    },
+    {
+      "capo_turn": 1,
+      "n_documents": 6,
+      "document_ids": [
+        "fs42\\catalog.py::ShowCatalog::41",
+        "fs42\\fs42_server\\api\\build.py::rebuild_catalog.rebuild_worker::24",
+        "fs42\\liquid_manager.py::LiquidManager.reload_schedules::42",
+        "fs42\\liquid_schedule.py::LiquidSchedule.__init__::28",
+        "fs42\\fs42_server\\api\\build.py::add_time_to_schedule.add_time_worker::82",
+        "fs42\\liquid_manager.py::LiquidManager::30"
+      ],
+      "assigned_budgets": {
+        "fs42\\catalog.py::ShowCatalog::41": 0.25,
+        "fs42\\fs42_server\\api\\build.py::rebuild_catalog.rebuild_worker::24": 0.0,
+        "fs42\\liquid_manager.py::LiquidManager.reload_schedules::42": 0.0,
+        "fs42\\liquid_schedule.py::LiquidSchedule.__init__::28": 0.0,
+        "fs42\\fs42_server\\api\\build.py::add_time_to_schedule.add_time_worker::82": 0.0,
+        "fs42\\liquid_manager.py::LiquidManager::30": 0.25
+      },
+      "budget_parse_failures": 0,
+      "memory_after_turn": "This chunk describes the components for cataloging and scheduling shows in a broadcast or streaming system. The ShowCatalog class manages compiling, scanning, and building a flat index of available media (clips, bumps, commercials, etc) for each configured tag and prepares them for scheduling, but it does not enforce strict duration limits for blocks, allowing overlong programs to spill over and possibly cause schedule drift. The LiquidManager class manages schedule reloads, resets, and block queries, but also lacks logic to prevent time overruns at the scheduling level. Other documents here relate to API and worker functions for catalog and schedule rebuilding, which do not directly address time enforcement. The key context relevant to the timing problem is that there is currently no strict mechanism that prevents scheduling of programs that exceed block boundaries, leading to cumulative schedule slippage."
+    }
+  ],
+  "evidence": [
+    {
+      "path": "fs42\\liquid_blocks.py",
+      "line_start": 222,
+      "line_end": 258,
+      "quote": "        strict_count = None\n        break_duration = self.break_info.get(\"break_duration\", None)\n        if break_duration is None:\n            break_duration = catalog.config.get(\"break_duration\", None)\n\n        if break_duration and break_duration > 0 and diff > 2:\n            # calculate how many breaks we want based on total buffer time and break_duration\n            strict_count = max(1, int(diff / break_duration))\n",
+      "reason": "RepoDistill GraphRAG candidate (LiquidClipBlock.make_plan), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "LiquidClipBlock.make_plan"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\liquid_schedule.py",
+      "line_start": 54,
+      "line_end": 75,
+      "quote": "    def _flood(self, start_time, end_target):\n        content = self.catalog.get_all_by_tag(\"content\")\n        new_blocks = []\n",
+      "reason": "RepoDistill GraphRAG candidate (LiquidSchedule._flood), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "LiquidSchedule._flood"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\liquid_schedule.py",
+      "line_start": 27,
+      "line_end": 330,
+      "quote": "class LiquidSchedule:\n    def __init__(self, conf):\n        self._l = logging.getLogger(\"Liquid\")\n        # self.conf = TagHintReader.smooth_tags(conf)\n        self.conf = conf\n        self.catalog = ShowCatalog(conf)\n        self._load_blocks()\n\n    def _calc_target_duration(self, duration, increment=None):\n        # get the target duration for the show based on the schedule increment\n        if increment is None:\n            increment = self.conf[\"schedule_increment\"]\n        multiple = increment * 60\n        if multiple == 0:\n            return duration\n        return multiple * math.ceil(duration / multiple)\n\n    def _load_blocks(self):\n        self._blocks = LiquidAPI.get_blocks(self.conf)\n\n    def _end_time(self):\n        # get the lastest time in the schedule\n        if len(self._blocks) > 0:\n            return self._blocks[-1].end_time\n        else:\n            return None\n\n    def _flood(self, start_time, end_target):\n        # flood the schedule - this is used for loop channels\n        diff = end_target - start_time\n        content = self.catalog.get_all_by_tag(\"content\")\n        new_blocks = []\n\n        programming_name = (\n            self.conf[\"network_long_name\"] if \"network_long_name\" in self.conf else self.conf[\"network_name\"]\n        )\n\n        for i in range(diff.days):\n            current_mark = start_time + datetime.timedelta(days=i)\n            next_mark = start_time + datetime.timedelta(days=i + 1)\n            block = LiquidLoopBlock(content, current_mark, next_mark, programming_name)\n            new_blocks.append(block)\n\n        self._l.info(f\"Building plans for {len(new_blocks)} new schedule blocks\")\n        for block in new_blocks:\n            block.make_plan(self.catalog)\n\n        LiquidAPI.add_blocks(self.conf, new_blocks)\n        self._load_blocks()\n\n    def _fill(self, slot_config, tag_str, current_mark) -> LiquidBlock:\n        seq_key = None\n        candidate = None\n        new_block = None\n        next_mark = None\n        # see if this is a series with a sequence defined\n        if \"sequence\" in slot_config:\n            seq_name = slot_config[\"sequence\"]\n\n            next_seq = SequenceAPI.get_next_in_sequence(self.conf, seq_name, tag_str)\n            if next_seq:\n                candidate = self.catalog.entry_by_fpath(next_seq.fpath)\n\n            seq_key = SequenceAPI.make_sequence_key(self.conf, seq_name, tag_str)\n        els",
+      "reason": "RepoDistill GraphRAG candidate (LiquidSchedule), CAPO retention budget 50%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "LiquidSchedule"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\station_player.py",
+      "line_start": 585,
+      "line_end": 591,
+      "quote": "        schedule = LiquidSchedule(StationManager().station_by_name(network_name))\n        schedule.add_days(1)",
+      "reason": "RepoDistill GraphRAG candidate (StationPlayer.schedule_panic), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "StationPlayer.schedule_panic"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\liquid_blocks.py",
+      "line_start": 46,
+      "line_end": 47,
+      "quote": "    def playback_duration(self):",
+      "reason": "RepoDistill GraphRAG candidate (LiquidBlock.playback_duration), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "LiquidBlock.playback_duration"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\guide_builder.py",
+      "line_start": 33,
+      "line_end": 73,
+      "quote": "    def query_slot(network_name, when, normalize):\n        start_marker = when\n        current_marker = start_marker\n        next_marker = start_marker\n        end_target = start_marker + datetime.timedelta(hours=1, minutes=30)\n        blocks = []\n        keep_going = True\n\n        while keep_going:",
+      "reason": "RepoDistill GraphRAG candidate (ScheduleQuery.query_slot), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "ScheduleQuery.query_slot"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\guide_builder.py",
+      "line_start": 31,
+      "line_end": 73,
+      "quote": "class ScheduleQuery:\n    @staticmethod",
+      "reason": "RepoDistill GraphRAG candidate (ScheduleQuery), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "ScheduleQuery"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\liquid_blocks.py",
+      "line_start": 102,
+      "line_end": 203,
+      "quote": "        strict_count = None\n        if break_points:\n            # Calculate how many breaks we need based on break_duration config\n            # If break_duration is configured, use it to determine break count\n            break_duration = self.break_info.get(\"break_duration\", None)\n            if break_duration is None:\n                # Try to get from catalog config if not in break_info\n                break_duration = catalog.config.get(\"break_duration\", None)\n\n            if break_duration and break_duration > 0:\n                # Calculate desired number of breaks based on total buffer and break_duration\n                # This respects the user's break_duration setting\n                desired_breaks = max(1, int(diff / break_duration))\n\n                # break_points contains content segments, so we need desired_breaks + 1 segments\n                desired_segments = desired_breaks + 1\n\n                # If we have more chapter markers than needed, select the best-positioned ones\n                if len(break_points) > desired_segments:\n                    break_points = self.clip_break_points(break_points, desired_segments, self.content_duration())\n\n                # strict_count is the number of reel blocks (commercial breaks) to create\n                # This is one less than the number of content segments\n                strict_count = len(break_points) - 1 if len(break_points) > 0 else 0\n            else:\n                # Fallback: limit breaks to no more than every 2 minutes of playback\n                max_breaks = self.playback_duration() / timings.MIN_2\n                # We need max_breaks + 1 content segments to create max_breaks commercial breaks\n                max_segments = int(max_breaks) + 1\n\n                if len(break_points) > max_segments:\n                    break_points = self.clip_break_points(break_points, max_segments, self.content_duration())\n\n                # strict_count is the number of reel blocks (one less than content segments)\n                strict_count = len(break_points) - 1 if len(break_points) > 0 else 0\n\n                commercial_dir=self.commercial_override,\n                bump_dir=self.bump_override,\n                strict_count=strict_count,\n            )",
+      "reason": "RepoDistill GraphRAG candidate (LiquidBlock.make_plan), CAPO retention budget 50%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "LiquidBlock.make_plan"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\catalog.py",
+      "line_start": 511,
+      "line_end": 575,
+      "quote": "    def make_reel_fill(self, when, length, use_bumpers=True, commercial_dir=None, bump_dir=None, strict_count=None):\n        target_break_duration = self.config[\"break_duration\"]\n\n        blocks = []\n        keep_going = True\n        while remaining and keep_going:\n            block = None\n            try:\n                block = self.make_reel_block(\n                    when, use_bumpers, target_break_duration, commercial_dir=commercial_dir, bump_dir=bump_dir\n                )\n            except MatchingContentNotFound:\n                self._l.debug(\n                    f\"Could not find matching content for {remaining} seconds - will attempt to fill with BRB\"\n                )\n\n            if block and (remaining - block.duration) > 0:\n                remaining -= block.duration\n                blocks.append(block)\n\n                if strict_count and len(blocks) >= strict_count:\n                    keep_going = False\n\n            else:\n                keep_going = False\n\n        keep_going = True\n\n            candidate = None\n            try:\n                    candidate = self.find_bump(remaining, when, \"fill\")\n            except MatchingContentNotFound:",
+      "reason": "RepoDistill GraphRAG candidate (ShowCatalog.make_reel_fill), CAPO retention budget 50%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "ShowCatalog.make_reel_fill"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\catalog.py",
+      "line_start": 467,
+      "line_end": 507,
+      "quote": "        # INSERT AUTO BUMPER LOGIC HERE\n        if bumpers:\n            if \"autobump\" not in self.config:\n                start_candidate = self.find_bump(target_duration, when, ShowCatalog.prebump, bump_tag=bump_dir)\n                end_candidate = self.find_bump(target_duration, when, ShowCatalog.postbump, bump_tag=bump_dir)\n            else:\n            \n            remaining -= start_candidate.duration\n            remaining -= end_candidate.duration\n",
+      "reason": "RepoDistill GraphRAG candidate (ShowCatalog.make_reel_block), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "ShowCatalog.make_reel_block"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\autobump_agent.py",
+      "line_start": 14,
+      "line_end": 26,
+      "quote": "    def gen_bumps(station_config):\n        if \"autobump\" not in station_config:\n            return {\"start_block\": None, \"end_block\": None}\n",
+      "reason": "RepoDistill GraphRAG candidate (AutoBumpAgent.gen_bumps), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "AutoBumpAgent.gen_bumps"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\liquid_blocks.py",
+      "line_start": 318,
+      "line_end": 346,
+      "quote": "class ReelBlock:\n    def __init__(self, start_bump=None, comms=[], end_bump=None):\n        self.start_bump = start_bump\n        self.comms = comms\n        self.end_bump = end_bump\n\n    def __str__(self):",
+      "reason": "RepoDistill GraphRAG candidate (ReelBlock), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "ReelBlock"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\liquid_schedule.py",
+      "line_start": 277,
+      "line_end": 311,
+      "quote": "    def _increment(self, how_much):\n        if \"schedule_offset\" in self.conf:\n            # then we have an offset to apply\n            start_building += datetime.timedelta(minutes=self.conf[\"schedule_offset\"])\n\n                end_building = timings.next_week(start_building)\n            case \"month\":\n                end_building = timings.next_month(start_building)",
+      "reason": "RepoDistill GraphRAG candidate (LiquidSchedule._increment), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "LiquidSchedule._increment"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\liquid_blocks.py",
+      "line_start": 292,
+      "line_end": 315,
+      "quote": "    def make_plan(self, catalog):\n        if not self.content:\n        current_mark: datetime.datetime = self.start_time\n        next_mark: datetime.datetime = None\n        current_index = 0\n        while keep_going:",
+      "reason": "RepoDistill GraphRAG candidate (LiquidLoopBlock.make_plan), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "LiquidLoopBlock.make_plan"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\liquid_blocks.py",
+      "line_start": 288,
+      "line_end": 315,
+      "quote": "class LiquidLoopBlock(LiquidBlock):\n    def __init__(self, content, start_time, end_time, title=None, break_strategy=\"standard\", break_info=None):\n        super().__init__(content, start_time, end_time, title, break_strategy, break_info)\n",
+      "reason": "RepoDistill GraphRAG candidate (LiquidLoopBlock), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "LiquidLoopBlock"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\liquid_schedule.py",
+      "line_start": 183,
+      "line_end": 275,
+      "quote": "        new_blocks = []\n        current_mark = start_time\n\n        if current_mark is None:\n            current_mark = datetime.datetime.now()\n\n        forward_buffer = []\n\n        self._l.info(f\"Starting to build blocks for {self.conf['network_name']}\")\n        while current_mark < end_target:\n            self._l.debug(f\"Making schedule for: {current_mark} {current_mark.weekday()} {current_mark.hour}\")\n\n            if not len(forward_buffer):\n                \n                if MarathonAgent.detect_marathon(slot_config):\n                    forward_buffer = MarathonAgent.fill_marathon(slot_config)\n\n                if tag_str not in self.conf[\"clip_shows\"]:\n                    #print(\"not clip show\")\n                    try:\n                        new_block, next_mark = self._fill(slot_config, tag_str, current_mark)\n                    except ClipShowKickBack as e:\n                        new_block, next_mark = self._clip_fill(e.clip_tag, current_mark, slot_config)\n                # we are offair, but assume no sign_off video this slot\n                sign_off = None\n\n                    sign_off = self.catalog.get_signoff()\n\n                candidate = self.catalog.get_offair()\n\n                    self._l.error(f\"Schedule logic error: no time slots configured for {current_mark}\")\n                    self._l.error(\"This indicates that the station is offair, but offair content is not configured\")\n                    self._l.error(f\"Configure 'off_air_video' or 'off_air_image' for {self.conf['network_name']}\")\n                    sys.exit(-1)\n\n                # make it for one hour.\n                # TODO: handle when it starts at half hour - just go to next hour (not always one hour)\n                next_mark = (current_mark + datetime.timedelta(hours=1)).replace(minute=0, second=0, microsecond=0)\n                new_block = LiquidOffAirBlock(candidate, current_mark, next_mark, \"Offair\", sign_off=sign_off)\n\n            # here\n            new_blocks.append(new_block)\n            current_mark = next_mark\n        self._l.info(\"Content and reel schedules are completed\")\n",
+      "reason": "RepoDistill GraphRAG candidate (LiquidSchedule._fluid), CAPO retention budget 50%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "LiquidSchedule._fluid"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\reel_cutter.py",
+      "line_start": 6,
+      "line_end": 75,
+      "quote": "            break_points = MediaProcessor.calc_black_segments(break_points, base_clip.duration)\n            #[print(x) for x in break_points]\n\n        if start_bump:\n                h_dur = base_duration/2\n                h1 = BlockPlanEntry(base_clip.path, base_offset, h_dur, content_type=base_clip.content_type, media_type=base_clip.media_type)\n                h2 = BlockPlanEntry(base_clip.path, base_offset+h_dur, h_dur, content_type=base_clip.content_type, media_type=base_clip.media_type)\n                entries.append(h1)\n            else:\n                entries += _block.make_plan()\n            if break_strategy == \"center\":\n                entries.append(h2)\n        else:\n            else:\n\n                keep_going = True\n\n                if len(break_points):\n                    # Play first segment from start to first break point",
+      "reason": "RepoDistill GraphRAG candidate (ReelCutter.cut_reels_into_base), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "ReelCutter.cut_reels_into_base"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\reel_cutter.py",
+      "line_start": 79,
+      "line_end": 152,
+      "quote": "    def cut_reels_into_clips(clips, reel_blocks, break_stategy, start_bump, end_bump):\n        entries = []\n\n        if start_bump:\n            entries.append(BlockPlanEntry(start_bump[\"path\"], 0, start_bump[\"duration\"], content_type=\"bump\", media_type=start_bump.get(\"media_type\", \"video\")))\n\n        if reel_blocks:\n            break_count = len(reel_blocks)\n                entries += _block.make_plan()\n        elif break_stategy == \"center\":\n            # half clips, then all reels, then second half clips\n            half_point = len(clips) // 2\n\n            # distribute breaks as evenly as possible across clips\n            if len(clips) > break_count:\n                        reel_b = reel_blocks.pop(0)\n                        entries += reel_b.make_plan()\n            else:",
+      "reason": "RepoDistill GraphRAG candidate (ReelCutter.cut_reels_into_clips), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "ReelCutter.cut_reels_into_clips"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\catalog.py",
+      "line_start": 41,
+      "line_end": 668,
+      "quote": "class ShowCatalog:\n    prebump = \"prebump\"\n    postbump = \"postbump\"\n\n    def __init__(self, config, rebuild_catalog=False, load=True, debug=False, force=False, skip_chapter_scan=False):\n        self.config = config\n        self._l = logging.getLogger(f\"{self.config['network_name']} - CAT\")\n\n        # the main index for videos\n        self.clip_index = {}\n        # the tag/duration cache index\n        self.tag_dur_cache = {}\n\n        # basically, a flattened list of clip_index keys\n        self.tags = []\n\n        self.__fluid_builder = None\n        self.min_gap = 3\n        self.skip_chapter_scan = skip_chapter_scan\n        if rebuild_catalog:\n            if force:\n                self._l.info(\"Rebuilding catalog with force flag - will delete existing catalog\")\n                CatalogAPI.delete_catalog(self.config)\n            self.build_catalog()\n        elif load:\n            self.load_catalog()\n\n    def _write_catalog(self):\n        # first, make them into a flat list\n        flat_list = []\n\n        for tag in self.clip_index:\n            try:\n                for entry in self.clip_index[tag]:\n                    if isinstance(entry, CatalogEntry):\n                        flat_list.append(entry)\n                    else:\n                        print(f\"Warning: Entry {entry} on {tag} is not a CatalogEntry instance. Skipping.\")\n\n            except Exception as e:\n                print(f\"Error processing tag '{tag}': {e}\")\n\n        CatalogAPI.set_entries(self.config, flat_list)\n\n    def load_catalog(self):\n        if self.config[\"network_type\"] == \"streaming\":\n            return\n\n        catalog_entries = CatalogAPI.get_entries(self.config)\n        \n        self.clip_index = {}\n\n        for entry in catalog_entries:\n            \n            if entry.tag not in self.clip_index:\n                self.clip_index[entry.tag] = []\n            self.clip_index[entry.tag].append(entry)\n\n    def build_catalog(self):\n        self._l.info(f\"Starting catalog build for {self.config['network_name']}\")\n\n        match self.config[\"network_type\"]:\n            case \"standard\":\n                # restrict content to fit and be valid (zero duration is likely not valid)\n                if (\n                    candidate.duration < seconds\n                    and candidate.duration >= 1\n                    and MediaProcessor._test_candidate_hints(candidate.hints, when)\n             ",
+      "reason": "RepoDistill GraphRAG candidate (ShowCatalog), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "ShowCatalog"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\liquid_manager.py",
+      "line_start": 30,
+      "line_end": 212,
+      "quote": "class LiquidManager(object):\n    __we_are_all_one = {}\n    _initialized = False\n    station_configs = []\n\n    # NOTE: This is the borg singleton pattern - __we_are_all_one\n    def __init__(self):\n        self.__dict__ = self.__we_are_all_one\n        if not self._initialized:\n            self._initialized = True\n            self.reload_schedules()\n\n    def reload_schedules(self):\n        self.station_configs = StationManager().stations\n        self.schedules = {}\n        for station in self.station_configs:\n            if station[\"network_type\"] != \"guide\" and station[\"network_type\"] != \"streaming\":\n                _id = station[\"network_name\"]\n                self.schedules[_id] = LiquidAPI.get_blocks(station)\n\n    def get_schedule_by_name(self, network_name):\n        if network_name in self.schedules:\n            return self.schedules[network_name]\n        else:\n            return None\n\n    def reset_all_schedules(self):\n        for station_config in self.station_configs:\n            if station_config[\"_has_schedule\"]:\n                logging.getLogger(\"liquid\").info(f\"Deleting schedules for {station_config['network_name']}\")\n                self.reset_sequences(station_config)\n                LiquidAPI.delete_blocks(station_config)\n        self.reload_schedules()\n\n    def reset_schedule(self, station_config, force=False):",
+      "reason": "RepoDistill GraphRAG candidate (LiquidManager), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "LiquidManager"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    }
+  ],
+  "usage": {
+    "llm_calls": 3,
+    "tool_calls": 32,
+    "input_tokens": 24695,
+    "output_tokens": 703,
+    "total_tokens": 25398,
+    "estimated_cost_usd": 0.055014,
+    "wall_clock_seconds": 1831.5932636260986,
+    "unique_files_inspected": 11,
+    "unique_symbols_inspected": 31
+  },
+  "termination_reason": "all_chunks_processed",
+  "metadata": {
+    "generation_model": "gpt-4.1",
+    "implementation": "paper-faithful RepoDistill (No-Training) reimplementation",
+    "paper_citation": "Yin, Ding, Zhang, Wang, Wang, Ni, Cui. \"RepoDistill: Distilling Repository Knowledge through Compression-Aware Budget Allocation and Policy Optimization.\" Findings of ACL 2026, pp. 4425-4443. https://aclanthology.org/2026.findings-acl.217/",
+    "upstream_code_note": "No code was ported. The paper's cited implementation link is an Anonymous-GitHub mirror that is dead/unreachable, and no trained checkpoint is published. This implementation is derived from the published paper text (sections 2.1/2.2/2.3 and Appendix A.1.2, read directly from the ACL Anthology PDF).",
+    "variant": "no_training",
+    "embedding_model": "BAAI/bge-small-en-v1.5",
+    "perplexity_model": "Qwen/Qwen2.5-Coder-0.5B",
+    "graph_nodes": 791,
+    "graph_edges": 1516,
+    "anchor_node_ids": [
+      "fs42\\liquid_blocks.py::LiquidClipBlock.make_plan::222",
+      "fs42\\liquid_schedule.py::LiquidSchedule::27",
+      "fs42\\liquid_blocks.py::ReelBlock.duration::328",
+      "fs42\\liquid_schedule.py::LiquidSchedule._flood::54",
+      "test\\test_autobump_agent.py::TestAutoBumpAgent.test_gen_bumps_with_custom_duration::152",
+      "fs42\\liquid_blocks.py::LiquidBlock.make_plan::102",
+      "fs42\\station_player.py::StationPlayer.schedule_panic::585",
+      "fs42\\guide_builder.py::ScheduleQuery::31"
+    ],
+    "top_k": 8,
+    "rerank_lambda": 0.5,
+    "mmr_lambda": 0.1,
+    "segmentation_alpha": 0.2,
+    "capo_chunk_tokens": 10000,
+    "n_candidates": 24,
+    "n_retrieved_units": 31,
+    "n_capo_turns": 2,
+    "capo_turn_cap_hit": false,
+    "retrieved_chunk_ids": [
+      "fs42\\liquid_blocks.py:222-258",
+      "fs42\\liquid_schedule.py:54-75",
+      "fs42\\liquid_schedule.py:27-330",
+      "fs42\\station_player.py:585-591",
+      "fs42\\liquid_blocks.py:46-47",
+      "fs42\\guide_builder.py:33-73",
+      "fs42\\guide_builder.py:31-73",
+      "fs42\\liquid_blocks.py:102-203",
+      "fs42\\catalog.py:511-575",
+      "fs42\\catalog.py:467-507",
+      "fs42\\autobump_agent.py:14-26",
+      "test\\test_autobump_agent.py:152-164",
+      "fs42\\liquid_blocks.py:318-346",
+      "fs42\\liquid_blocks.py:328-336",
+      "fs42\\liquid_schedule.py:277-311",
+      "fs42\\liquid_blocks.py:292-315",
+      "fs42\\liquid_blocks.py:288-315",
+      "fs42\\liquid_schedule.py:44-45",
+      "fs42\\liquid_api.py:7-8",
+      "fs42\\catalog.py:409-413",
+      "fs42\\liquid_schedule.py:183-275",
+      "fs42\\liquid_blocks.py:43-44",
+      "fs42\\liquid_blocks.py:216-220",
+      "fs42\\reel_cutter.py:6-75",
+      "fs42\\reel_cutter.py:79-152",
+      "fs42\\catalog.py:41-668",
+      "fs42\\fs42_server\\api\\build.py:24-62",
+      "fs42\\liquid_manager.py:42-48",
+      "fs42\\liquid_schedule.py:28-33",
+      "fs42\\fs42_server\\api\\build.py:82-113",
+      "fs42\\liquid_manager.py:30-212"
+    ],
+    "retention_budgets": {
+      "fs42\\liquid_blocks.py::LiquidClipBlock.make_plan::222": 0.25,
+      "fs42\\liquid_schedule.py::LiquidSchedule._flood::54": 0.25,
+      "fs42\\liquid_schedule.py::LiquidSchedule::27": 0.5,
+      "fs42\\station_player.py::StationPlayer.schedule_panic::585": 0.25,
+      "fs42\\liquid_blocks.py::LiquidBlock.playback_duration::46": 0.25,
+      "fs42\\guide_builder.py::ScheduleQuery.query_slot::33": 0.25,
+      "fs42\\guide_builder.py::ScheduleQuery::31": 0.25,
+      "fs42\\liquid_blocks.py::LiquidBlock.make_plan::102": 0.5,
+      "fs42\\catalog.py::ShowCatalog.make_reel_fill::511": 0.5,
+      "fs42\\catalog.py::ShowCatalog.make_reel_block::467": 0.25,
+      "fs42\\autobump_agent.py::AutoBumpAgent.gen_bumps::14": 0.25,
+      "test\\test_autobump_agent.py::TestAutoBumpAgent.test_gen_bumps_with_custom_duration::152": 0.0,
+      "fs42\\liquid_blocks.py::ReelBlock::318": 0.25,
+      "fs42\\liquid_blocks.py::ReelBlock.duration::328": 0.0,
+      "fs42\\liquid_schedule.py::LiquidSchedule._increment::277": 0.25,
+      "fs42\\liquid_blocks.py::LiquidLoopBlock.make_plan::292": 0.25,
+      "fs42\\liquid_blocks.py::LiquidLoopBlock::288": 0.25,
+      "fs42\\liquid_schedule.py::LiquidSchedule._load_blocks::44": 0.0,
+      "fs42\\liquid_api.py::LiquidAPI.add_blocks::7": 0.0,
+      "fs42\\catalog.py::ShowCatalog.get_all_by_tag::409": 0.0,
+      "fs42\\liquid_schedule.py::LiquidSchedule._fluid::183": 0.5,
+      "fs42\\liquid_blocks.py::LiquidBlock.content_duration::43": 0.0,
+      "fs42\\liquid_blocks.py::LiquidClipBlock.content_duration::216": 0.0,
+      "fs42\\reel_cutter.py::ReelCutter.cut_reels_into_base::6": 0.25,
+      "fs42\\reel_cutter.py::ReelCutter.cut_reels_into_clips::79": 0.25,
+      "fs42\\catalog.py::ShowCatalog::41": 0.25,
+      "fs42\\fs42_server\\api\\build.py::rebuild_catalog.rebuild_worker::24": 0.0,
+      "fs42\\liquid_manager.py::LiquidManager.reload_schedules::42": 0.0,
+      "fs42\\liquid_schedule.py::LiquidSchedule.__init__::28": 0.0,
+      "fs42\\fs42_server\\api\\build.py::add_time_to_schedule.add_time_worker::82": 0.0,
+      "fs42\\liquid_manager.py::LiquidManager::30": 0.25
+    },
+    "original_context_tokens": 17367,
+    "compressed_context_tokens": 4746,
+    "compression_ratio": 0.27327690447400244
+  }
+}

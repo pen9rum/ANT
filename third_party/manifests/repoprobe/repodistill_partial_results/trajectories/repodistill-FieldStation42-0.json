@@ -1,0 +1,443 @@
+{
+  "benchmark": "repoprobe",
+  "task_id": "FieldStation42-0",
+  "method": "repodistill",
+  "final_answer": "There is currently no implementation or existing ffmpeg filter in this repository to simulate CRT scanlines, rounded corners, or CRT surface curvature effects. The only ffmpeg filters in use are for \"scrambled\" video effects (e.g., noise, color inversion, wavy, chunky scramble, etc.), and none are designed to emulate CRT scanlines or CRT-style artifacts.",
+  "trajectory": [
+    {
+      "capo_turn": 0,
+      "n_documents": 11,
+      "document_ids": [
+        "fs42\\reception.py::ChunkyScrambledVideoFilter::142",
+        "fs42\\reception.py::ChunkyScrambledVideoFilter.update_filter::146",
+        "fs42\\station_player.py::StationPlayer._play_from_point::612",
+        "fs42\\station_player.py::StationPlayer.update_reception::222",
+        "fs42\\fs42_server\\fs42_server.py::mount_fs42_api.PlayerStatusFilter.filter::77",
+        "fs42\\media_processor.py::MediaProcessor.black_detect::384",
+        "fs42\\station_player.py::StationPlayer.update_filters::219",
+        "fs42\\station_player.py::StationPlayer::83",
+        "fs42\\station_player.py::StationPlayer._apply_vfx::396",
+        "fs42\\reception.py::HLScrambledVideoFilter::104",
+        "fs42\\station_player.py::StationPlayer.play_file::231"
+      ],
+      "assigned_budgets": {
+        "fs42\\reception.py::ChunkyScrambledVideoFilter::142": 0.25,
+        "fs42\\reception.py::ChunkyScrambledVideoFilter.update_filter::146": 0.25,
+        "fs42\\station_player.py::StationPlayer._play_from_point::612": 0.25,
+        "fs42\\station_player.py::StationPlayer.update_reception::222": 0.25,
+        "fs42\\fs42_server\\fs42_server.py::mount_fs42_api.PlayerStatusFilter.filter::77": 0.0,
+        "fs42\\media_processor.py::MediaProcessor.black_detect::384": 0.0,
+        "fs42\\station_player.py::StationPlayer.update_filters::219": 0.25,
+        "fs42\\station_player.py::StationPlayer::83": 0.5,
+        "fs42\\station_player.py::StationPlayer._apply_vfx::396": 0.25,
+        "fs42\\reception.py::HLScrambledVideoFilter::104": 0.25,
+        "fs42\\station_player.py::StationPlayer.play_file::231": 0.25
+      },
+      "budget_parse_failures": 0,
+      "memory_after_turn": "This chunk provides code related to video playback and ffmpeg video filters within a station player system. Of special relevance is the listing of various video scramble effects in StationPlayer.scramble_effects, implemented using ffmpeg filters (lavfi syntax), with some effects involving geometric and noise-based transformations. There is no CRT scanline effect present or referenced, but the filter framework suggests it would be straightforward to add. Key filter-application points are within StationPlayer's _apply_vfx method and through the scrambler attribute. Update logic and fade effects are included, but no direct CRT emulation is visible. Class ChunkyScrambledVideoFilter and others serve as templates for new effects. The structure supports dynamically applying new ffmpeg video filter strings, implying the ability to add CRT scanlines with an appropriately written lavfi filter."
+    },
+    {
+      "capo_turn": 1,
+      "n_documents": 7,
+      "document_ids": [
+        "fs42\\station_manager.py::StationManager::6",
+        "station_42.py::main::183",
+        "fs42\\fluid_builder.py::FluidBuilder.scan_breaks::42",
+        "fs42\\media_processor.py::MediaProcessor._rfind_media::262",
+        "fs42\\slot_reader.py::SlotReader.get_slot::55",
+        "fs42\\liquid_schedule.py::LiquidSchedule._fluid::183",
+        "fs42\\catalog.py::ShowCatalog.get_offair::338"
+      ],
+      "assigned_budgets": {
+        "fs42\\station_manager.py::StationManager::6": 0.25,
+        "station_42.py::main::183": 0.0,
+        "fs42\\fluid_builder.py::FluidBuilder.scan_breaks::42": 0.0,
+        "fs42\\media_processor.py::MediaProcessor._rfind_media::262": 0.0,
+        "fs42\\slot_reader.py::SlotReader.get_slot::55": 0.0,
+        "fs42\\liquid_schedule.py::LiquidSchedule._fluid::183": 0.0,
+        "fs42\\catalog.py::ShowCatalog.get_offair::338": 0.0
+      },
+      "budget_parse_failures": 0,
+      "memory_after_turn": "This chunk centers on station management logic. Document_0 (StationManager) coordinates loading, indexing, and modifying station configurations and facilitates retrieval by name or channel. It is agnostic to video filter processing and does not touch FFmpeg filter usage or scanline effects. The remaining documents concern peripheral logic\u2014break scanning, media retrieval, schedule slotting, off-air content\u2014and do not involve or reference video effects, filter applications, or any CRT emulation. No part of this chunk introduces, configures, or discusses FFmpeg video filtering, nor does it provide hooks or implementations related to CRT scanline simulation. The system architecture, as evidenced here, supports modular station and schedule management but is unrelated to the application or development of new video effects."
+    },
+    {
+      "capo_turn": 2,
+      "n_documents": 6,
+      "document_ids": [
+        "fs42\\catalog.py::ShowCatalog::41",
+        "fs42\\catalog.py::ShowCatalog._scan_directory::259",
+        "fs42\\autobump_agent.py::AutoBumpAgent.extract_url::33",
+        "fs42\\autobump_agent.py::AutoBumpAgent::9",
+        "fs42\\autobump_agent.py::AutoBumpAgent.gen_bumps::14",
+        "fs42\\autobump_agent.py::main::112"
+      ],
+      "assigned_budgets": {
+        "fs42\\catalog.py::ShowCatalog::41": 0.25,
+        "fs42\\catalog.py::ShowCatalog._scan_directory::259": 0.25,
+        "fs42\\autobump_agent.py::AutoBumpAgent.extract_url::33": 0.0,
+        "fs42\\autobump_agent.py::AutoBumpAgent::9": 0.25,
+        "fs42\\autobump_agent.py::AutoBumpAgent.gen_bumps::14": 0.0,
+        "fs42\\autobump_agent.py::main::112": 0.0
+      },
+      "budget_parse_failures": 0,
+      "memory_after_turn": "This chunk focuses on catalog and bumper logic for media content, primarily the ShowCatalog class (catalog management, catalog building, and organizing commercials and 'bumps'). There is no reference or implementation of FFmpeg filters, scanline effects, video processing, or CRT simulation. Similarly, the AutoBumpAgent facilitates the dynamic generation of bumpers (station interstitials) but is only concerned with URL-based overlays for station announcements, not video filter application or retro visual effects. No functionality for FFmpeg, CRT scanlines, rounded corners, or display emulation is present. The code here is limited to schedule/media management and station break visuals, not low-level video transformation."
+    },
+    {
+      "capo_turn": 3,
+      "n_documents": 6,
+      "document_ids": [
+        "fs42\\media_processor.py::MediaProcessor::55",
+        "fs42\\media_processor.py::MediaProcessor.process_one::123",
+        "fs42\\catalog_entry.py::CatalogEntry::15",
+        "fs42\\autobump_agent.py::AutoBumpAgent.message_bump::37",
+        "fs42\\media_processor.py::MediaProcessor._by_position::341",
+        "fs42\\fs42_server\\api\\build.py::rebuild_catalog.rebuild_worker::24"
+      ],
+      "assigned_budgets": {
+        "fs42\\media_processor.py::MediaProcessor::55": 0.25,
+        "fs42\\media_processor.py::MediaProcessor.process_one::123": 0.25,
+        "fs42\\catalog_entry.py::CatalogEntry::15": 0.25,
+        "fs42\\autobump_agent.py::AutoBumpAgent.message_bump::37": 0.0,
+        "fs42\\media_processor.py::MediaProcessor._by_position::341": 0.0,
+        "fs42\\fs42_server\\api\\build.py::rebuild_catalog.rebuild_worker::24": 0.0
+      },
+      "budget_parse_failures": 0,
+      "memory_after_turn": "This chunk details the MediaProcessor class, which handles media file discovery, metadata extraction, duration probing, segment/black frame/chapter detection (via ffmpeg), and cataloging files using CatalogEntry. MediaProcessor relies on ffmpeg for video analysis (e.g., duration, black frame detection) but does not implement or mention any ffmpeg filters for CRT scanlines, scanline simulation, or display curvature effects. No CRT/retro visual emulation logic is present\u2014the focus remains on core media metadata operations and file cataloging. CatalogEntry structures metadata for cataloged media. No functionality in this chunk is relevant to video filtering or retro visual simulation; only general ffmpeg utility use is demonstrated. This is consistent with prior memory and previous code chunks, which lacked any CRT/scanline simulation features."
+    }
+  ],
+  "evidence": [
+    {
+      "path": "fs42\\reception.py",
+      "line_start": 142,
+      "line_end": 147,
+      "quote": "class ChunkyScrambledVideoFilter(ScrambledVideoFilter):\n    def __init__(self):\n        pass\n\n    def update_filter(self):",
+      "reason": "RepoDistill GraphRAG candidate (ChunkyScrambledVideoFilter), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "ChunkyScrambledVideoFilter"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\reception.py",
+      "line_start": 146,
+      "line_end": 147,
+      "quote": "    def update_filter(self):",
+      "reason": "RepoDistill GraphRAG candidate (ChunkyScrambledVideoFilter.update_filter), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "ChunkyScrambledVideoFilter.update_filter"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\station_player.py",
+      "line_start": 612,
+      "line_end": 713,
+      "quote": "    def _play_from_point(self, play_point: PlayPoint):\n        # This handles channel changes and ensures clean state\n        self._close_now_playing()\n\n        if len(play_point.plan):\n            initial_skip = play_point.offset\n\n                    return PlayerOutcome(PlayerState.FAILED)\n                # Seek now happens inside play_file() before overlay is shown\n\n                if entry.duration:\n                    self._l.info(f\"Monitoring for: {entry.duration - initial_skip}\")\n\n                    # Calculate target end time using wall clock\n                    target_end_time = datetime.datetime.now() + datetime.timedelta(seconds=(entry.duration - initial_skip))\n                    self._l.info(f\"Target end time: {target_end_time.strftime('%H:%M:%S.%f')[:-3]}\")\n\n                            if self.scrambler:\n                                self.mpv.vf = self.scrambler.update_filter()\n\n                        # Calculate time remaining based on wall clock\n                        time_remaining = (target_end_time - datetime.datetime.now()).total_seconds()\n\n                            # debounce time\n                            time.sleep(0.05)\n                            response = self.input_check_fn()\n                            if response:\n                                return response\n                else:\n                    return PlayerOutcome(PlayerState.FAILED)\n",
+      "reason": "RepoDistill GraphRAG candidate (StationPlayer._play_from_point), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "StationPlayer._play_from_point"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\station_player.py",
+      "line_start": 222,
+      "line_end": 229,
+      "quote": "            # did that get us below threshhold?",
+      "reason": "RepoDistill GraphRAG candidate (StationPlayer.update_reception), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "StationPlayer.update_reception"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\station_player.py",
+      "line_start": 219,
+      "line_end": 220,
+      "quote": "    def update_filters(self):",
+      "reason": "RepoDistill GraphRAG candidate (StationPlayer.update_filters), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "StationPlayer.update_filters"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\station_player.py",
+      "line_start": 83,
+      "line_end": 720,
+      "quote": "class StationPlayer:\n    scramble_effects = {\n        \"horizontal_line\": \"lavfi=[geq='if(mod(floor(Y/4),2),p(X,Y+20*sin(2*PI*X/50)),p(X,Y))']\",\n        \"diagonal_lines\": \"lavfi=[geq='p(X+10*sin(2*PI*Y/30),Y)']\",\n        \"static_overlay\": \"lavfi=[geq='if(gt(random(X+Y*W),0.85),128+127*random(X*Y),if(mod(floor(Y/4),2),p(X+20,Y),p(X,Y)))']\",\n        \"pixel_block\": \"lavfi=[scale=160:120,scale=640:480:flags=neighbor,geq='if(gt(random(floor(X/40)*floor(Y/30)),0.7),128,p(X,Y))']\",\n        \"color_inversion\": \"lavfi=[geq='if(mod(floor(Y/16),2),255-p(X,Y),p(X,Y))']\",\n        \"severe_noise\": \"lavfi=[geq='if(gt(random(X*Y),0.7),random(255),p(X,Y))']\",\n        \"wavy\": \"lavfi=[geq='p(X+15*sin(2*PI*Y/40),Y+10*cos(2*PI*X/60))']\",\n        \"random_block\": \"lavfi=[geq='if(gt(random(floor(X/20)*floor(Y/20)),0.6),p(X+random(100)-20,Y+random(70)-20),p(X,Y))']\",\n        \"chunky_scramble\": \"lavfi=[scale=320:240,split[base][aux];[aux]geq=r='p(X+floor((random(1000+floor(N*0.05)+floor(Y/16))-0.5)*W*0.4),Y)':g='p(X+floor((random(2000+floor(N*0.05)+floor(Y/16))-0.5)*W*0.4),Y)':b='p(X+floor((random(3000+floor(N*0.05)+floor(Y/16))-0.5)*W*0.4),Y)'[warped];[base][warped]overlay,scale=640:480]\",\n        \"spicy\" : (\n            \"lavfi=[\"\n            \"scale=720:480:flags=fast_bilinear,\"\n            \"noise=alls=12:allf=t,\"\n            \"eq=contrast=1.10:brightness=-0.04:saturation=2.4,\"\n            \"geq=\"\n            \"r='p(X + 40*sin(2*PI*Y/60) + 12*sin(2*PI*N/10), Y)':\"\n            \"g='p(X + 32*sin(2*PI*Y/64) + 10*sin(2*PI*N/11), Y)':\"\n            \"b='p(X + 24*sin(2*PI*Y/68) +  8*sin(2*PI*N/12), Y)',\"\n            \"scale=640:480:flags=neighbor\"\n            \"]\"\n        )\n    }\n\n    def __init__(self, station_config, input_check_fn, mpv=None):\n        self._l = logging.getLogger(\"FieldPlayer\")\n\n        start_it = True\n\n        if \"start_mpv\" in StationManager().server_conf:\n            start_it = StationManager().server_conf[\"start_mpv\"]\n\n        if not mpv:\n            self._l.info(\"Starting MPV instance\")\n            # command on client: mpv --input-ipc-server=/tmp/mpvsocket --idle --force-window \n\n            # if not running on trixie\n            self.mpv = MPV(\n                start_mpv=start_it,\n                ipc_socket=\"/tmp/mpvsocket\",\n                input_default_bindings=False,\n                fs=True,\n                idle=True,\n                force_window=True,\n                scrip",
+      "reason": "RepoDistill GraphRAG candidate (StationPlayer), CAPO retention budget 50%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "StationPlayer"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\station_player.py",
+      "line_start": 396,
+      "line_end": 429,
+      "quote": "    def _apply_vfx(self, current_time):\n        vfx = None\n            self.scramble_effects[\"station_fx\"] = self.station_config[\"station_fx\"]\n\n                self.skip_reception_check = True\n                if vfx == \"horizontal_line\":\n                elif vfx == \"chunky_scramble\":\n                    self.scrambler = ChunkyScrambledVideoFilter()\n            else:",
+      "reason": "RepoDistill GraphRAG candidate (StationPlayer._apply_vfx), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "StationPlayer._apply_vfx"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\reception.py",
+      "line_start": 104,
+      "line_end": 115,
+      "quote": "        \n        if random.random() > .95:\n            self.chaos = random.randint(40,70)\n        if random.random() > .9:",
+      "reason": "RepoDistill GraphRAG candidate (HLScrambledVideoFilter), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "HLScrambledVideoFilter"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\station_player.py",
+      "line_start": 231,
+      "line_end": 339,
+      "quote": "    def play_file(self, file_path, file_duration=None, current_time=None, is_stream=False, title=\"Unknown\", content_type=None, media_type=None):\n        try:\n            if os.path.exists(file_path) or is_stream or AutoBumpAgent.is_autobump_url(file_path):\n                self._l.debug(f\"%%%Attempting to play {file_path}\")\n                self.current_playing_file_path = file_path\n\n                if self.station_config:\n                    self._l.debug(\"Got station config, updating status socket\")\n                    if \"date_time_format\" in StationManager().server_conf:\n                        ts_format = StationManager().server_conf[\"date_time_format\"]\n                    else:\n                        ts_format = \"%Y-%m-%dT%H:%M:%S\"\n                    duration = (\n                        f\"{str(datetime.timedelta(seconds=int(current_time)))}/{str(datetime.timedelta(seconds=int(file_duration)))}\"\n                        if file_duration\n                        else \"n/a\"\n                    )\n                    update_status_socket(\n                        \"playing\",\n                        self.station_config[\"network_name\"],\n                        self.station_config[\"channel_number\"],\n                        title,",
+      "reason": "RepoDistill GraphRAG candidate (StationPlayer.play_file), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "StationPlayer.play_file"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\station_manager.py",
+      "line_start": 6,
+      "line_end": 264,
+      "quote": "class StationManager(object):\n    # public visible - be careful\n    stations = []\n    no_catalog = {\"guide\", \"streaming\", \"web\"}\n    no_schedule = {\"guide\", \"streaming\", \"web\"}\n\n                self.server_conf = {\n                    \"channel_socket\": \"runtime/channel.socket\",\n                    \"status_socket\": \"runtime/play_status.socket\",\n                    \"day_parts\": {\n                        \"morning\": range(6, 10),\n                        \"daytime\": range(10, 18),\n                        \"prime\": range(18, 23),\n                        \"late\": [23, 0, 1, 2],\n                        \"overnight\": range(2, 6),\n                    },\n                    \"time_format\": \"%H:%M\",\n                    \"date_time_format\": \"%Y-%m-%dT%H:%M:%S\",\n                    \"db_path\": \"runtime/fs42_fluid.db\",\n                    \"start_mpv\": True,\n                    \"server_host\": \"0.0.0.0\",\n                    \"server_port\": 4242,\n                    \"title_patterns\": [],\n                }\n                self._number_index = {}\n                self._name_index = {}\n                self.load_main_config()\n                self.load_json_stations()\n                    logging.getLogger().info(\"Loading and checking guide channel\")\n        _l = logging.getLogger(\"STATIONMANAGER\")\n        d = self.station_io.load_main_config()\n\n        if d is not None:\n            try:\n                    \"normalize_titles\",\n                    \"tmdb_api_key\",\n                    \"recall_last_channel\"\n                ]\n\n                for key in to_check:\n                    if key in d:\n                        self.server_conf[key] = d[key]\n\n                            # Validate that the regex compiles\n                            re.compile(pattern_config[\"pattern\"])\n\n                    \n\n                if \"date_time_format\" not in d:\n        Delegates to StationIO for all the work, then reloads.\n        \"\"\"\n        # Clear current stations and indexes\n        self.stations = []\n        self._name_index = {}\n        self._number_index = {}\n\n        # Reload from disk (this also rebuilds indexes)\n        self.load_json_stations()\n\n        # Re-apply tag smoothing for standard networks\n        for i in range(len(self.stations)):\n            station = self.stations[i]\n            if station[\"network_type\"] == \"standard\":\n                self.stations[i] = SlotReader.smooth_tags(station)",
+      "reason": "RepoDistill GraphRAG candidate (StationManager), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "StationManager"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\catalog.py",
+      "line_start": 41,
+      "line_end": 668,
+      "quote": "class ShowCatalog:\n    prebump = \"prebump\"\n    postbump = \"postbump\"\n\n    def __init__(self, config, rebuild_catalog=False, load=True, debug=False, force=False, skip_chapter_scan=False):\n        self.config = config\n        self._l = logging.getLogger(f\"{self.config['network_name']} - CAT\")\n\n        # the main index for videos\n        self.clip_index = {}\n        # the tag/duration cache index\n        self.tag_dur_cache = {}\n\n        # basically, a flattened list of clip_index keys\n        self.tags = []\n\n        self.__fluid_builder = None\n        self.min_gap = 3\n        self.skip_chapter_scan = skip_chapter_scan\n        if rebuild_catalog:\n            if force:\n                self._l.info(\"Rebuilding catalog with force flag - will delete existing catalog\")\n                CatalogAPI.delete_catalog(self.config)\n            self.build_catalog()\n        elif load:\n            self.load_catalog()\n\n    def _write_catalog(self):\n        # first, make them into a flat list\n        flat_list = []\n\n        for tag in self.clip_index:\n            try:\n                for entry in self.clip_index[tag]:\n                    if isinstance(entry, CatalogEntry):\n                        flat_list.append(entry)\n                    else:\n                        print(f\"Warning: Entry {entry} on {tag} is not a CatalogEntry instance. Skipping.\")\n\n            except Exception as e:\n                print(f\"Error processing tag '{tag}': {e}\")\n\n        CatalogAPI.set_entries(self.config, flat_list)\n\n    def load_catalog(self):\n        if self.config[\"network_type\"] == \"streaming\":\n            return\n\n        catalog_entries = CatalogAPI.get_entries(self.config)\n        \n        self.clip_index = {}\n\n        for entry in catalog_entries:\n            \n            if entry.tag not in self.clip_index:\n                self.clip_index[entry.tag] = []\n            self.clip_index[entry.tag].append(entry)\n\n    def build_catalog(self):\n        self._l.info(f\"Starting catalog build for {self.config['network_name']}\")\n\n        match self.config[\"network_type\"]:\n            case \"standard\":\n                # restrict content to fit and be valid (zero duration is likely not valid)\n                if (\n                    candidate.duration < seconds\n                    and candidate.duration >= 1\n                    and MediaProcessor._test_candidate_hints(candidate.hints, when)\n             ",
+      "reason": "RepoDistill GraphRAG candidate (ShowCatalog), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "ShowCatalog"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\catalog.py",
+      "line_start": 259,
+      "line_end": 304,
+      "quote": "           \n                count_added += len(pre) + len(fill) + len(post)\n            else:\n                self.clip_index[tag] += subdir_clips\n                count_added += len(self.clip_index[tag])\n        return count_added",
+      "reason": "RepoDistill GraphRAG candidate (ShowCatalog._scan_directory), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "ShowCatalog._scan_directory"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\autobump_agent.py",
+      "line_start": 9,
+      "line_end": 109,
+      "quote": "class AutoBumpAgent:\n    base_url = \"http://127.0.0.1:4242/static/bump/bump.html\"\n    url_prefix = \":autobump:=\"\n\n    @staticmethod\n    def gen_bumps(station_config):\n        if \"autobump\" not in station_config:\n            return {\"start_block\": None, \"end_block\": None}\n\n        ab_config = station_config[\"autobump\"]\n\n    def extract_url(prefixed_url):\n        return prefixed_url.removeprefix(AutoBumpAgent.url_prefix)\n\n    @staticmethod\n    def message_bump(ab_config, base_url):\n        message_qs = AutoBumpAgent.generate_bump_query(ab_config)\n        message_url = f\"{AutoBumpAgent.url_prefix}{base_url}?{message_qs}\"\n                - title (required): Main station name/title\n                - subtitle: Station tagline or description",
+      "reason": "RepoDistill GraphRAG candidate (AutoBumpAgent), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "AutoBumpAgent"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\media_processor.py",
+      "line_start": 55,
+      "line_end": 525,
+      "quote": "                # Map of ID3v2 frame names to our simple tag names\n                # Different formats use different tag names:\n                # MP3 uses ID3v2 (TIT2, TPE1, etc)\n                # MP4/M4A uses \\xa9nam, \\xa9ART, etc\n                # FLAC/OGG use vorbis comments (title, artist, etc)\n                tag_mappings = {\n                    'title': ['TIT2', 'title', '\\xa9nam'],\n                    'artist': ['TPE1', 'artist', '\\xa9ART'],\n                    'album': ['TALB', 'album', '\\xa9alb'],\n                    'date': ['TDRC', 'date', '\\xa9day', 'year'],\n                    'genre': ['TCON', 'genre', '\\xa9gen']\n                }\n\n                for tag_name, possible_keys in tag_mappings.items():\n                    for key in possible_keys:\n                        value = audio.tags.get(key)\n                        if value:\n                            # Convert to string, handle list values\n                            if isinstance(value, list) and len(value) > 0:\n                                metadata[tag_name] = str(value[0])\n                            else:\n                                metadata[tag_name] = str(value)\n                            break  # Found it, move to next tag\n\n            # Return basic metadata from filename\n            return {\n                'title': os.path.splitext(os.path.basename(file_path))[0]\n            }\n\n            full_path = False\n            if fluid:\n                full_path = os.path.realpath(fname)\n                cached = fluid.check_file_cache(full_path)\n                if cached:\n                    duration = cached.duration\n\n            if not duration:\n                # then do the processing\n                duration = MediaProcessor._get_duration(fname)\n\n            # it might not support streams, so check with moviepy\n            if duration <= 0.0:\n                try:\n                    video_clip = VideoFileClip(fname)\n                    duration = video_clip.duration\n                except Exception as e:\n                    _l.error(f\"Error in moviepy attempting to get duration for {fname}\")\n                    _l.exception(e)\n        # collect list of files that fail\n        failed = []\n\n    def _test_candidate_hints(hint_list, when):\n        for hint in hint_list:\n            if not hint.hint(when):\n                return False\n        return True\n\n    @staticmethod\n    de",
+      "reason": "RepoDistill GraphRAG candidate (MediaProcessor), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "MediaProcessor"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\media_processor.py",
+      "line_start": 123,
+      "line_end": 165,
+      "quote": "        # get video file length in seconds\n        duration = 0.0\n        result = None\n        try:\n            full_path = False\n            if fluid:\n                full_path = os.path.realpath(fname)\n                cached = fluid.check_file_cache(full_path)\n                if cached:\n                    duration = cached.duration\n\n            if not duration:\n                # then do the processing\n                duration = MediaProcessor._get_duration(fname)\n",
+      "reason": "RepoDistill GraphRAG candidate (MediaProcessor.process_one), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "MediaProcessor.process_one"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    },
+    {
+      "path": "fs42\\catalog_entry.py",
+      "line_start": 15,
+      "line_end": 134,
+      "quote": "class CatalogEntry:\n    # CatalogEntry(row[2], row[3], float(row[4]), json.loads(row[6]) if row[6] else [])\n        tup = (\n            json_data[\"dbid\"],\n            json_data[\"station\"],\n            json_data[\"path\"],\n            json_data[\"title\"],\n            json_data[\"duration\"],\n            json_data[\"tag\"],\n            json_data[\"count\"],\n            json_data[\"hints\"],\n            json_data.get(\"created_at\", None),\n            json_data.get(\"updated_at\", None),\n            json_data.get(\"realpath\", None),\n            json_data.get(\"content_type\", \"feature\"),\n            json_data.get(\"media_type\", \"video\"),\n        )\n        return CatalogEntry.from_db_row(tup)\n\n    @staticmethod\n    def from_db_row(row):\n\n        # Load hints from JSON\n        if hints_str:\n            try:\n                # Parse the JSON string back to list\n                loaded_hints = json.loads(hints_str)\n\n                if not isinstance(loaded_hints, list):\n                    loaded_hints = []\n\n                for hint_str in loaded_hints:\n                    hint = json.loads(hint_str)\n                    # Convert each hint JSON back to its object\n                    if isinstance(hint, dict) and \"type\" in hint:\n                        if hint[\"type\"] == \"day_part\":",
+      "reason": "RepoDistill GraphRAG candidate (CatalogEntry), CAPO retention budget 25%",
+      "claim": "",
+      "worker_id": "",
+      "symbols": [
+        "CatalogEntry"
+      ],
+      "dense_score": 0.0,
+      "need_ids": []
+    }
+  ],
+  "usage": {
+    "llm_calls": 5,
+    "tool_calls": 31,
+    "input_tokens": 38696,
+    "output_tokens": 1026,
+    "total_tokens": 39722,
+    "estimated_cost_usd": 0.0856,
+    "wall_clock_seconds": 3319.3631267547607,
+    "unique_files_inspected": 13,
+    "unique_symbols_inspected": 29
+  },
+  "termination_reason": "all_chunks_processed",
+  "metadata": {
+    "generation_model": "gpt-4.1",
+    "implementation": "paper-faithful RepoDistill (No-Training) reimplementation",
+    "paper_citation": "Yin, Ding, Zhang, Wang, Wang, Ni, Cui. \"RepoDistill: Distilling Repository Knowledge through Compression-Aware Budget Allocation and Policy Optimization.\" Findings of ACL 2026, pp. 4425-4443. https://aclanthology.org/2026.findings-acl.217/",
+    "upstream_code_note": "No code was ported. The paper's cited implementation link is an Anonymous-GitHub mirror that is dead/unreachable, and no trained checkpoint is published. This implementation is derived from the published paper text (sections 2.1/2.2/2.3 and Appendix A.1.2, read directly from the ACL Anthology PDF).",
+    "variant": "no_training",
+    "embedding_model": "BAAI/bge-small-en-v1.5",
+    "perplexity_model": "Qwen/Qwen2.5-Coder-0.5B",
+    "graph_nodes": 791,
+    "graph_edges": 1516,
+    "anchor_node_ids": [
+      "fs42\\reception.py::ChunkyScrambledVideoFilter::142",
+      "fs42\\reception.py::ChunkyScrambledVideoFilter.update_filter::146",
+      "fs42\\media_processor.py::MediaProcessor.black_detect::384",
+      "fs42\\autobump_agent.py::main::112",
+      "fs42\\station_player.py::StationPlayer::83",
+      "fs42\\reception.py::HLScrambledVideoFilter::104",
+      "fs42\\media_processor.py::MediaProcessor._rfind_media::262",
+      "fs42\\catalog.py::ShowCatalog._scan_directory::259"
+    ],
+    "top_k": 8,
+    "rerank_lambda": 0.5,
+    "mmr_lambda": 0.1,
+    "segmentation_alpha": 0.2,
+    "capo_chunk_tokens": 10000,
+    "n_candidates": 24,
+    "n_retrieved_units": 30,
+    "n_capo_turns": 4,
+    "capo_turn_cap_hit": false,
+    "retrieved_chunk_ids": [
+      "fs42\\reception.py:142-147",
+      "fs42\\reception.py:146-147",
+      "fs42\\station_player.py:612-713",
+      "fs42\\station_player.py:222-229",
+      "fs42\\fs42_server\\fs42_server.py:77-78",
+      "fs42\\media_processor.py:384-473",
+      "fs42\\station_player.py:219-220",
+      "fs42\\station_player.py:83-720",
+      "fs42\\station_player.py:396-429",
+      "fs42\\reception.py:104-115",
+      "fs42\\station_player.py:231-339",
+      "fs42\\station_manager.py:6-264",
+      "station_42.py:183-600",
+      "fs42\\fluid_builder.py:42-70",
+      "fs42\\media_processor.py:262-281",
+      "fs42\\slot_reader.py:55-63",
+      "fs42\\liquid_schedule.py:183-275",
+      "fs42\\catalog.py:338-343",
+      "fs42\\catalog.py:41-668",
+      "fs42\\catalog.py:259-304",
+      "fs42\\autobump_agent.py:33-34",
+      "fs42\\autobump_agent.py:9-109",
+      "fs42\\autobump_agent.py:14-26",
+      "fs42\\autobump_agent.py:112-156",
+      "fs42\\media_processor.py:55-525",
+      "fs42\\media_processor.py:123-165",
+      "fs42\\catalog_entry.py:15-134",
+      "fs42\\autobump_agent.py:37-41",
+      "fs42\\media_processor.py:341-361",
+      "fs42\\fs42_server\\api\\build.py:24-62"
+    ],
+    "retention_budgets": {
+      "fs42\\reception.py::ChunkyScrambledVideoFilter::142": 0.25,
+      "fs42\\reception.py::ChunkyScrambledVideoFilter.update_filter::146": 0.25,
+      "fs42\\station_player.py::StationPlayer._play_from_point::612": 0.25,
+      "fs42\\station_player.py::StationPlayer.update_reception::222": 0.25,
+      "fs42\\fs42_server\\fs42_server.py::mount_fs42_api.PlayerStatusFilter.filter::77": 0.0,
+      "fs42\\media_processor.py::MediaProcessor.black_detect::384": 0.0,
+      "fs42\\station_player.py::StationPlayer.update_filters::219": 0.25,
+      "fs42\\station_player.py::StationPlayer::83": 0.5,
+      "fs42\\station_player.py::StationPlayer._apply_vfx::396": 0.25,
+      "fs42\\reception.py::HLScrambledVideoFilter::104": 0.25,
+      "fs42\\station_player.py::StationPlayer.play_file::231": 0.25,
+      "fs42\\station_manager.py::StationManager::6": 0.25,
+      "station_42.py::main::183": 0.0,
+      "fs42\\fluid_builder.py::FluidBuilder.scan_breaks::42": 0.0,
+      "fs42\\media_processor.py::MediaProcessor._rfind_media::262": 0.0,
+      "fs42\\slot_reader.py::SlotReader.get_slot::55": 0.0,
+      "fs42\\liquid_schedule.py::LiquidSchedule._fluid::183": 0.0,
+      "fs42\\catalog.py::ShowCatalog.get_offair::338": 0.0,
+      "fs42\\catalog.py::ShowCatalog::41": 0.25,
+      "fs42\\catalog.py::ShowCatalog._scan_directory::259": 0.25,
+      "fs42\\autobump_agent.py::AutoBumpAgent.extract_url::33": 0.0,
+      "fs42\\autobump_agent.py::AutoBumpAgent::9": 0.25,
+      "fs42\\autobump_agent.py::AutoBumpAgent.gen_bumps::14": 0.0,
+      "fs42\\autobump_agent.py::main::112": 0.0,
+      "fs42\\media_processor.py::MediaProcessor::55": 0.25,
+      "fs42\\media_processor.py::MediaProcessor.process_one::123": 0.25,
+      "fs42\\catalog_entry.py::CatalogEntry::15": 0.25,
+      "fs42\\autobump_agent.py::AutoBumpAgent.message_bump::37": 0.0,
+      "fs42\\media_processor.py::MediaProcessor._by_position::341": 0.0,
+      "fs42\\fs42_server\\api\\build.py::rebuild_catalog.rebuild_worker::24": 0.0
+    },
+    "original_context_tokens": 29536,
+    "compressed_context_tokens": 5775,
+    "compression_ratio": 0.19552410617551463
+  }
+}
