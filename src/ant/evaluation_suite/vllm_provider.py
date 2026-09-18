@@ -90,6 +90,22 @@ class VLLMChatCompletionsProvider(CountingOpenAIProvider):
             model=self.model,
             messages=[{"role": "user", "content": prompt}],
             max_tokens=max_output_tokens,
+            # Qwen3's chat template defaults to thinking mode (a <think>...
+            # </think> preamble before any real content), which the ANTMAN
+            # worker prompts' tight budgets (select_lookups=256,
+            # plan_worker_actions=768 max_output_tokens) never survive --
+            # confirmed live: even 256 tokens against a trivial "reply with
+            # this exact JSON" prompt burned the ENTIRE budget on thinking
+            # and never reached the answer (finish_reason="length", content
+            # is pure <think> text, no JSON at all). responses_json's own
+            # repair pass then re-asks the SAME model, which thinks again
+            # and fails the same way, degrading every worker call to "{}" --
+            # not a measurement of whether an 8B model can do the delegated
+            # reasoning, just a measurement of its thinking preamble length.
+            # vLLM honors Qwen's own chat-template kwarg for this (confirmed
+            # live: the identical prompt above returns a clean, correct
+            # answer in 6 tokens with this set).
+            extra_body={"chat_template_kwargs": {"enable_thinking": False}},
         )
         raw = response.model_dump()
         text = response.choices[0].message.content or ""

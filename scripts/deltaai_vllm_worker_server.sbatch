@@ -80,10 +80,20 @@ echo "=> worker_base_url for the pilot harness: http://$(hostname):$PORT/v1"
 #   python -m venv .venv-vllm && .venv-vllm/bin/pip install vllm
 source "$REPO_ROOT/.venv-vllm/bin/activate"
 
+# --enforce-eager: this node's system image has no python312-devel package
+# (confirmed: /usr/include/python3.12/Python.h does not exist, no root to
+# install it), so vLLM's default torch.compile/CUDA-graph warmup path --
+# which JIT-compiles a small C shim against the Python C API via Triton's
+# CudaUtils() -- fails at engine init with "fatal error: Python.h: No such
+# file or directory" before the server ever comes up. --enforce-eager skips
+# that compile/graph-capture step entirely (pure eager PyTorch execution);
+# it costs some throughput, not correctness -- the served model's outputs
+# are unaffected, only kernel fusion/CUDA-graph optimizations are disabled.
 python -m vllm.entrypoints.openai.api_server \
     --model "$MODEL_REPO_ID" \
     --served-model-name "$MODEL_NAME" \
     --dtype bfloat16 \
     --max-model-len "$MAX_MODEL_LEN" \
+    --enforce-eager \
     --host 0.0.0.0 \
     --port "$PORT"

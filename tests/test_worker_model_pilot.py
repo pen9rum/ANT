@@ -191,6 +191,7 @@ class TestVLLMChatCompletionsProvider:
             model="qwen3-8b",
             messages=[{"role": "user", "content": "prompt"}],
             max_tokens=64,
+            extra_body={"chat_template_kwargs": {"enable_thinking": False}},
         )
         assert result.text == "hello"
         assert result.usage.input_tokens == 10
