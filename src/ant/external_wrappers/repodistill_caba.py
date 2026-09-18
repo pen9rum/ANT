@@ -113,6 +113,18 @@ PERPLEXITY_MODEL = os.getenv("ANT_REPODISTILL_PPL_MODEL", "Qwen/Qwen2.5-Coder-0.
 # beyond the cap are still segmented, just on truncated perplexity signal.
 MAX_PPL_TOKENS = 4096
 
+# torch's CPU backend defaults to using every visible core for its intra-op
+# thread pool -- the exact same oversubscription failure mode diagnosed and
+# fixed for the dense-embedding pipeline this session (see dense.py/
+# dense_retrieval_repo.py's ANT_EMBEDDING_THREADS), just in a different
+# library. Confirmed live: with this uncapped, a single QwenPerplexityScorer
+# forward pass measurably starved a concurrent CPU-bound process (dense
+# embedding) of scheduler time on the same machine. 4 matches the
+# established safe default for the embedding pipeline -- deliberately
+# modest so RepoDistill's local CABA step and any other CPU-bound work this
+# suite runs concurrently (embedding, other baselines) can coexist.
+TORCH_THREADS = int(os.getenv("ANT_REPODISTILL_TORCH_THREADS", "4"))
+
 
 @dataclass(frozen=True)
 class Block:
@@ -161,6 +173,11 @@ class QwenPerplexityScorer:
     def __init__(self, model_name: str = PERPLEXITY_MODEL) -> None:
         import torch
         from transformers import AutoModelForCausalLM, AutoTokenizer
+
+        # Set before any forward pass, not left to whatever torch's default
+        # happened to pick up from the environment at import time -- see
+        # TORCH_THREADS' own comment for why this is needed at all.
+        torch.set_num_threads(TORCH_THREADS)
 
         self.model_name = model_name
         self._torch = torch
