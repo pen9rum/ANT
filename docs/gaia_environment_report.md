@@ -1,13 +1,25 @@
 # GAIA environment report
 
-> **PASS 2 ADDENDUM (2026-09-17) — read §I–§L at the end of this file
-> before acting on §A, §C.1, §C.2 or §G.** A second pass extended the
-> substrate (PDF/DOCX/PPTX now genuinely supported; `compute()` replaced
-> by a real sandboxed Python interpreter), implemented §G's subset rule,
-> and produced a grounded cost estimate. **The dataset audit is still
-> blocked**: the HF gate was reported as open but is not — see §I for
-> the exact evidence. Sections A, C.1, C.2 and G below are the pass-1
-> text, kept for the record and superseded where §I–§L say so.
+> ## READ §O–§R FIRST (end of file). They contain the live results.
+>
+> This file is written in three dated layers, oldest first. **§A–§H is
+> pass 1, §I–§N is pass 2, and §O–§R is pass 3 — the current state.**
+>
+> * **Pass 1** built the environment with the HF dataset gate closed.
+> * **Pass 2** extended the substrate (PDF/DOCX/PPTX genuinely
+>   supported; `compute()` replaced by a real sandboxed Python
+>   interpreter), implemented the subset rule, and found that the gate
+>   was *still* closed despite being reported open.
+> * **Pass 3** ran after the gate was accepted. **The live audit is
+>   complete and the subset manifest is frozen: N = 165, retained 152,
+>   excluded 13 (10 image, 3 audio).**
+>
+> **Superseded, kept only for the record**: §A and §I (gate status —
+> now open), §C.1/§C.2 (tool and modality tables — see §J.1/§J.2),
+> §G (subset proposal — implemented, see §K and §P), §K.4 and §L
+> (projected counts and costs — now measured, see §P and §Q).
+>
+> **Zero paid inference was run in any of the three passes.**
 
 **Scope of this pass**: engineering and environment construction only.
 **Zero paid inference was run.** No LLM API call of any kind was made
@@ -1103,3 +1115,333 @@ ANTMAN's coordinator, other benchmarks' adapters, and the shared
    to replace §L's transferred estimates with measurements.
 7. **Confirm no inference** is launched until 1–2 are settled. **None
    was launched in this pass.**
+
+---
+
+# PASS 3 (2026-09-17, same day) — THE GATE OPENED. LIVE AUDIT COMPLETE.
+
+**This section supersedes §I, §K.4 and §L of pass 2**, which were
+written while the gate was closed. Everything below is **measured live
+from the real 2023 validation split**, not projected.
+
+**Still zero paid inference.** No LLM call of any kind was made against
+any GAIA question. Loading a dataset and counting rows is free; so is
+the official scorer. Nothing was generated and nothing was scored.
+
+The user accepted the dataset terms in a browser, and
+`GET /api/datasets/gaia-benchmark/GAIA/auth-check` now returns
+**HTTP 200 "OK"** (was 403). `load_dataset("gaia-benchmark/GAIA",
+"2023_all", split="validation")` succeeds.
+
+---
+
+## O. Live dataset audit — real numbers
+
+### O.1 Total N — the 165-vs-166 discrepancy is RESOLVED
+
+> ## **N = 165**
+
+The HF `2023_all` **validation** split contains exactly **165 rows**,
+all with a non-empty `task_id` and `Question`, and **165 unique task
+ids** (no duplicates, nothing dropped by the adapter's parser). The
+GAIA paper's prose figure of "166 annotated questions" does **not**
+match the released split. Reported as measured; no attempt is made to
+explain the paper's number.
+
+(For orientation, the same load reports the **test** split at 301 rows.)
+
+### O.2 Level distribution — validation split specifically
+
+Never previously available to this project: the paper's Table 4 is
+whole-dataset, not per-split.
+
+| Level | Count | Share |
+|---|---|---|
+| 1 | **53** | 32.1% |
+| 2 | **86** | 52.1% |
+| 3 | **26** | 15.8% |
+| **Total** | **165** | |
+
+### O.3 Attachment distribution — and the pass-2 assumption was correct
+
+**38 of 165 tasks (23.0%) carry an attachment; 127 (77.0%) do not.**
+There are **38 unique file names and zero duplicates**, so the
+one-file-per-task assumption pass 2 flagged as "the weak link" **holds
+exactly**, and the per-task extension counts are **identical** to the
+public file listing pass 1 derived:
+
+| Extension | Count | Modality | Status |
+|---|---|---|---|
+| `.xlsx` | 13 | tabular | supported |
+| `.png` | 8 | image | **UNSUPPORTED** |
+| `.mp3` | 3 | audio | **UNSUPPORTED** |
+| `.pdf` | 3 | pdf | supported *(new in pass 2)* |
+| `.jpg` | 2 | image | **UNSUPPORTED** |
+| `.zip` | 2 | archive | supported |
+| `.csv` | 1 | tabular | supported |
+| `.docx` | 1 | office_doc | supported *(new in pass 2)* |
+| `.jsonld` | 1 | text | supported |
+| `.pdb` | 1 | text | supported |
+| `.pptx` | 1 | office_doc | supported *(new in pass 2)* |
+| `.py` | 1 | text | supported |
+| `.txt` | 1 | text | supported |
+| **Total** | **38** | | **25 supported / 13 refused** |
+
+By modality: tabular 14, image 10, text 4, audio 3, pdf 3, archive 2,
+office_doc 2.
+
+**Every one of the 25 supported attachments was actually read through
+the substrate's own readers, live** — including all 3 real PDFs, the
+real `.docx` and the real `.pptx`. Pass 2's new parsers work on real
+GAIA data, not only on fixtures. **All 13 unsupported attachments raised
+`GaiaSubstrateError` when accessed**, confirming the fairness line holds
+against the real corpus and not just the synthetic one.
+
+### O.4 Task-observable capability classification
+
+Derived from **file extension and declared attachment presence only** —
+never gold, never `Annotator Metadata`. (The adapter has no parameter
+through which either could reach this; see §C.3 and §K.2.)
+
+| Required capability set | Tasks |
+|---|---|
+| web + computation (no attachment) | **127** |
+| web + computation + attachment + **tabular** | **14** |
+| web + computation + attachment (unreadable — image/audio) | **15** |
+| web + computation + attachment + **document** | **9** |
+
+The 9 `document` tasks are the text/PDF/office group (4 text + 3 PDF +
+2 office). The 15 "attachment only" tasks are the 13 image/audio ones
+plus the 2 archives (a `.zip` gets an `ATTACHMENT` territory but no
+document/tabular one, since a member listing is neither).
+
+Per-level capability profile of the **retained** subset:
+
+| Level | no attachment | tabular | text | pdf | office_doc | archive |
+|---|---|---|---|---|---|---|
+| 1 | 42 | 3 | 2 | 0 | 2 | 0 |
+| 2 | 66 | 7 | 1 | 3 | 0 | 1 |
+| 3 | 19 | 4 | 1 | 0 | 0 | 1 |
+
+Worth noting for anyone reading a future results table: **77% of GAIA
+validation needs no attachment at all.** This substrate's attachment
+handling — the bulk of the engineering in both passes — governs under a
+quarter of the benchmark. The dominant capability is open-web
+information seeking, which is exactly what the GAIA paper claims.
+
+---
+
+## P. The frozen subset — REAL, and the manifest is now `status: "frozen"`
+
+`third_party/manifests/gaia/manifest.json` has been **rewritten live by
+`scripts/freeze_gaia_manifest.py`** and is frozen.
+`require_frozen_manifest()` now **accepts** it. Its task-id list was
+independently re-derived from a fresh load and compared — identical.
+
+| Quantity | Value |
+|---|---|
+| Validation total | **165** |
+| **Retained** | **152** |
+| **Excluded** | **13** |
+| Excluded — IMAGE | **10** (8 `.png`, 2 `.jpg`) |
+| Excluded — AUDIO | **3** (`.mp3`) |
+| Excluded — VIDEO | **0** |
+| Excluded — any other reason | **0** |
+
+**Every exclusion is a perception modality withheld from every method
+equally.** No task was excluded for being hard, for a gold answer, for
+annotator metadata, or for any model's performance — none of which is
+reachable from the selector by construction, and none of which exists
+yet anyway, since no run has happened.
+
+### Retained level distribution
+
+| Level | Retained | (of) | Excluded |
+|---|---|---|---|
+| 1 | **49** | 53 | 4 (2 image, 2 audio) |
+| 2 | **78** | 86 | 8 (7 image, 1 audio) |
+| 3 | **25** | 26 | 1 (1 image) |
+| **Total** | **152** | 165 | 13 |
+
+The exclusions are close to level-proportional (7.5% / 9.3% / 3.8%), so
+the subset does **not** systematically strip out hard tasks — worth
+stating explicitly, since "the subset quietly dropped the difficult
+ones" is the first thing a reviewer should suspect of any subset.
+
+### Retained file-type distribution
+
+| Extension | Count |
+|---|---|
+| *(no attachment)* | **127** |
+| `.xlsx` | 13 |
+| `.pdf` | **3** |
+| `.zip` | 2 |
+| `.csv`, `.docx`, `.jsonld`, `.pdb`, `.pptx`, `.py`, `.txt` | 1 each |
+| **Total** | **152** |
+
+**Pass 2's extensions earned their keep**: the 3 PDF + 1 DOCX + 1 PPTX
+tasks are in the subset *because* of this pass's work. Without them the
+subset would be 147 and would exclude 5 tasks for reasons that were
+scope decisions rather than fairness judgements.
+
+### Manifest content discipline
+
+The file is 15 061 bytes of **task IDs, counts and reasons only**. A
+programmatic scan for every retained question's opening text, every gold
+answer, and every annotator-metadata fragment found **no dataset content
+in it**. (One match flagged and dismissed: the gold answer to one task
+is literally the word *"inference"*, which collided with the phrase
+"zero paid inference" in the manifest's own provenance note.) The
+ledger's `file_name` values are of the form `<task_id>.<ext>` — GAIA's
+own naming — so they carry no content either. Raw data lives in
+`.gaia-data/`, which is gitignored; **no GAIA question, answer or
+attachment byte is committed anywhere.**
+
+---
+
+## Q. Cost estimate — now grounded in REAL GAIA token measurements
+
+Supersedes §L.2–§L.3. The method-level per-task costs are still
+transferred from this project's own completed runs on other substrates
+(no GAIA run has happened), but the **GAIA-side context is now measured
+rather than assumed.**
+
+### Q.1 Measured GAIA context (o200k_base, real data)
+
+| Component | Tokens |
+|---|---|
+| Official GAIA system prompt (vendored verbatim) | **155** |
+| `GaiaToolRegistry.tool_specs()` rendered | **266** |
+| Question, retained subset (n=152): min / p50 / **mean** / p90 / max | 12 / 50 / **66.3** / 113 / 448 |
+| **All 152 questions combined** | **10 083** |
+| Attachment render, 25 supported files: min / median / **mean** / max | 6 / 279 / **3 619** / **75 790** |
+| **All 25 attachments combined** | **90 467** |
+
+**GAIA questions are tiny** — a median of 50 tokens. The *entire*
+retained question set is 10 083 tokens, less than a single ReAct
+trajectory's input on SWE-QA-Pro. Cost is therefore driven almost
+entirely by what a method *fetches*, not by the benchmark's own text.
+
+**One attachment dominates everything.** The `.pdb` (Protein Data Bank)
+file renders to **75 790 tokens — 84% of all attachment tokens in the
+retained subset**, and it hit the substrate's 200 000-character read
+cap, so the real file is larger still. Putting it into context once
+costs **$0.15 in input tokens alone**, roughly 33× the entire Direct
+run on that task. Excluding it, the other 24 attachments average **612**
+tokens (median 279) and total 14 677. **Budget and context-window
+planning should treat that one task as a special case**, and any method
+that re-reads it across turns will pay repeatedly.
+
+### Q.2 Direct — now computable bottom-up, entirely from real numbers
+
+Input = 155 (system prompt) + 66.3 (mean question) = **221.3 tokens**.
+Output uses the measured 553-token anchor (likely an overestimate: GAIA's
+official prompt demands a terse `FINAL ANSWER:`).
+
+At gpt-4.1 pricing ($2.00 / $8.00 per 1M): **$0.004867/task → $0.74 over
+152 tasks.** The independently measured SWE-QA-Pro anchor was
+$0.0046/task → $0.70. **The bottom-up and measured figures agree to
+within 6%**, which is a useful sanity check on the whole transfer.
+
+### Q.3 Full estimate, retained subset N = 152
+
+| Method | $/task | × 152 | Basis |
+|---|---|---|---|
+| Direct | 0.0049 | **$0.74** | **bottom-up from real GAIA tokens** |
+| Dense Retrieval | 0.0143 | **$2.17** | measured (RepoProbe, n=83) |
+| Sparse Retrieval | 0.0194 | **$2.95** | measured (SWE-QA-Pro, n=80) |
+| S2G-RAG | ~0.04–0.06 | **$6–9** | **EXTRAPOLATED — no implementation exists** |
+| ReAct (matched) | 0.1094 | **$16.63** | measured (SWE-QA-Pro, n=80) |
+| ANTMAN | 0.4986 | **$75.79** | measured (SWE-QA-Pro, n=80) |
+| **Total, one pass of all six** | | **≈ $104–107** | |
+| *Judging* | *0.0000* | ***$0.00*** | *deterministic official scorer* |
+
+**GAIA scoring is deterministic and free** — the vendored official
+`question_scorer`, run once, `n_judge_calls = 0`. The equivalent judge
+line item on this suite's other substrates is **$0.01866/task/method**,
+i.e. **$17.02** across 6 methods × 152 tasks that GAIA does not pay.
+For the cheap methods that item *dominates*: SWE-QA-Pro's `direct` cost
+$0.0046 to generate and $0.0187 to judge — **judging was 4× generation.**
+On GAIA, Direct costs $0.0049/task, full stop.
+
+### Q.4 Remaining uncertainty — smaller than pass 2, not gone
+
+Now settled: **N (165), the retained subset (152), the level split, the
+attachment mapping, question token sizes, and attachment token sizes**
+are all measured.
+
+Still unmeasured, because it requires an actual run:
+
+* **Fetched web-page volume.** 77% of retained tasks have no attachment,
+  so for them cost is *entirely* determined by how much page text
+  `search`/`open_url` pull in — which no GAIA run has produced. This is
+  now the single largest source of error, and it bears on ReAct and
+  ANTMAN, which are 89% of the total.
+* **Directional pull is genuinely two-sided.** Retrieval-style methods
+  should be **cheaper** on GAIA (no repo corpus; questions are 66 tokens,
+  not thousands). Loop-shaped methods could be **dearer** (web pages are
+  typically larger than code chunks, and GAIA's multi-hop questions need
+  more rounds than a single-repo question).
+* **Variance exceeds the mean.** ReAct's sd (0.126) > its mean (0.109);
+  ANTMAN's max (2.82) is 5.7× its mean. **Budget on p90**: ReAct
+  **$45.71**, ANTMAN **$149.89** over 152 tasks.
+* **The `.pdb` tail** (§Q.1) is a per-task outlier no aggregate captures.
+
+**Planning figure: $100–150 for one full six-method pass at gpt-4.1,
+ANTMAN ~70% of it, realistic worst case ~$250.** I would not quote
+tighter without a pilot. **A 10-task pilot across all six methods costs
+about $7** and would convert the last transferred numbers into
+measurements. That remains the recommended next step — and it is the
+user's decision, not this pass's.
+
+---
+
+## R. Status after pass 3
+
+### Tests (supersedes §M's counts)
+
+| Suite | Result |
+|---|---|
+| GAIA tests | **265 passed** (138 after pass 1 → 258 after pass 2 → **265**) |
+| Full suite `pytest tests/ -q` | **1072 passed, 1 skipped, 20 failed** |
+| `ruff check .` | **clean** |
+
+The 7 new tests pin the **frozen manifest's real numbers** — N=165,
+retained 152, excluded 13, the level split 49/78/25, that every
+exclusion is a perception modality, that no id appears in both the
+subset and the ledger, and that the retained subset still spans every
+supported extension. They assert the committed artefact rather than the
+algorithm, so a re-freeze that moves a number has to be a deliberate,
+visible edit rather than silent drift under a results table citing it.
+
+The 20 failures are unchanged and remain **pre-existing and
+environment-only** — all `ModuleNotFoundError: fastembed` (the optional
+`dense` extra), independently reproduced on the base commit with this
+work stashed. Nothing in any pass touches ChainRAG or dense retrieval.
+
+### Summary
+
+| Item | Status |
+|---|---|
+| Live validation audit | **DONE** — N=165, levels 53/86/26, 38 attachments |
+| PyMuPDF / PDF | **DONE** — verified on all 3 real GAIA PDFs |
+| DOCX / PPTX | **DONE** — verified on the real GAIA `.docx` and `.pptx` |
+| Sandboxed `run_python` | **DONE** — writeup and residual risks in §J.3 |
+| Frozen subset manifest | **DONE** — `status: "frozen"`, 152 ids, 13-task ledger |
+| Cost estimate | **DONE** — §Q, grounded in real GAIA tokens |
+| Paid inference run | **NONE.** Zero, across all three passes. |
+
+Open for the user:
+
+1. **Review the sandbox** (§J.3), especially limit 2 (network guard is
+   interpreter-level only) and **limit 5 — the POSIX `setrlimit` path
+   has never been exercised, and sweeps run on Linux.** Re-run
+   `tests/test_gaia_sandbox.py` on DeltaAI before trusting it there.
+2. **Reporting discipline** when results eventually exist: this is
+   **"GAIA-validation, supported-modality subset, N=152"**, and it is
+   **not comparable to published full-validation GAIA numbers** (which
+   are over 165 and include the 13 perception tasks). Print the
+   exclusion ledger alongside any accuracy figure. Running the full 165
+   with the 13 as declared failures remains available as a disclosed
+   secondary.
+3. **Decide on the ~$7 pilot** before committing ~$105.

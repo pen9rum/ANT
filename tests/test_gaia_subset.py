@@ -338,3 +338,84 @@ def test_exclusion_record_serializes_every_field():
         "support_status",
         "reason",
     }
+
+
+# --------------------------------------------------------------------
+# The FROZEN manifest -- pins the real, live-computed numbers
+#
+# These assert the committed artefact, not the algorithm. If someone
+# re-freezes and the numbers move, that is either a real dataset change
+# or a rule change, and either way it must be a deliberate, visible edit
+# rather than a silent drift under a results table that cites this file.
+# --------------------------------------------------------------------
+
+
+def _frozen() -> dict:
+    return json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
+
+
+def test_the_frozen_manifest_pins_the_live_validation_total():
+    """N = 165, measured live. This resolves the discrepancy the pass-1
+    report left open: the paper's prose says "166 annotated questions",
+    the HF validation split actually ships 165 rows."""
+    assert _frozen()["counts"]["validation_total"] == 165
+
+
+def test_the_frozen_manifest_pins_the_retained_and_excluded_counts():
+    counts = _frozen()["counts"]
+    assert counts["retained"] == 152
+    assert counts["excluded"] == 13
+    assert counts["retained"] + counts["excluded"] == counts["validation_total"]
+    assert len(_frozen()["task_ids"]) == 152
+    assert len(_frozen()["exclusion_ledger"]) == 13
+
+
+def test_every_exclusion_is_a_perception_modality():
+    """The only reason any task is dropped must be a modality withheld
+    from EVERY method equally. Anything else in this ledger would mean
+    the subset had been selected on something other than capability."""
+    assert _frozen()["counts"]["excluded_by_modality"] == {"image": 10, "audio": 3}
+    for record in _frozen()["exclusion_ledger"]:
+        assert record["modality"] in ("image", "audio")
+        assert record["support_status"] == "unsupported"
+
+
+def test_the_frozen_manifest_pins_the_retained_level_distribution():
+    assert _frozen()["retained_level_distribution"] == {"1": 49, "2": 78, "3": 25}
+
+
+def test_the_retained_subset_still_spans_every_supported_modality():
+    """The point of adding PDF/DOCX/PPTX was to retain those tasks. If a
+    future change silently dropped one, the headline count would barely
+    move but the capability coverage claim would be false."""
+    distribution = _frozen()["retained_extension_distribution"]
+    for extension in (".xlsx", ".pdf", ".docx", ".pptx", ".csv", ".zip", ".txt", ".py"):
+        assert distribution.get(extension), extension
+    assert distribution[".pdf"] == 3
+    assert distribution[".docx"] == 1
+    assert distribution[".pptx"] == 1
+
+
+def test_no_task_id_appears_in_both_the_subset_and_the_ledger():
+    manifest = _frozen()
+    assert not set(manifest["task_ids"]) & {r["task_id"] for r in manifest["exclusion_ledger"]}
+
+
+def test_the_frozen_manifest_carries_no_question_or_answer_text():
+    """GAIA's gate forbids resharing. Task IDs and counts only.
+
+    Checked on the DATA-carrying sections: the prose fields deliberately
+    name GAIA's column headers in order to document the leakage
+    boundary, so scanning the whole document would forbid the manifest
+    from describing itself."""
+    manifest = _frozen()
+    data = json.dumps(
+        {k: manifest[k] for k in ("task_ids", "exclusion_ledger", "counts",
+                                  "retained_level_distribution",
+                                  "retained_extension_distribution")}
+    )
+    for header in ("Question", "Final answer", "Annotator Metadata", "Steps"):
+        assert header not in data
+    # Ledger file names are `<task_id>.<ext>`, which carries no content.
+    for record in manifest["exclusion_ledger"]:
+        assert record["file_name"].startswith(record["task_id"])
