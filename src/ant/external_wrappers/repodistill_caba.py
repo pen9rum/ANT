@@ -125,6 +125,29 @@ MAX_PPL_TOKENS = 4096
 # suite runs concurrently (embedding, other baselines) can coexist.
 TORCH_THREADS = int(os.getenv("ANT_REPODISTILL_TORCH_THREADS", "4"))
 
+# ANT_REPODISTILL_DEVICE: "auto" (default, use CUDA if torch reports it
+# available, else CPU), "cpu" (force CPU even on a CUDA-capable machine --
+# e.g. for a controlled before/after comparison), or an explicit device
+# string ("cuda", "cuda:0"). Never silently falls back from an explicitly
+# requested "cuda"/"cuda:N" to CPU -- a caller who asked for GPU and didn't
+# get it should see a real error, not a silent, much-slower CPU run that
+# looks identical in the output schema.
+_DEVICE_SETTING = os.getenv("ANT_REPODISTILL_DEVICE", "auto")
+
+
+def _select_device_and_dtype(torch_module) -> tuple[str, object]:
+    """dtype follows device, not the other way around -- see
+    QwenPerplexityScorer's own docstring for why CPU wants float32 and CUDA
+    wants bfloat16."""
+    if _DEVICE_SETTING == "cpu":
+        return "cpu", torch_module.float32
+    if _DEVICE_SETTING == "auto":
+        device = "cuda" if torch_module.cuda.is_available() else "cpu"
+        return device, (torch_module.bfloat16 if device == "cuda" else torch_module.float32)
+    # Explicit "cuda"/"cuda:N": trust the caller, fail loudly (via
+    # .to(device) below) if it's wrong rather than silently downgrading.
+    return _DEVICE_SETTING, torch_module.bfloat16
+
 
 @dataclass(frozen=True)
 class Block:
@@ -164,7 +187,10 @@ class QwenPerplexityScorer:
     same process and re-loading a 0.5B model per question would dominate
     wall-clock. float32 on CPU is deliberate -- CPU float16 inference in
     torch is slower than float32, not faster, and numerical stability of
-    a perplexity readout matters more here than memory.
+    a perplexity readout matters more here than memory. On CUDA the
+    reasoning flips (bfloat16 is faster AND numerically fine on GPU
+    tensor cores), so device selection and dtype are decided together,
+    never dtype alone -- see `_select_device_and_dtype`.
 
     Local and free. No network at inference time (weights come from the
     HuggingFace cache), no API cost, ever.
@@ -176,13 +202,19 @@ class QwenPerplexityScorer:
 
         # Set before any forward pass, not left to whatever torch's default
         # happened to pick up from the environment at import time -- see
-        # TORCH_THREADS' own comment for why this is needed at all.
+        # TORCH_THREADS' own comment for why this is needed at all. Harmless
+        # on a CUDA device too -- it only bounds the CPU-side intra-op pool
+        # (tokenization, data prep), never GPU kernel scheduling.
         torch.set_num_threads(TORCH_THREADS)
+
+        self._device, dtype = _select_device_and_dtype(torch)
 
         self.model_name = model_name
         self._torch = torch
         self._tokenizer = AutoTokenizer.from_pretrained(model_name)
-        self._model = AutoModelForCausalLM.from_pretrained(model_name, dtype=torch.float32)
+        self._model = AutoModelForCausalLM.from_pretrained(model_name, dtype=dtype).to(
+            self._device
+        )
         self._model.eval()
 
     # --- tokens ---
@@ -216,7 +248,7 @@ class QwenPerplexityScorer:
         if len(input_ids) < 2:
             return [float("nan")] * len(lines)
 
-        ids = self._torch.tensor([input_ids])
+        ids = self._torch.tensor([input_ids]).to(self._device)
         with self._torch.no_grad():
             logits = self._model(ids).logits
         log_probs = self._torch.log_softmax(logits[0, :-1].float(), dim=-1)
@@ -274,7 +306,7 @@ class QwenPerplexityScorer:
         all_ids = [*prefix_ids, *text_ids]
         if len(all_ids) < 2:
             return float("nan")
-        ids = self._torch.tensor([all_ids])
+        ids = self._torch.tensor([all_ids]).to(self._device)
         with self._torch.no_grad():
             logits = self._model(ids).logits
         log_probs = self._torch.log_softmax(logits[0, :-1].float(), dim=-1)
@@ -303,9 +335,10 @@ class QwenPerplexityScorer:
             )["input_ids"]
             if ids.shape[1] == 0:
                 ids = self._torch.tensor([[self._tokenizer.eos_token_id or 0]])
+            ids = ids.to(self._device)
             with self._torch.no_grad():
                 hidden = self._model(ids, output_hidden_states=True).hidden_states[-1]
-            vectors.append(hidden[0].float().mean(dim=0).numpy())
+            vectors.append(hidden[0].float().cpu().mean(dim=0).numpy())
         matrix = np.asarray(vectors, dtype=np.float32)
         norms = np.linalg.norm(matrix, axis=1, keepdims=True)
         norms[norms == 0] = 1.0

@@ -19,8 +19,9 @@ prints for its FIRST few completed rows before letting the rest run; this
 is deliberately not auto-launched.
 
 Usage:
-    python scripts/run_worker_model_bakeoff.py \\
-        --worker-model qwen3-8b --worker-base-url http://gh-node-042:8000/v1
+    # --worker-model defaults to "qwen3-8b" -- omit it for the default run:
+    python scripts/run_worker_model_bakeoff.py --worker-base-url http://gh-node-042:8000/v1
+    # backup checkpoint, explicit:
     python scripts/run_worker_model_bakeoff.py \\
         --worker-model qwen3.5-9b --worker-base-url http://gh-node-042:8001/v1
 """
@@ -46,6 +47,18 @@ from ant.benchmarks.sweqa_pro import SweQaProAdapter  # noqa: E402
 from ant.evaluation_suite.runner import run_suite  # noqa: E402
 
 ORCHESTRATOR_MODEL = "gpt-4.1"
+
+# Default worker checkpoint: Qwen3-8B (Apache 2.0, HF repo "Qwen/Qwen3-8B"),
+# satisfies a strict "<=8B parameters" reading. Qwen3.5-9B (Apache 2.0, HF
+# repo "Qwen/Qwen3.5-9B") is the documented backup/preferred alternative if
+# an "8B-class" (not exact-8B) reading is acceptable -- see this pilot's own
+# design notes for the tradeoff (stronger agentic/tool-use benchmarks vs.
+# being technically 9B). Both names here are the `served-model-name` the
+# vLLM server is launched with (see scripts/deltaai_vllm_worker_server.sbatch's
+# MODEL_NAME), not the HF repo id itself -- --worker-model must match
+# whichever name that server was actually started with.
+DEFAULT_WORKER_MODEL = "qwen3-8b"
+BACKUP_WORKER_MODEL = "qwen3.5-9b"
 
 _MANIFEST_DIR = REPO_ROOT / "third_party" / "manifests" / "long_context"
 _DOCUMENT_MANIFESTS = [
@@ -132,8 +145,17 @@ def _build_task_set() -> dict[str, list]:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--worker-model", required=True, help="served-model-name on the vLLM server")
-    parser.add_argument("--worker-base-url", required=True, help="e.g. http://gh-node-042:8000/v1")
+    parser.add_argument(
+        "--worker-model",
+        default=DEFAULT_WORKER_MODEL,
+        help=f"served-model-name on the vLLM server (default: {DEFAULT_WORKER_MODEL}; "
+        f"pass {BACKUP_WORKER_MODEL!r} for the backup checkpoint)",
+    )
+    parser.add_argument(
+        "--worker-base-url",
+        required=True,
+        help="e.g. http://gh-node-042:8000/v1 -- no default, must be a real, live vLLM server",
+    )
     parser.add_argument("--worker-max-context-tokens", type=int, default=16384)
     parser.add_argument("--max-rounds", type=int, default=6)
     args = parser.parse_args()
