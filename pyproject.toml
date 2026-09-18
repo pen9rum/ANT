@@ -20,6 +20,21 @@ dependencies = [
 bench = [
   "datasets>=3.0",
 ]
+# GAIA substrate extra. Kept OUT of the core dependency set on purpose:
+# adding a ~20 MiB native wheel to what every other benchmark's CI
+# installs would be a cost paid by substrates that never read a PDF.
+#
+# PyMuPDF is the ONLY third-party reader the GAIA substrate needs --
+# .xlsx, .csv, .docx and .pptx are all read with the stdlib (zipfile +
+# xml.etree), see `evaluation_suite/gaia_scope.py`. PDF is the one
+# format with no honest stdlib path.
+#
+# Lower bound 1.24: `import pymupdf` (rather than the legacy `fitz`
+# alias, which now warns) is only available from 1.24 onwards. Upper
+# bound <2: PyMuPDF has broken API across majors before.
+gaia = [
+  "pymupdf>=1.24,<2",
+]
 dense = [
   "fastembed>=0.7",
 ]
@@ -54,7 +69,17 @@ testpaths = ["tests"]
 [tool.ruff]
 line-length = 100
 target-version = "py312"
-exclude = ["repos", "output", ".ant"]
+# `third_party` holds artifacts VENDORED BYTE-FOR-BYTE from each
+# benchmark's own official repository (RepoProbe's prompt templates,
+# GAIA's scorer.py). They are deliberately not ours to reformat: linting
+# them reports 17 findings that must never be "fixed", and an actual
+# `ruff --fix` over them would silently break fidelity -- GAIA's scorer
+# is SHA-256-pinned at import (see ant.evaluation_suite.gaia_scorer), so
+# a reformat there fails every GAIA run outright. Excluded rather than
+# per-file-ignored because the rule is categorical: nothing under
+# `third_party` is authored here. (`[tool.pyright]` already scopes itself
+# to src/tests for the same reason.)
+exclude = ["repos", "output", ".ant", "third_party"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]

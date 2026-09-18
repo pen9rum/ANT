@@ -1,0 +1,323 @@
+{
+  "_README": [
+    "HAND-AUTHORED SYNTHETIC FIXTURES. Contains ZERO real GAIA content.",
+    "Every question, answer, attachment and annotator-metadata string below was",
+    "invented for this repository to exercise the GAIA adapter, substrate and",
+    "scorer offline. None of it is copied, paraphrased, or derived from the gated",
+    "gaia-benchmark/GAIA dataset -- which is why this file is safe to commit while",
+    "real GAIA material never is (see PROVENANCE.md).",
+    "",
+    "Field names deliberately mirror GAIA's own row schema ('Question', 'Level',",
+    "'Final answer', 'file_name', 'Annotator Metadata') so the adapter's parsing",
+    "path is identical for synthetic and live rows -- a fixture that used a",
+    "different shape would test a code path the real data never takes.",
+    "",
+    "The 'Annotator Metadata' blocks exist specifically so leakage tests have",
+    "something recognisable to hunt for: each contains a distinctive sentinel",
+    "string that must never appear on any agent-visible surface."
+  ],
+  "examples": [
+    {
+      "task_id": "synthetic-0001",
+      "Question": "Which fictional city is described as the capital of Quorvia in the Quorvian Almanac?",
+      "Level": "1",
+      "Final answer": "Vandermeer",
+      "file_name": "",
+      "Annotator Metadata": {
+        "Steps": "SENTINEL_STEPS_0001 Search the almanac index, then read the capitals table.",
+        "Number of steps": "2",
+        "Tools": "SENTINEL_TOOLS_0001 web browser, search engine",
+        "Number of tools": "2",
+        "How long did this take?": "5 minutes"
+      }
+    },
+    {
+      "task_id": "synthetic-0002",
+      "Question": "Using the attached sales file, what is the total number of widgets sold across all quarters?",
+      "Level": "1",
+      "Final answer": "1234",
+      "file_name": "quarterly_widgets.csv",
+      "Annotator Metadata": {
+        "Steps": "SENTINEL_STEPS_0002 Open the CSV and sum the Units column.",
+        "Number of steps": "2",
+        "Tools": "SENTINEL_TOOLS_0002 spreadsheet reader, calculator",
+        "Number of tools": "2",
+        "How long did this take?": "4 minutes"
+      }
+    },
+    {
+      "task_id": "synthetic-0003",
+      "Question": "In the attached inventory workbook, which two produce items have a stock count above 40? Answer as a comma separated list in alphabetical order.",
+      "Level": "2",
+      "Final answer": "apples, bananas",
+      "file_name": "inventory.xlsx",
+      "Annotator Metadata": {
+        "Steps": "SENTINEL_STEPS_0003 Open the workbook, filter stock > 40, sort alphabetically.",
+        "Number of steps": "3",
+        "Tools": "SENTINEL_TOOLS_0003 spreadsheet reader",
+        "Number of tools": "1",
+        "How long did this take?": "6 minutes"
+      }
+    },
+    {
+      "task_id": "synthetic-0004",
+      "Question": "According to the attached field notes, what is the recorded name of the second survey station?",
+      "Level": "2",
+      "Final answer": "Redwood Bluff",
+      "file_name": "field_notes.txt",
+      "Annotator Metadata": {
+        "Steps": "SENTINEL_STEPS_0004 Read the notes and locate station two.",
+        "Number of steps": "1",
+        "Tools": "SENTINEL_TOOLS_0004 text reader",
+        "Number of tools": "1",
+        "How long did this take?": "2 minutes"
+      }
+    },
+    {
+      "task_id": "synthetic-0005",
+      "Question": "How many distinct shapes appear in the attached diagram?",
+      "Level": "2",
+      "Final answer": "3",
+      "file_name": "diagram.png",
+      "Annotator Metadata": {
+        "Steps": "SENTINEL_STEPS_0005 Look at the image and count the shapes.",
+        "Number of steps": "1",
+        "Tools": "SENTINEL_TOOLS_0005 image recognition",
+        "Number of tools": "1",
+        "How long did this take?": "1 minute"
+      }
+    },
+    {
+      "task_id": "synthetic-0006",
+      "Question": "In the attached briefing recording, what year does the speaker say the survey began?",
+      "Level": "3",
+      "Final answer": "1987",
+      "file_name": "briefing.mp3",
+      "Annotator Metadata": {
+        "Steps": "SENTINEL_STEPS_0006 Listen to the recording and transcribe the year.",
+        "Number of steps": "1",
+        "Tools": "SENTINEL_TOOLS_0006 speech recognition",
+        "Number of tools": "1",
+        "How long did this take?": "3 minutes"
+      }
+    },
+    {
+      "task_id": "synthetic-0007",
+      "Question": "What is the report number printed on the first page of the attached document?",
+      "Level": "3",
+      "Final answer": "QR-7781",
+      "file_name": "report.pdf",
+      "Annotator Metadata": {
+        "Steps": "SENTINEL_STEPS_0007 Open the PDF and read the header.",
+        "Number of steps": "1",
+        "Tools": "SENTINEL_TOOLS_0007 pdf reader",
+        "Number of tools": "1",
+        "How long did this take?": "2 minutes"
+      }
+    },
+    {
+      "task_id": "synthetic-0008",
+      "Question": "How many files are contained in the attached archive?",
+      "Level": "1",
+      "Final answer": "2",
+      "file_name": "bundle.zip",
+      "Annotator Metadata": {
+        "Steps": "SENTINEL_STEPS_0008 Extract the archive and count the members.",
+        "Number of steps": "1",
+        "Tools": "SENTINEL_TOOLS_0008 archive utility",
+        "Number of tools": "1",
+        "How long did this take?": "2 minutes"
+      }
+    },
+    {
+      "task_id": "synthetic-0009",
+      "Question": "According to the Guild charter, how often must every province of Quorvia be surveyed?",
+      "Level": "1",
+      "Final answer": "Once each decade",
+      "file_name": "charter.docx",
+      "Annotator Metadata": {
+        "Steps": "SENTINEL_STEPS_0009 Open the charter and read Article One.",
+        "Number of steps": "2",
+        "Tools": "SENTINEL_TOOLS_0009 word document reader",
+        "Number of tools": "1",
+        "How long did this take?": "3 minutes"
+      }
+    },
+    {
+      "task_id": "synthetic-0010",
+      "Question": "What is the title of the last slide of the Quorvia survey roadmap deck?",
+      "Level": "2",
+      "Final answer": "Phase Ten",
+      "file_name": "roadmap.pptx",
+      "Annotator Metadata": {
+        "Steps": "SENTINEL_STEPS_0010 Open the deck and read the final slide.",
+        "Number of steps": "2",
+        "Tools": "SENTINEL_TOOLS_0010 powerpoint reader",
+        "Number of tools": "1",
+        "How long did this take?": "2 minutes"
+      }
+    }
+  ],
+  "attachments": {
+    "quarterly_widgets.csv": {
+      "kind": "csv",
+      "rows": [
+        [
+          "Quarter",
+          "Units",
+          "Region"
+        ],
+        [
+          "Q1",
+          "300",
+          "North"
+        ],
+        [
+          "Q2",
+          "284",
+          "North"
+        ],
+        [
+          "Q3",
+          "350",
+          "South"
+        ],
+        [
+          "Q4",
+          "300",
+          "South"
+        ]
+      ]
+    },
+    "inventory.xlsx": {
+      "kind": "xlsx",
+      "rows": [
+        [
+          "Item",
+          "Stock"
+        ],
+        [
+          "apples",
+          "52"
+        ],
+        [
+          "bananas",
+          "47"
+        ],
+        [
+          "cherries",
+          "12"
+        ],
+        [
+          "dates",
+          "8"
+        ]
+      ]
+    },
+    "field_notes.txt": {
+      "kind": "text",
+      "text": "Survey log\nStation one: Alder Flats\nStation two: Redwood Bluff\nStation three: Cedar Gap\n"
+    },
+    "diagram.png": {
+      "kind": "png",
+      "_note": "A real, minimal 1x1 PNG. Never parsed -- it exists so the image modality can be proven to fail EXPLICITLY rather than silently."
+    },
+    "briefing.mp3": {
+      "kind": "binary_stub",
+      "_note": "Not real audio. Exists only to prove the audio modality fails explicitly."
+    },
+    "report.pdf": {
+      "kind": "pdf",
+      "text": "QR-7781 Quorvian Survey Report"
+    },
+    "bundle.zip": {
+      "kind": "zip",
+      "members": {
+        "readme.txt": "Bundle contents listing.\n",
+        "data/values.txt": "17\n"
+      }
+    },
+    "charter.docx": {
+      "kind": "docx",
+      "paragraphs": [
+        "Quorvian Cartographers Guild Charter",
+        "Article One: the Guild shall survey every province of Quorvia once each decade.",
+        "Article Two: the Vandermeer archive holds the master index of all surveys."
+      ],
+      "table_cell": "Survey cadence: 10 years"
+    },
+    "roadmap.pptx": {
+      "kind": "pptx",
+      "slides": [
+        {
+          "lines": [
+            "Quorvia Survey Roadmap",
+            "Prepared by the Cartographers Guild"
+          ],
+          "notes": "Opening slide; keep to thirty seconds."
+        },
+        {
+          "lines": [
+            "Phase One",
+            "Chart the northern marches"
+          ]
+        },
+        {
+          "lines": [
+            "Phase Two",
+            "Re-index the Vandermeer archive"
+          ]
+        },
+        {
+          "lines": [
+            "Phase Three",
+            "Publish the decadal atlas"
+          ]
+        },
+        {
+          "lines": [
+            "Phase Four",
+            "Retire the provisional charts"
+          ]
+        },
+        {
+          "lines": [
+            "Phase Five",
+            "Audit the marker stones"
+          ]
+        },
+        {
+          "lines": [
+            "Phase Six",
+            "Commission new survey rods"
+          ]
+        },
+        {
+          "lines": [
+            "Phase Seven",
+            "Train the junior cartographers"
+          ]
+        },
+        {
+          "lines": [
+            "Phase Eight",
+            "Review the eastern boundary"
+          ]
+        },
+        {
+          "lines": [
+            "Phase Nine",
+            "Reconcile the ledger"
+          ]
+        },
+        {
+          "lines": [
+            "Phase Ten",
+            "Seal the decade's record"
+          ],
+          "notes": "Closing slide; the sealing ceremony is in Vandermeer."
+        }
+      ]
+    }
+  }
+}

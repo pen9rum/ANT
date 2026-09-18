@@ -11,6 +11,10 @@ __pycache__/
 logs/
 output/
 repos/
+# Raw GAIA material. The dataset is gated and its own terms forbid
+# resharing it outside a gated/private HF repo, so downloaded questions,
+# answers and attachments must never enter version control.
+.gaia-data/
 repos-repoprobe/
 document-envs/
 third_party/checkouts/
