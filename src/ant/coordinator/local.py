@@ -11,6 +11,11 @@ from typing import Protocol, cast
 
 import numpy as np
 
+from ant.coordinator.ablations import (
+    AdaptiveCoordinationProfile,
+    active_coordination_profile,
+    resolve_profile,
+)
 from ant.coordinator.graph_analyzer import compute_frontier, find_cycles
 from ant.coordinator.repair import (
     apply_alignment_verdicts,
@@ -415,6 +420,7 @@ class LocalCoordinator:
         coverage_gap_node_ids: list[str] | None = None,
         targeted_need_ids: set[str] | None = None,
         search_top_k: int = 4,
+        coordination_profile: str | AdaptiveCoordinationProfile | None = None,
     ) -> EvidenceState:
         # max_rounds is a blunt outer safety ceiling only -- the real
         # per-node/per-subgraph stopping logic is the Dependency Graph
@@ -457,6 +463,11 @@ class LocalCoordinator:
         # this became a passthrough parameter) -- a disclosed knob for
         # controlled boundary-expansion experiments only, never read by
         # routing/Need-Graph/recovery logic itself.
+        profile = (
+            active_coordination_profile()
+            if coordination_profile is None
+            else resolve_profile(coordination_profile)
+        )
         evidence: list[Evidence] = list(initial_evidence) if initial_evidence is not None else []
         seen_worker_ids: set[str] = set()
         # cast: the factory's declared return type is intentionally the
@@ -477,6 +488,7 @@ class LocalCoordinator:
             else None
         )
         recovery = initial_recovery if initial_recovery is not None else RecoveryState()
+        fixed_assignments: dict[str, list[str]] = {}
         observed_needs: list[UnresolvedNeed] = []
         incomplete_parents: list[str] = []
         # Grounded Fast Repair: accumulates across every round of this
@@ -494,8 +506,11 @@ class LocalCoordinator:
             )
             graph = NeedGraph(nodes={"root": root})
         resolution_results: dict[str, NeedResolution] = {}
+        if not profile.allow_recovery:
+            _clear_recovery_state(graph, recovery)
         frontier = _exclude_abandoned(compute_frontier(graph), recovery.excluded_node_ids)
-        _reconcile_stuck_episodes(recovery, frontier.stuck_subgraphs)
+        if profile.allow_recovery:
+            _reconcile_stuck_episodes(recovery, frontier.stuck_subgraphs)
         rounds: list[PlanningRound] = []
 
         for round_index in range(max_rounds):
@@ -523,7 +538,7 @@ class LocalCoordinator:
                 for group in frontier.stuck_subgraphs
                 for need_id in group
                 if recovery.tried_workers_by_node.get(need_id)
-            }
+            } if profile.allow_recovery else {}
             candidate_workers, worker_relevance_rank, per_need_candidates = (
                 self._candidate_workers_for_round(
                     question, graph, frontier, worker_index, worker_card_embedding_index
@@ -532,13 +547,17 @@ class LocalCoordinator:
             candidate_probes = self._probe_need_candidates(
                 question, graph, per_need_candidates, search
             )
-            worker_need_attempt_states = _worker_need_attempt_states_for_prompt(
-                recovery,
-                graph,
-                {
-                    need_id: [worker_by_id[wid] for wid in ranks if wid in worker_by_id]
-                    for need_id, ranks in per_need_candidates.items()
-                },
+            worker_need_attempt_states = (
+                _worker_need_attempt_states_for_prompt(
+                    recovery,
+                    graph,
+                    {
+                        need_id: [worker_by_id[wid] for wid in ranks if wid in worker_by_id]
+                        for need_id, ranks in per_need_candidates.items()
+                    },
+                )
+                if profile.allow_recovery
+                else {}
             )
             plan = _plan_round_with_cycle_validation(
                 self.reasoner,
@@ -555,9 +574,20 @@ class LocalCoordinator:
                 stuck_tried_workers=stuck_tried_workers,
                 candidate_probes=candidate_probes,
                 worker_need_attempt_states=worker_need_attempt_states,
+                validate_graph_updates=profile.allow_need_revision,
             )
-            _enforce_no_repeat_stuck_assignment(plan, stuck_tried_workers)
-            _enforce_local_exhaustion(plan, recovery, graph, worker_by_id)
+            if not profile.allow_need_revision:
+                # Structural/formulation changes are a hard runtime gate,
+                # including proposals gathered for later consolidation.
+                plan.graph_updates.clear()
+            if not profile.allow_recovery:
+                # Recovery covers stuck-only bridge/global fallback actions.
+                plan.special_tactics.clear()
+            if not profile.allow_adaptive_rerouting:
+                _apply_fixed_assignments(plan, graph, frontier, fixed_assignments)
+            if profile.allow_recovery:
+                _enforce_no_repeat_stuck_assignment(plan, stuck_tried_workers)
+                _enforce_local_exhaustion(plan, recovery, graph, worker_by_id)
             if round_index == 0 and forced_first_round_assignments:
                 # Overrides whatever the Orchestrator itself proposed for
                 # these need_ids this round -- a forced repair action must
@@ -570,6 +600,8 @@ class LocalCoordinator:
                 # free, no parallel code path to keep in sync.
                 for need_id, worker_ids in forced_first_round_assignments.items():
                     plan.assignments[need_id] = list(worker_ids)
+            if not profile.allow_adaptive_rerouting:
+                _record_initial_assignments(plan, graph, fixed_assignments)
             # Captured against the graph as it stood entering this round --
             # a new-id graph_updates entry is a PROPOSAL, not a commit (see
             # RoundPlan's docstring); collected now, alongside this round's
@@ -616,9 +648,10 @@ class LocalCoordinator:
                 if node is None or not selected:
                     continue
 
-                recovery.tried_workers_by_node.setdefault(need_id, set()).update(
-                    worker.id for worker in selected
-                )
+                if profile.allow_recovery:
+                    recovery.tried_workers_by_node.setdefault(need_id, set()).update(
+                        worker.id for worker in selected
+                    )
 
                 query = self._query_from_needs(question, [node.detail])
                 observations, round_needs = self._run_selected_workers(
@@ -665,13 +698,14 @@ class LocalCoordinator:
                     if item.worker_id:
                         new_evidence_by_worker[item.worker_id].append(item)
                 for worker in selected:
-                    _record_worker_need_attempt(
-                        recovery,
-                        worker,
-                        need_id,
-                        need_fingerprint_this_round,
-                        new_evidence_by_worker.get(worker.id, []),
-                    )
+                    if profile.allow_recovery:
+                        _record_worker_need_attempt(
+                            recovery,
+                            worker,
+                            need_id,
+                            need_fingerprint_this_round,
+                            new_evidence_by_worker.get(worker.id, []),
+                        )
                 resolution_check_need = _resolution_check_need(
                     node.detail, need_id, recovery, enforce_alignment
                 )
@@ -693,7 +727,11 @@ class LocalCoordinator:
                     grounded_updates.append(grounded_update)
                 resolution_results[need_id] = resolution
                 node.resolution = resolution.status
-                if resolution.status == "partial" and resolution.refined_need is not None:
+                if (
+                    profile.allow_need_revision
+                    and resolution.status == "partial"
+                    and resolution.refined_need is not None
+                ):
                     node.detail = resolution.refined_need
                     node.need = resolution.refined_need.description
 
@@ -720,7 +758,11 @@ class LocalCoordinator:
                     )
                 )
 
-            if round_index == 0 and forced_first_round_global_search_ids:
+            if (
+                profile.allow_recovery
+                and round_index == 0
+                and forced_first_round_global_search_ids
+            ):
                 # force_global_search's forced execution: a broad,
                 # unrestricted-territory search, same shape as the
                 # existing "global_fallback" special tactic below but
@@ -990,12 +1032,16 @@ class LocalCoordinator:
             # buffer is fully consumed every round (a proposal with no
             # explicit decision now defaults to "drop", never "create" --
             # see _apply_consolidation_decisions), so nothing carries over.
-            proposals = _collect_proposals(orchestrator_new_nodes, observed_needs)
-            pre_consolidation_node_ids = set(graph.nodes)
-            graph = self._consolidate_and_commit(
-                question, graph, proposals, recovery, enforce_alignment=enforce_alignment
-            )
-            if enforce_alignment:
+            if profile.allow_need_revision:
+                proposals = _collect_proposals(orchestrator_new_nodes, observed_needs)
+                pre_consolidation_node_ids = set(graph.nodes)
+                graph = self._consolidate_and_commit(
+                    question, graph, proposals, recovery, enforce_alignment=enforce_alignment
+                )
+            else:
+                pre_consolidation_node_ids = set(graph.nodes)
+                observed_needs = []
+            if profile.allow_need_revision and enforce_alignment:
                 # A node born mid-retry has no gen0 framing to inherit an
                 # intent_anchor from (retry_from_trajectory only seeds
                 # kept/reframed leaves) -- seed it here, once, at the
@@ -1043,7 +1089,11 @@ class LocalCoordinator:
                         node.resolution = "resolved"
                         derived_resolved_nodes.append(node.need_id)
                         recovery.incomplete_parent_streaks.pop(node.need_id, None)
-                    elif closure.status == "partial" and closure.refined_need is not None:
+                    elif (
+                        profile.allow_need_revision
+                        and closure.status == "partial"
+                        and closure.refined_need is not None
+                    ):
                         gap = NeedNode(
                             need_id=f"{node.need_id}-gap-{len(node.children)}",
                             need=closure.refined_need.description,
@@ -1056,7 +1106,10 @@ class LocalCoordinator:
                         new_incomplete_parents.append(node.need_id)
                         streak = recovery.incomplete_parent_streaks.get(node.need_id, 0) + 1
                         recovery.incomplete_parent_streaks[node.need_id] = streak
-                        if streak >= _MAX_CONSECUTIVE_FAILED_RECOVERIES:
+                        if (
+                            profile.allow_recovery
+                            and streak >= _MAX_CONSECUTIVE_FAILED_RECOVERIES
+                        ):
                             recovery.abandoned_node_ids.add(node.need_id)
                             new_incomplete_parents.remove(node.need_id)
             incomplete_parents = new_incomplete_parents
@@ -1079,8 +1132,13 @@ class LocalCoordinator:
                     node.progress = "not_stuck"
                 else:
                     node.rounds_without_progress += 1
-                    if node.rounds_without_progress >= _STUCK_THRESHOLD:
+                    if (
+                        profile.allow_recovery
+                        and node.rounds_without_progress >= _STUCK_THRESHOLD
+                    ):
                         node.progress = "stuck"
+                    else:
+                        node.progress = "not_stuck"
 
             # Recovery-streak finalization: episode-LOCAL (see StuckEpisode),
             # and covers every kind of recovery attempt (special tactic,
@@ -1098,30 +1156,31 @@ class LocalCoordinator:
             # current member, or a dependency release produced a new ready
             # node among them -- matches every criterion a real recovery
             # attempt can succeed by, not just "fully resolved".
-            touched_episode_ids: set[str] = set()
-            for need_id in [*plan.special_tactics, *plan.assignments, *plan.graph_updates]:
-                episode = _episode_for_need(recovery, need_id)
-                if episode is not None:
-                    touched_episode_ids.add(episode.episode_id)
-            for episode_id in touched_episode_ids:
-                episode = recovery.stuck_episodes.get(episode_id)
-                if episode is None:
-                    continue
-                progressed = bool(newly_ready & episode.members) or any(
-                    _resolution_advanced(
-                        member_id, touched_this_round, pre_resolution_status, resolution_results
+            if profile.allow_recovery:
+                touched_episode_ids: set[str] = set()
+                for need_id in [*plan.special_tactics, *plan.assignments, *plan.graph_updates]:
+                    episode = _episode_for_need(recovery, need_id)
+                    if episode is not None:
+                        touched_episode_ids.add(episode.episode_id)
+                for episode_id in touched_episode_ids:
+                    episode = recovery.stuck_episodes.get(episode_id)
+                    if episode is None:
+                        continue
+                    progressed = bool(newly_ready & episode.members) or any(
+                        _resolution_advanced(
+                            member_id, touched_this_round, pre_resolution_status, resolution_results
+                        )
+                        for member_id in episode.members
                     )
-                    for member_id in episode.members
-                )
-                if progressed:
-                    episode.recovery_streak = 0
-                else:
-                    episode.recovery_streak += 1
-                    if episode.recovery_streak >= _MAX_CONSECUTIVE_FAILED_RECOVERIES:
-                        recovery.abandoned_node_ids.update(episode.members)
-                        del recovery.stuck_episodes[episode_id]
-                        for member_id in episode.members:
-                            recovery.episode_by_need_id.pop(member_id, None)
+                    if progressed:
+                        episode.recovery_streak = 0
+                    else:
+                        episode.recovery_streak += 1
+                        if episode.recovery_streak >= _MAX_CONSECUTIVE_FAILED_RECOVERIES:
+                            recovery.abandoned_node_ids.update(episode.members)
+                            del recovery.stuck_episodes[episode_id]
+                            for member_id in episode.members:
+                                recovery.episode_by_need_id.pop(member_id, None)
 
             graph_delta = GraphDelta(
                 created_nodes=[
@@ -1150,8 +1209,12 @@ class LocalCoordinator:
                     graph_delta=graph_delta,
                 )
             )
+            if not profile.allow_recovery:
+                _clear_recovery_state(graph, recovery)
+                post_frontier = compute_frontier(graph)
             frontier = _exclude_abandoned(post_frontier, recovery.excluded_node_ids)
-            _reconcile_stuck_episodes(recovery, frontier.stuck_subgraphs)
+            if profile.allow_recovery:
+                _reconcile_stuck_episodes(recovery, frontier.stuck_subgraphs)
 
         # Inheritance is a global structural fact, not a territory-scoped one:
         # recruitment routing only ever proves "this worker's own files have
@@ -1972,6 +2035,7 @@ def _plan_round_with_cycle_validation(
     stuck_tried_workers: dict[str, list[str]] | None = None,
     candidate_probes: dict[str, dict[str, list[Evidence]]] | None = None,
     worker_need_attempt_states: dict[str, dict[str, str]] | None = None,
+    validate_graph_updates: bool = True,
 ) -> RoundPlan:
     """Calls reasoner.plan_round() and validates the graph its
     graph_updates would produce -- merged onto the existing graph -- has
@@ -2001,6 +2065,8 @@ def _plan_round_with_cycle_validation(
         candidate_probes=candidate_probes,
         worker_need_attempt_states=worker_need_attempt_states,
     )
+    if not validate_graph_updates:
+        return plan
     cycles = find_cycles(_merge_graph_updates(graph, plan))
     if not cycles:
         return plan
@@ -2244,6 +2310,58 @@ def _enforce_local_exhaustion(
         else:
             del plan.assignments[need_id]
             plan.special_tactics.setdefault(need_id, "global_fallback")
+
+
+def _apply_fixed_assignments(
+    plan: RoundPlan,
+    graph: NeedGraph,
+    frontier: FrontierResult,
+    fixed_assignments: dict[str, list[str]],
+) -> None:
+    """Keep each need on its first executed worker assignment.
+
+    This is a post-planner gate: a later planner call still sees current
+    evidence and may reason about the evolving graph, but it cannot silently
+    swap an already routed need to a different worker.  New nodes receive one
+    initial route the first time they become executable, then join the same
+    fixed map.
+    """
+
+    assignable = set(frontier.ready)
+    assignable.update(need_id for group in frontier.stuck_subgraphs for need_id in group)
+    for need_id, worker_ids in fixed_assignments.items():
+        if need_id in graph.nodes and need_id in assignable:
+            plan.assignments[need_id] = list(worker_ids)
+
+
+def _record_initial_assignments(
+    plan: RoundPlan,
+    graph: NeedGraph,
+    fixed_assignments: dict[str, list[str]],
+) -> None:
+    """Persist a need's first valid routing decision for the no-reroute arm."""
+
+    for need_id, worker_ids in plan.assignments.items():
+        if need_id in graph.nodes and worker_ids:
+            fixed_assignments.setdefault(need_id, list(worker_ids))
+
+
+def _clear_recovery_state(graph: NeedGraph, recovery: RecoveryState) -> None:
+    """Remove every recovery decision path for the recovery ablation.
+
+    Keep the graph's no-progress counter for ordinary routing telemetry, but
+    never let it turn a node into a stuck subgraph, exclude an abandoned node,
+    or influence a future worker choice.
+    """
+
+    for node in graph.nodes.values():
+        node.progress = "not_stuck"
+    recovery.stuck_episodes.clear()
+    recovery.episode_by_need_id.clear()
+    recovery.tried_workers_by_node.clear()
+    recovery.incomplete_parent_streaks.clear()
+    recovery.abandoned_node_ids.clear()
+    recovery.worker_need_attempts.clear()
 
 
 def _merge_graph_updates(graph: NeedGraph, plan: RoundPlan) -> NeedGraph:
