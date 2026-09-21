@@ -15,6 +15,7 @@ from ant.coordinator.ablations import (
 from ant.domain import (
     GraphConsolidationDecision,
     GraphConsolidationPlan,
+    GraphFreePlan,
     NeedNode,
     NeedResolution,
     RoundPlan,
@@ -23,6 +24,7 @@ from ant.domain import (
     WorkerObservation,
 )
 from ant.providers import MockLLMProvider
+from ant.providers.openai_provider import _parse_graph_free_plan
 
 
 def _workers() -> list[WorkerCard]:
@@ -47,13 +49,26 @@ def _workers() -> list[WorkerCard]:
 
 
 class _ScriptedReasoner(MockLLMProvider):
-    def __init__(self, plans: list[RoundPlan], resolution: NeedResolution | None = None) -> None:
+    def __init__(
+        self,
+        plans: list[RoundPlan],
+        resolution: NeedResolution | None = None,
+        graph_free_plans: list[GraphFreePlan] | None = None,
+    ) -> None:
         self._plans = plans
+        self._graph_free_plans = graph_free_plans or []
         self._resolution = resolution or NeedResolution(status="unresolved")
         self.consolidation_calls = 0
+        self.plan_round_calls = 0
+        self.graph_free_calls: list[dict] = []
 
     def plan_round(self, **_kwargs) -> RoundPlan:
+        self.plan_round_calls += 1
         return self._plans.pop(0) if self._plans else RoundPlan()
+
+    def plan_graph_free_round(self, **kwargs) -> GraphFreePlan:
+        self.graph_free_calls.append(kwargs)
+        return self._graph_free_plans.pop(0) if self._graph_free_plans else GraphFreePlan()
 
     def observe(self, **_kwargs) -> WorkerObservation:
         return WorkerObservation(worker_id="scripted", territory_id="scripted")
@@ -207,15 +222,54 @@ def test_static_profile_blocks_need_revision_and_recovery_together(
     assert state.final_recovery_state.tried_workers_by_node == {}
 
 
+def test_graph_free_adaptive_uses_interaction_history_without_need_state(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    reasoner = _ScriptedReasoner(
+        [],
+        graph_free_plans=[
+            GraphFreePlan(worker_ids=["worker-a"], search_direction="first direction"),
+            GraphFreePlan(worker_ids=["worker-b"], search_direction="second direction"),
+        ],
+    )
+    coordinator = _coordinator(tmp_path, reasoner, monkeypatch)
+    calls: list[tuple[str, bool]] = []
+
+    def run_workers(selected, query, *_args, **kwargs):
+        calls.append((query, kwargs["collect_unresolved_needs"]))
+        return [], []
+
+    monkeypatch.setattr(coordinator, "_run_selected_workers", run_workers)
+    state = coordinator.ask(
+        "target question", max_rounds=2, coordination_profile="graph_free_adaptive"
+    )
+
+    assert state.final_need_graph == {}
+    assert state.unresolved_needs == []
+    assert reasoner.plan_round_calls == 0
+    assert reasoner.consolidation_calls == 0
+    assert calls == [("first direction", False), ("second direction", False)]
+    assert reasoner.graph_free_calls[0]["interaction_history"] == []
+    second_history = reasoner.graph_free_calls[1]["interaction_history"]
+    assert second_history[0].search_direction == "first direction"
+    assert [round_.node_executions[0].worker_ids for round_ in state.rounds] == [
+        ["worker-a"],
+        ["worker-b"],
+    ]
+    assert all(round_.node_executions[0].need_id == "graph-free" for round_ in state.rounds)
+
+
 def test_profiles_are_named_and_exposed_as_distinct_agent_conditions() -> None:
     assert set(PROFILES) == {
         "full",
         "static",
+        "graph_free_adaptive",
         "no_need_revision",
         "no_adaptive_rerouting",
         "no_recovery",
     }
     assert AblationAntAgent("static").name == "ant_static"
+    assert AblationAntAgent("graph_free_adaptive").name == "ant_graph_free_adaptive"
     assert AblationAntDocumentAgent("no_recovery").name == "ant_document_no_recovery"
     with pytest.raises(ValueError, match="Unknown adaptive-coordination profile"):
         resolve_profile("not-a-profile")
@@ -226,3 +280,16 @@ def test_profile_scope_is_reset_after_one_ablation_task() -> None:
     with use_coordination_profile("static"):
         assert active_coordination_profile().key == "static"
     assert active_coordination_profile().key == "full"
+
+
+def test_graph_free_parser_rejects_unknown_workers_and_deduplicates() -> None:
+    plan = _parse_graph_free_plan(
+        {
+            "worker_ids": ["worker-a", "unknown", "worker-a", "worker-b"],
+            "search_direction": "  seek the implementation  ",
+        },
+        workers=_workers(),
+    )
+
+    assert plan.worker_ids == ["worker-a", "worker-b"]
+    assert plan.search_direction == "seek the implementation"

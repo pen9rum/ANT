@@ -36,6 +36,7 @@ from ant.domain import (
     GraphConsolidationDecision,
     GraphConsolidationPlan,
     GraphDelta,
+    GraphFreeInteraction,
     GroundedUpdate,
     NeedGraph,
     NeedNode,
@@ -487,6 +488,21 @@ class LocalCoordinator:
             if self.index_path is not None
             else None
         )
+        if not profile.uses_explicit_need_state:
+            if initial_graph is not None or initial_recovery is not None or enforce_alignment:
+                raise ValueError(
+                    "Graph-free Adaptive does not support Need-Graph-based retry state."
+                )
+            return self._ask_graph_free(
+                question=question,
+                max_rounds=max_rounds,
+                evidence=evidence,
+                search=search,
+                worker_config=worker_config,
+                worker_index=worker_index,
+                worker_card_embedding_index=worker_card_embedding_index,
+                memory_hints=memory_hints,
+            )
         recovery = initial_recovery if initial_recovery is not None else RecoveryState()
         fixed_assignments: dict[str, list[str]] = {}
         observed_needs: list[UnresolvedNeed] = []
@@ -1630,6 +1646,7 @@ class LocalCoordinator:
         evidence: list[Evidence],
         seen_worker_ids: set[str],
         need_id: str = "",
+        collect_unresolved_needs: bool = True,
     ) -> tuple[list[WorkerObservation], list[UnresolvedNeed]]:
         """Runs each selected worker in turn, mutating `evidence` and
         `seen_worker_ids` in place as it goes rather than batching updates
@@ -1672,18 +1689,197 @@ class LocalCoordinator:
             # worker's own findings, so it does not re-raise a need another
             # worker already grounded (e.g. worker B finding the subclass
             # worker A's need was about).
-            reasoner_context = _dedupe_evidence([*worker_evidence, *evidence])
-            reasoner_observation = self.reasoner.observe(
-                question=question,
-                worker_id=worker.id,
-                territory_id=worker.territory_id,
-                evidence=reasoner_context,
-            )
-            observation.unresolved_needs.extend(reasoner_observation.unresolved_needs)
+            if collect_unresolved_needs:
+                reasoner_context = _dedupe_evidence([*worker_evidence, *evidence])
+                reasoner_observation = self.reasoner.observe(
+                    question=question,
+                    worker_id=worker.id,
+                    territory_id=worker.territory_id,
+                    evidence=reasoner_context,
+                )
+                observation.unresolved_needs.extend(reasoner_observation.unresolved_needs)
             observations.append(observation)
             round_needs.extend(observation.unresolved_needs)
             seen_worker_ids.add(worker.id)
         return observations, round_needs
+
+    def _ask_graph_free(
+        self,
+        *,
+        question: str,
+        max_rounds: int,
+        evidence: list[Evidence],
+        search: LocalSearchTool,
+        worker_config: WorkerRunConfig,
+        worker_index: WorkerIndex,
+        worker_card_embedding_index: EmbeddingIndex | None,
+        memory_hints: dict[str, str],
+    ) -> EvidenceState:
+        """Run evidence-conditioned adaptive control without Need state.
+
+        This intentionally has no graph construction, graph planner,
+        resolution check, consolidation, or observed-need buffer. The only
+        cross-round control state is the bounded interaction history passed
+        to ``plan_graph_free_round``.
+        """
+
+        seen_worker_ids: set[str] = set()
+        history: list[GraphFreeInteraction] = []
+        rounds: list[PlanningRound] = []
+        worker_by_id = {worker.id: worker for worker in self.workers}
+
+        for round_index in range(max_rounds):
+            routing_query = history[-1].search_direction if history else question
+            candidates, candidate_ranks = self._graph_free_candidates(
+                routing_query,
+                worker_index,
+                worker_card_embedding_index,
+            )
+            probes = self._probe_graph_free_candidates(routing_query, candidates, search)
+            plan = self.reasoner.plan_graph_free_round(
+                question=question,
+                evidence=evidence,
+                workers=candidates,
+                memory_hints=memory_hints,
+                interaction_history=list(history),
+                candidate_probes=probes,
+            )
+            selected = [
+                worker_by_id[worker_id]
+                for worker_id in plan.worker_ids
+                if worker_id in worker_by_id and worker_id in candidate_ranks
+            ]
+            if not selected:
+                break
+            search_direction = plan.search_direction.strip() or question
+            previous_keys = {_evidence_key(item) for item in evidence}
+            observations, _ = self._run_selected_workers(
+                selected,
+                search_direction,
+                question,
+                search,
+                worker_config,
+                evidence,
+                seen_worker_ids,
+                collect_unresolved_needs=False,
+            )
+            new_evidence = [
+                item for item in evidence if _evidence_key(item) not in previous_keys
+            ]
+            highlights = [
+                f"{item.path}:{item.line_start} {(item.quote or '').strip().splitlines()[0][:160]}"
+                for item in new_evidence[:3]
+                if (item.quote or "").strip()
+            ]
+            history.append(
+                GraphFreeInteraction(
+                    round_index=round_index,
+                    search_direction=search_direction,
+                    worker_ids=[worker.id for worker in selected],
+                    evidence_count=len(new_evidence),
+                    evidence_highlights=highlights,
+                )
+            )
+            rounds.append(
+                PlanningRound(
+                    round_index=round_index,
+                    node_executions=[
+                        NodeExecutionTrace(
+                            need_id="graph-free",
+                            need=search_direction,
+                            worker_ids=[worker.id for worker in selected],
+                            coalition_formed=len(selected) > 1,
+                            evidence_gain=len(new_evidence),
+                            cumulative_evidence_count=len(evidence),
+                            observations=observations,
+                            candidate_worker_ids=[worker.id for worker in candidates],
+                            candidate_worker_ranks=candidate_ranks,
+                            candidate_probe_anchor_counts={
+                                worker_id: len(anchors) for worker_id, anchors in probes.items()
+                            },
+                        )
+                    ],
+                    graph_delta=GraphDelta(
+                        assignment_changes={"graph-free": [worker.id for worker in selected]}
+                    ),
+                )
+            )
+
+        ranked_evidence = _rank_global_evidence(evidence, question)
+        selected_evidence = _select_evidence(self.reasoner, question, ranked_evidence, search)
+        selected_keys = {_evidence_key(item) for item in selected_evidence}
+        rejected = [
+            item for item in ranked_evidence if _evidence_key(item) not in selected_keys
+        ]
+        evidence, facet_rescue_telemetry = _complete_missing_evidence_facets(
+            self.reasoner,
+            question,
+            selected_evidence,
+            rejected,
+            DEFAULT_SCORING_CONFIG.routing.llm_evidence_keep_limit,
+        )
+        answer = ""
+        if self.synthesizer and evidence:
+            coalition_workers = _last_coalition_workers(rounds)
+            if coalition_workers:
+                answer = self.synthesizer.synthesize_coalition(
+                    question=question,
+                    worker_ids=coalition_workers,
+                    evidence=evidence,
+                )
+            else:
+                answer = self.synthesizer.synthesize(question=question, evidence=evidence)
+        if self.synthesizer and not answer.strip():
+            answer = (
+                "The available evidence does not directly and reliably answer this "
+                "question -- no claim could be confidently supported from what was found."
+            )
+        usage = (
+            self.synthesizer.drain_usage()
+            if isinstance(self.synthesizer, UsageReporter)
+            else None
+        )
+        return EvidenceState(
+            question=question,
+            answer=answer,
+            evidence=evidence,
+            rounds=rounds,
+            usage=usage if isinstance(usage, TokenUsage) else TokenUsage(),
+            final_need_graph={},
+            final_recovery_state=RecoverySnapshot(),
+            facet_rescue=facet_rescue_telemetry,
+        )
+
+    def _graph_free_candidates(
+        self,
+        query: str,
+        worker_index: WorkerIndex,
+        embedding_index: EmbeddingIndex | None,
+    ) -> tuple[list[WorkerCard], dict[str, int]]:
+        """Retrieve controller-visible cards without a need-specific state."""
+
+        ranks = rank_workers(query, self.workers, worker_index, embedding_index)
+        top = dict(
+            sorted(ranks.items(), key=lambda item: item[1])[:_ESCALATED_NEED_CANDIDATE_LIMIT]
+        )
+        if not top:
+            top = {worker.id: index for index, worker in enumerate(self.workers, start=1)}
+        return [worker for worker in self.workers if worker.id in top], top
+
+    @staticmethod
+    def _probe_graph_free_candidates(
+        query: str,
+        candidates: list[WorkerCard],
+        search: LocalSearchTool,
+    ) -> dict[str, list[Evidence]]:
+        """Give the controller the same bounded pre-commit evidence signal."""
+
+        probes: dict[str, list[Evidence]] = {}
+        for worker in candidates:
+            lexical = search.search(query, worker.files, limit=_PROBE_ANCHOR_LIMIT)
+            dense = search.dense_search(query, worker.files, limit=_PROBE_ANCHOR_LIMIT)
+            probes[worker.id] = _dedupe_evidence([*lexical, *dense])[:_PROBE_ANCHOR_LIMIT]
+        return probes
 
     def _candidate_workers_for_round(
         self,

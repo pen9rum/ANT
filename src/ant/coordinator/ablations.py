@@ -20,6 +20,7 @@ class AdaptiveCoordinationProfile:
 
     key: str
     display_name: str
+    uses_explicit_need_state: bool
     allow_need_revision: bool
     allow_adaptive_rerouting: bool
     allow_recovery: bool
@@ -27,6 +28,8 @@ class AdaptiveCoordinationProfile:
     @property
     def is_full(self) -> bool:
         return (
+            self.uses_explicit_need_state
+            and
             self.allow_need_revision
             and self.allow_adaptive_rerouting
             and self.allow_recovery
@@ -36,6 +39,7 @@ class AdaptiveCoordinationProfile:
 FULL = AdaptiveCoordinationProfile(
     key="full",
     display_name="Full ANTMAN",
+    uses_explicit_need_state=True,
     allow_need_revision=True,
     allow_adaptive_rerouting=True,
     allow_recovery=True,
@@ -43,6 +47,7 @@ FULL = AdaptiveCoordinationProfile(
 STATIC = AdaptiveCoordinationProfile(
     key="static",
     display_name="Static ANTMAN",
+    uses_explicit_need_state=True,
     allow_need_revision=False,
     allow_adaptive_rerouting=False,
     allow_recovery=False,
@@ -50,6 +55,7 @@ STATIC = AdaptiveCoordinationProfile(
 NO_NEED_REVISION = AdaptiveCoordinationProfile(
     key="no_need_revision",
     display_name="w/o Need Revision",
+    uses_explicit_need_state=True,
     allow_need_revision=False,
     allow_adaptive_rerouting=True,
     allow_recovery=True,
@@ -57,6 +63,7 @@ NO_NEED_REVISION = AdaptiveCoordinationProfile(
 NO_ADAPTIVE_REROUTING = AdaptiveCoordinationProfile(
     key="no_adaptive_rerouting",
     display_name="w/o Adaptive Rerouting",
+    uses_explicit_need_state=True,
     allow_need_revision=True,
     allow_adaptive_rerouting=False,
     allow_recovery=True,
@@ -64,9 +71,18 @@ NO_ADAPTIVE_REROUTING = AdaptiveCoordinationProfile(
 NO_RECOVERY = AdaptiveCoordinationProfile(
     key="no_recovery",
     display_name="w/o Recovery",
+    uses_explicit_need_state=True,
     allow_need_revision=True,
     allow_adaptive_rerouting=True,
     allow_recovery=False,
+)
+GRAPH_FREE_ADAPTIVE = AdaptiveCoordinationProfile(
+    key="graph_free_adaptive",
+    display_name="Graph-free Adaptive",
+    uses_explicit_need_state=False,
+    allow_need_revision=False,
+    allow_adaptive_rerouting=True,
+    allow_recovery=True,
 )
 
 PROFILES = {
@@ -77,6 +93,7 @@ PROFILES = {
         NO_NEED_REVISION,
         NO_ADAPTIVE_REROUTING,
         NO_RECOVERY,
+        GRAPH_FREE_ADAPTIVE,
     )
 }
 

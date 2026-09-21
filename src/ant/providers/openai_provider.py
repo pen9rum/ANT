@@ -23,6 +23,8 @@ from ant.domain import (
     FrontierResult,
     GraphConsolidationDecision,
     GraphConsolidationPlan,
+    GraphFreeInteraction,
+    GraphFreePlan,
     GroundedUpdate,
     NeedAlignmentPlan,
     NeedAlignmentVerdict,
@@ -1206,6 +1208,81 @@ class OpenAIProvider:
         data = _loads_json_object(result.text)
         return _parse_round_plan(data, graph=graph, workers=workers)
 
+    def plan_graph_free_round(
+        self,
+        *,
+        question: str,
+        evidence: list[Evidence],
+        workers: list[WorkerCard],
+        memory_hints: dict[str, str],
+        interaction_history: list[GraphFreeInteraction],
+        candidate_probes: dict[str, list[Evidence]] | None = None,
+    ) -> GraphFreePlan:
+        """Adapt the next search without constructing a Need Graph."""
+
+        candidate_probes = candidate_probes or {}
+        worker_lines = [
+            f"- {worker.id}: {worker.routing_summary or '(no routing summary)'}"
+            + (
+                f"\n  terms: {', '.join(worker.searchable_terms)}"
+                if worker.searchable_terms
+                else ""
+            )
+            + (f"\n  memory: {memory_hints[worker.id]}" if worker.id in memory_hints else "")
+            for worker in workers
+        ]
+        evidence_lines = [
+            f"[{index}] {item.path}:{item.line_start}-{item.line_end} "
+            f"(worker={item.worker_id or 'unknown'})\n{item.quote[:600]}"
+            for index, item in enumerate(evidence)
+        ]
+        history_lines = [
+            f"- round {step.round_index}: direction={step.search_direction!r}; "
+            f"workers={', '.join(step.worker_ids) or '(none)'}; "
+            f"new evidence={step.evidence_count}"
+            + (
+                "\n  highlights: " + " | ".join(step.evidence_highlights)
+                if step.evidence_highlights
+                else ""
+            )
+            for step in interaction_history
+        ]
+        probe_lines = []
+        for worker in workers:
+            anchors = candidate_probes.get(worker.id, [])
+            if not anchors:
+                probe_lines.append(f"- {worker.id}: no anchors found")
+                continue
+            snippets = [
+                f"{anchor.path}:{anchor.line_start} "
+                f'"{(anchor.quote or "").strip().splitlines()[0][:120]}"'
+                for anchor in anchors
+                if (anchor.quote or "").strip()
+            ]
+            probe_lines.append(f"- {worker.id}: " + "; ".join(snippets))
+        prompt = (
+            "You are an adaptive evidence-gathering controller for a "
+            "codebase-QA task. This is explicitly graph-free: do NOT "
+            "create, name, decompose, track, resolve, or refer to "
+            "persistent needs, subtasks, nodes, dependencies, or a plan. "
+            "Use only the question, WorkerCards, accumulated evidence, "
+            "and prior interaction history to decide the next search. "
+            "When a direction was unproductive, redirect to a different "
+            "worker or a more useful search direction.\n"
+            f"Question: {question}\n"
+            f"Workers available this round:\n{chr(10).join(worker_lines) or '(none)'}\n"
+            "Candidate probes (cheap local anchors before committing):\n"
+            f"{chr(10).join(probe_lines) or '(none)'}\n"
+            f"Accumulated evidence:\n{chr(10).join(evidence_lines) or '(none yet)'}\n"
+            f"Prior interaction history:\n{chr(10).join(history_lines) or '(none yet)'}\n"
+            "Return JSON with exactly two keys: worker_ids (a non-empty "
+            "list of ids from Workers available this round, unless there "
+            "are no workers) and search_direction (a concise query for "
+            "those workers)."
+        )
+        result = self.responses_json(prompt, max_output_tokens=1024)
+        return _parse_graph_free_plan(_loads_json_object(result.text), workers=workers)
+
     def consolidate_graph(
         self,
         *,
@@ -2290,6 +2367,27 @@ def _parse_round_plan(
         graph_updates=graph_updates,
         assignments=assignments,
         special_tactics=special_tactics,
+    )
+
+
+def _parse_graph_free_plan(data: dict, *, workers: list[WorkerCard]) -> GraphFreePlan:
+    """Parse the graph-free controller response without introducing ids."""
+
+    valid_worker_ids = {worker.id for worker in workers}
+    raw_worker_ids = data.get("worker_ids")
+    worker_ids = (
+        [
+            worker_id
+            for worker_id in raw_worker_ids
+            if isinstance(worker_id, str) and worker_id in valid_worker_ids
+        ]
+        if isinstance(raw_worker_ids, list)
+        else []
+    )
+    direction = data.get("search_direction")
+    return GraphFreePlan(
+        worker_ids=list(dict.fromkeys(worker_ids)),
+        search_direction=direction.strip() if isinstance(direction, str) else "",
     )
 
 

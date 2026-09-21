@@ -1,6 +1,6 @@
 """Formal runner for the adaptive-coordination ablation table.
 
-Each invocation runs one or all four paper ablations against one frozen
+Each invocation runs one or all five paper ablations against one frozen
 benchmark set.  Results are isolated by benchmark/profile and resumable via
 the evaluation-suite JSONL convention.
 """
@@ -27,7 +27,13 @@ from ant.coordinator.ablations import PROFILES  # noqa: E402
 from ant.evaluation_suite.niah_plus import build_multi_needle_instance  # noqa: E402
 from ant.evaluation_suite.runner import run_suite  # noqa: E402
 
-_ABLATION_KEYS = ("static", "no_need_revision", "no_adaptive_rerouting", "no_recovery")
+_ABLATION_KEYS = (
+    "static",
+    "graph_free_adaptive",
+    "no_need_revision",
+    "no_adaptive_rerouting",
+    "no_recovery",
+)
 _MANIFESTS = {
     "repoprobe": REPO_ROOT
     / "third_party"

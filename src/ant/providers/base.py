@@ -10,6 +10,8 @@ from ant.domain import (
     FacetRescuePlan,
     FrontierResult,
     GraphConsolidationPlan,
+    GraphFreeInteraction,
+    GraphFreePlan,
     GroundedUpdate,
     NeedAlignmentPlan,
     NeedGraph,
@@ -318,6 +320,26 @@ class WorkerReasoner(Protocol):
         anchors can still be the right call (a need's answer may not be
         lexically/semantically close to it at all), and this call keeps
         free choice within `workers`.
+        """
+        ...
+
+    def plan_graph_free_round(
+        self,
+        *,
+        question: str,
+        evidence: list[Evidence],
+        workers: list[WorkerCard],
+        memory_hints: dict[str, str],
+        interaction_history: list[GraphFreeInteraction],
+        candidate_probes: dict[str, list[Evidence]] | None = None,
+    ) -> GraphFreePlan:
+        """Choose a next evidence-gathering action without a Need Graph.
+
+        The controller receives the same query, WorkerCards, evidence and
+        interaction history as the graph-based planner, but no need ids,
+        dependencies, decomposition, or resolution state. It returns only
+        workers and a next search direction, so rerouting/reframing remains
+        possible without creating an explicit unresolved-need state.
         """
         ...
 

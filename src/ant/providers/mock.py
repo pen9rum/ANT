@@ -9,6 +9,8 @@ from ant.domain import (
     FrontierResult,
     GraphConsolidationDecision,
     GraphConsolidationPlan,
+    GraphFreeInteraction,
+    GraphFreePlan,
     NeedGraph,
     NeedNode,
     NeedResolution,
@@ -214,6 +216,24 @@ class MockLLMProvider:
             return RoundPlan()
         first_worker_id = workers[0].id
         return RoundPlan(assignments={need_id: [first_worker_id] for need_id in frontier.ready})
+
+    def plan_graph_free_round(
+        self,
+        *,
+        question: str,
+        evidence: list[Evidence],
+        workers: list[WorkerCard],
+        memory_hints: dict[str, str],
+        interaction_history: list[GraphFreeInteraction],
+        candidate_probes: dict[str, list[Evidence]] | None = None,
+    ) -> GraphFreePlan:
+        """Choose the first available worker without creating need state."""
+
+        del evidence, memory_hints, interaction_history, candidate_probes
+        return GraphFreePlan(
+            worker_ids=[workers[0].id] if workers else [],
+            search_direction=question,
+        )
 
     def consolidate_graph(
         self,

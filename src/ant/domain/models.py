@@ -362,6 +362,28 @@ class RoundPlan(BaseModel):
     special_tactics: dict[str, str] = Field(default_factory=dict)
 
 
+class GraphFreeInteraction(BaseModel):
+    """One completed graph-free control step, kept as interaction history.
+
+    This is deliberately an execution record rather than an unresolved-need
+    representation: graph-free control never creates persistent need ids,
+    dependency edges, or resolution states.
+    """
+
+    round_index: int
+    search_direction: str
+    worker_ids: list[str] = Field(default_factory=list)
+    evidence_count: int = 0
+    evidence_highlights: list[str] = Field(default_factory=list)
+
+
+class GraphFreePlan(BaseModel):
+    """The graph-free controller's next evidence-gathering decision."""
+
+    worker_ids: list[str] = Field(default_factory=list)
+    search_direction: str = ""
+
+
 class ProposedNode(BaseModel):
     """One new-node candidate for this round's Potential Needs Buffer --
     from either the Orchestrator's own graph_updates (a new-id entry, see

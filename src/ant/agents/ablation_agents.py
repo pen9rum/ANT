@@ -86,6 +86,12 @@ class AblationAntDocumentAgent(AntDocumentAgent):
 
 from ant.evaluation_suite.registry import register_agent  # noqa: E402
 
-for _profile in ("static", "no_need_revision", "no_adaptive_rerouting", "no_recovery"):
+for _profile in (
+    "static",
+    "graph_free_adaptive",
+    "no_need_revision",
+    "no_adaptive_rerouting",
+    "no_recovery",
+):
     register_agent(AblationAntAgent(_profile))
     register_agent(AblationAntDocumentAgent(_profile))
