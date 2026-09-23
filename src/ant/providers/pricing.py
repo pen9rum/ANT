@@ -24,6 +24,10 @@ DEFAULT_PRICING_PER_MILLION = {
     "gpt-5.4-mini": {"input": 0.75, "output": 4.50},
     "gpt-4.1": {"input": 2.00, "output": 8.00},
     "gpt-5-2025-08-07": {"input": 1.25, "output": 10.00},
+    # OpenRouter slug for the same model, same $/1M rate confirmed on
+    # openrouter.ai/openai/gpt-4.1 (2026-09-23) -- OpenRouter passes this
+    # model through at OpenAI's own list price, no markup observed.
+    "openai/gpt-4.1": {"input": 2.00, "output": 8.00},
 }
 
 

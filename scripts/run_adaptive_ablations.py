@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -110,7 +111,14 @@ def _load_track(benchmark: str):
         examples = _select_by_manifest(adapter.load_examples(), payload)
         agent_cls = AblationAntAgent
     elif benchmark == "sweqa_pro":
-        adapter = SweQaProAdapter()
+        # Optional: point at an already-cloned repos/ directory (e.g. a
+        # sibling checkout that already has the 8 SWE-QA-Pro repos) to
+        # avoid a redundant clone -- unset by default, matching
+        # SweQaProAdapter's own "repos" relative-path default exactly.
+        repo_root_override = os.getenv("SWEQA_PRO_REPO_ROOT")
+        adapter = SweQaProAdapter(
+            repo_root=Path(repo_root_override) if repo_root_override else None
+        )
         examples = _select_by_manifest(adapter.load_examples(), payload)
         agent_cls = AblationAntAgent
     else:

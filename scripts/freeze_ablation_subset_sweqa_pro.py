@@ -102,7 +102,9 @@ def main() -> None:
     print("\nqa_type class_name distribution -- full 80 vs sampled 40:")
     all_classes = sorted(set(full_dist) | set(sampled_dist))
     for cls in all_classes:
-        print(f"  {cls:<35} full={full_dist.get(cls, 0.0):.4f}  sampled={sampled_dist.get(cls, 0.0):.4f}")
+        full_val = full_dist.get(cls, 0.0)
+        sampled_val = sampled_dist.get(cls, 0.0)
+        print(f"  {cls:<35} full={full_val:.4f}  sampled={sampled_val:.4f}")
 
 
 if __name__ == "__main__":

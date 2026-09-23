@@ -41,7 +41,7 @@ def rescore_file(in_path: Path, out_path: Path, manifest_conditions: dict[str, s
                 "metadata", {}
             ).get("prediction", "")
             gold = row.get("metric", {}).get("metadata", {}).get("ground_truths")
-            if task_id is None or gold is None:
+            if task_id is None or gold is None or row.get("status") != "completed":
                 out.write(json.dumps(row) + "\n")
                 continue
             question = _question_for(task_id, manifest_conditions)

@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from urllib import request
 
-from openai import OpenAI
+from openai import OpenAI, RateLimitError
 
 from ant.config import load_dotenv
 from ant.domain import (
@@ -102,6 +102,7 @@ class OpenAISettings:
     reasoning_effort: str | None = None
     organization: str | None = None
     project: str | None = None
+    base_url: str | None = None
 
 
 @dataclass(frozen=True)
@@ -135,6 +136,11 @@ class OpenAIProvider:
             reasoning_effort=reasoning_effort,
             organization=env_values.get("OPENAI_ORG_ID") or os.getenv("OPENAI_ORG_ID"),
             project=env_values.get("OPENAI_PROJECT_ID") or os.getenv("OPENAI_PROJECT_ID"),
+            # Optional escape hatch to route through an OpenAI-compatible
+            # endpoint (e.g. OpenRouter's /v1/responses) instead of OpenAI
+            # itself. None (unset) preserves the SDK's own default
+            # (api.openai.com) exactly as before this field existed.
+            base_url=env_values.get("OPENAI_BASE_URL") or os.getenv("OPENAI_BASE_URL"),
         )
         self.model = self.settings.model
         self.reasoning_effort = self.settings.reasoning_effort
@@ -154,6 +160,7 @@ class OpenAIProvider:
             api_key=self.settings.api_key,
             organization=self.settings.organization,
             project=self.settings.project,
+            base_url=self.settings.base_url,
         )
 
     def smoke_test(self, prompt: str = "Reply exactly: OK") -> str:
@@ -165,7 +172,7 @@ class OpenAIProvider:
             result = self._responses_create_raw(prompt, max_output_tokens=max_output_tokens)
             return self._record_result(_with_latency_and_cost(result, self.model, start))
         request_kwargs = self._responses_kwargs(prompt, max_output_tokens)
-        response = self.client().responses.create(**request_kwargs)
+        response = self._create_with_rate_limit_retry(request_kwargs)
         raw = response.model_dump()
         return self._record_result(
             _with_latency_and_cost(
@@ -178,6 +185,47 @@ class OpenAIProvider:
                 start,
             )
         )
+
+    # Some OpenAI-compatible gateways (observed on OpenRouter's
+    # "new account" per-model RPM gate) return a 429 with an
+    # X-RateLimit-Reset header giving the exact epoch-ms this specific
+    # rolling window clears -- waiting until exactly that point (plus a
+    # small buffer) and retrying succeeds reliably, confirmed directly
+    # against live traffic. Falls back to a fixed conservative sleep when
+    # the header isn't present (e.g. a different kind of 429). Bounded
+    # retry count so a genuinely persistent outage still surfaces as a
+    # real failure instead of hanging forever.
+    _RATE_LIMIT_MAX_RETRIES = 6
+    _RATE_LIMIT_FALLBACK_SLEEP_SECONDS = 65
+    _RATE_LIMIT_RESET_BUFFER_SECONDS = 3
+
+    def _create_with_rate_limit_retry(self, request_kwargs: dict):
+        client = self.client()
+        for attempt in range(self._RATE_LIMIT_MAX_RETRIES + 1):
+            try:
+                return client.responses.create(**request_kwargs)
+            except RateLimitError as exc:
+                if attempt == self._RATE_LIMIT_MAX_RETRIES:
+                    raise
+                sleep_seconds = self._RATE_LIMIT_FALLBACK_SLEEP_SECONDS
+                reset_header = None
+                response = getattr(exc, "response", None)
+                if response is not None:
+                    reset_header = response.headers.get("X-RateLimit-Reset")
+                if reset_header:
+                    try:
+                        reset_epoch_seconds = float(reset_header) / 1000.0
+                        sleep_seconds = max(
+                            0.0,
+                            reset_epoch_seconds
+                            - time.time()
+                            + self._RATE_LIMIT_RESET_BUFFER_SECONDS,
+                        )
+                    except (TypeError, ValueError):
+                        pass
+                sleep_seconds = min(sleep_seconds, self._RATE_LIMIT_FALLBACK_SLEEP_SECONDS)
+                time.sleep(sleep_seconds)
+        raise AssertionError("unreachable")  # loop always returns or raises above
 
     def drain_usage(self) -> TokenUsage:
         usage = self._usage
