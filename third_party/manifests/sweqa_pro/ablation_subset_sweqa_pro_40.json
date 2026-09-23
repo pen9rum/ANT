@@ -1,0 +1,124 @@
+{
+  "name": "sweqa_pro_ablation_subset_40",
+  "status": "frozen_final",
+  "frozen_final": true,
+  "benchmark": "sweqa_pro",
+  "source_manifest": "third_party\\manifests\\sweqa_pro\\sample_manifest_sweqa_pro_80.json",
+  "selection_method": "Metadata-only stratified random sampling, fixed before running any ablation variant. Primary stratum: repository (8 repos x 10 questions each in the source 80-question manifest, proportional to the original distribution -> a fixed 5 questions sampled per repo). Within each repo, uniform random sampling (random.Random(seed).sample) over the repo's 10 task_ids, sorted before sampling for determinism. No model output or performance measurement was read or used to select questions. qa_type distribution below is reported only as a post-hoc check that the sampled subset roughly tracks the full 80's distribution, not as a selection criterion.",
+  "seed": 42,
+  "questions_per_repository_sampled": 5,
+  "total_task_ids": 40,
+  "total_repositories": 8,
+  "selected_task_ids_by_repo": {
+    "PennyLaneAI/pennylane": [
+      "247e8f0767c3070f",
+      "47af69971c1baaaa",
+      "63a469b2235e6947",
+      "83e365be1fecc6c0",
+      "f85cae6b4fe06bcb"
+    ],
+    "mwaskom/seaborn": [
+      "1347185dd7392829",
+      "28d9b344cb4c13fc",
+      "9c364a4a784e153a",
+      "af28a26347def680",
+      "fccb59e36e13b4b7"
+    ],
+    "python-pillow/Pillow": [
+      "6b736c354c51b8ec",
+      "6ce28ca3a6a06cc2",
+      "b25530160e601835",
+      "d298a1fd5ee5c00b",
+      "ed64f29ea4a556f5"
+    ],
+    "qiboteam/qibo": [
+      "355a4aa23fedfe23",
+      "3f0918f490f79681",
+      "91f6683f1816424a",
+      "9c20dc43873e8470",
+      "dc7063c430604eac"
+    ],
+    "sanic-org/sanic": [
+      "0b6be6237e54890e",
+      "271fa47a0fbfb2df",
+      "5e37af2e50a35d6f",
+      "90aaeda9da28f687",
+      "d9b86a6c98603d5b"
+    ],
+    "sphinx-doc/sphinx": [
+      "39de7debd3fdb4c2",
+      "48deec23c86a40d8",
+      "95e60f2cabd48e5e",
+      "9f4acafcaa2cc210",
+      "f94c102bd15661ac"
+    ],
+    "sqlfluff/sqlfluff": [
+      "329382a86e7a279f",
+      "5bf8a9864321440e",
+      "849c94676310c3f6",
+      "b28ce492fa40f85c",
+      "cb33e27df8c22e0c"
+    ],
+    "yt-dlp/yt-dlp": [
+      "05533ae903375e6b",
+      "075628f5cefca956",
+      "64be8a3702a1b025",
+      "7fdcdb38110cc7a4",
+      "e3f6857934e88658"
+    ]
+  },
+  "task_ids": [
+    "05533ae903375e6b",
+    "075628f5cefca956",
+    "0b6be6237e54890e",
+    "1347185dd7392829",
+    "247e8f0767c3070f",
+    "271fa47a0fbfb2df",
+    "28d9b344cb4c13fc",
+    "329382a86e7a279f",
+    "355a4aa23fedfe23",
+    "39de7debd3fdb4c2",
+    "3f0918f490f79681",
+    "47af69971c1baaaa",
+    "48deec23c86a40d8",
+    "5bf8a9864321440e",
+    "5e37af2e50a35d6f",
+    "63a469b2235e6947",
+    "64be8a3702a1b025",
+    "6b736c354c51b8ec",
+    "6ce28ca3a6a06cc2",
+    "7fdcdb38110cc7a4",
+    "83e365be1fecc6c0",
+    "849c94676310c3f6",
+    "90aaeda9da28f687",
+    "91f6683f1816424a",
+    "95e60f2cabd48e5e",
+    "9c20dc43873e8470",
+    "9c364a4a784e153a",
+    "9f4acafcaa2cc210",
+    "af28a26347def680",
+    "b25530160e601835",
+    "b28ce492fa40f85c",
+    "cb33e27df8c22e0c",
+    "d298a1fd5ee5c00b",
+    "d9b86a6c98603d5b",
+    "dc7063c430604eac",
+    "e3f6857934e88658",
+    "ed64f29ea4a556f5",
+    "f85cae6b4fe06bcb",
+    "f94c102bd15661ac",
+    "fccb59e36e13b4b7"
+  ],
+  "qa_type_class_distribution_full_80": {
+    "How (Procedural Queries)": 0.2125,
+    "What (Factual Queries)": 0.2125,
+    "Where (Localization Queries)": 0.375,
+    "Why (Causal Queries)": 0.2
+  },
+  "qa_type_class_distribution_sampled_40": {
+    "How (Procedural Queries)": 0.225,
+    "What (Factual Queries)": 0.25,
+    "Where (Localization Queries)": 0.375,
+    "Why (Causal Queries)": 0.15
+  }
+}
