@@ -1,4 +1,6 @@
 {
+  "status": "frozen_final",
+  "frozen_final": true,
   "conditions": [
     {
       "task_id": "niah_multi_512000_early_0",
