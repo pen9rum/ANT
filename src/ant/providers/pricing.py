@@ -29,6 +29,17 @@ DEFAULT_PRICING_PER_MILLION = {
 
 def estimate_cost_usd(model: str, usage: TokenUsage) -> float:
     pricing = DEFAULT_PRICING_PER_MILLION.get(model)
+    if pricing is None and "/" in model:
+        # A provider-routed name (e.g. OpenRouter's "openai/gpt-4.1", set via
+        # ANT_MODEL when OPENAI_BASE_URL points at openrouter.ai instead of
+        # api.openai.com -- see .env's own OPENAI_BASE_URL comment). This
+        # table is priced from OpenAI's own listed rates; it is used here as
+        # an APPROXIMATION for the same underlying model routed through
+        # OpenRouter, which is usually but not guaranteed to bill at the
+        # same per-token rate. Treat estimated_cost_usd as indicative, not
+        # a substitute for OpenRouter's own dashboard/invoice, whenever
+        # ANT_MODEL carries a "provider/" prefix.
+        pricing = DEFAULT_PRICING_PER_MILLION.get(model.split("/", 1)[1])
     if pricing is None:
         return 0.0
     input_cost = usage.input_tokens / 1_000_000 * pricing["input"]
