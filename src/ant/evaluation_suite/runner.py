@@ -43,7 +43,16 @@ def run_suite(
     JSONL row per example -- same per-example failure isolation as the
     existing run_batch (one bad example must not sink the whole run), same
     resume-by-already-written-task_id convention as gen_compare.py's own
-    `_load_or_rebuild_scores`.
+    `_load_or_rebuild_scores` -- BUT gated on `status == "completed"`, not
+    merely on the task_id being present. A row written after a transient
+    failure (rate limit, a gated-access hiccup, ...) has `status` starting
+    with "error: " and must not count as done: skipping it on the next
+    resume would silently freeze a bad $0/0-score row into the results
+    forever. Such rows are dropped when the file is re-read here (not
+    carried into `results`/kept in the rewritten file), so a resumed run's
+    output ends up with at most one row per task_id -- the newest
+    completed one -- rather than accumulating stale error rows for a
+    task_id it's about to retry.
 
     `trajectory_dump_dir`, when given, also writes each example's full
     AgentResult JSON to `trajectory_dump_dir / f"{method}-{task_id}.json"`
@@ -51,22 +60,36 @@ def run_suite(
     """
     out_path.parent.mkdir(parents=True, exist_ok=True)
     already_done: set[str] = set()
+    kept_lines: list[str] = []
     if resume and out_path.exists():
         for line in out_path.read_text(encoding="utf-8").splitlines():
             if not line.strip():
                 continue
             try:
-                already_done.add(json.loads(line)["task_id"])
-            except (json.JSONDecodeError, KeyError):
+                row = json.loads(line)
+            except json.JSONDecodeError:
                 continue
+            if row.get("status") == "completed" and "task_id" in row:
+                already_done.add(row["task_id"])
+                kept_lines.append(line)
+            # else: an error/incomplete row for this task_id is dropped --
+            # not "done", and not carried into the rewritten file, so a
+            # retry that succeeds this time doesn't leave a duplicate
+            # error row alongside it.
 
     manifest = start_manifest(
         benchmark=benchmark.name, method=agent.name, example_count=len(examples)
     )
 
     results: list[SuiteResult] = []
-    mode = "a" if resume and out_path.exists() else "w"
-    with out_path.open(mode, encoding="utf-8") as handle:
+    # Always rewrite: `kept_lines` (completed rows carried over) are
+    # written first, then new/retried rows appended -- this is what lets
+    # dropped error rows above actually disappear from the file on disk,
+    # rather than an "a" mode preserving them underneath the new attempt.
+    with out_path.open("w", encoding="utf-8") as handle:
+        for line in kept_lines:
+            handle.write(line + "\n")
+        handle.flush()
         for example in examples:
             if example.task_id in already_done:
                 continue

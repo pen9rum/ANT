@@ -215,6 +215,39 @@ def test_run_suite_resumes_and_skips_already_done_task_ids(tmp_path: Path) -> No
     assert len(written) == 3
 
 
+def test_run_suite_resume_retries_an_errored_task_id_instead_of_freezing_it(
+    tmp_path: Path,
+) -> None:
+    """A row written after a transient failure has status="error: ...", not
+    "completed" -- resume must retry it (task_id presence alone is not
+    "done"), and the stale error row must not survive alongside the retry's
+    result once it succeeds."""
+    benchmark = _FakeBenchmarkForRunner(fail_on={"q2"})
+    agent = _FakeAgentForRunner()
+    out_path = tmp_path / "results.jsonl"
+
+    first = run_suite(
+        benchmark=benchmark, agent=agent, examples=_examples(["q1", "q2"]), out_path=out_path
+    )
+    assert first[1].status.startswith("error: RuntimeError")
+
+    # The underlying failure clears (e.g. a transient rate limit) before
+    # the next resumed run -- q2 must be retried, not skipped as "done".
+    benchmark.fail_on.clear()
+    agent.ran.clear()
+    second = run_suite(
+        benchmark=benchmark, agent=agent, examples=_examples(["q1", "q2"]), out_path=out_path
+    )
+    assert agent.ran == ["q2"]
+    assert second[0].task_id == "q2"
+    assert second[0].status == "completed"
+
+    written = [json.loads(line) for line in out_path.read_text(encoding="utf-8").splitlines()]
+    assert len(written) == 2
+    by_id = {row["task_id"]: row for row in written}
+    assert by_id["q2"]["status"] == "completed"
+
+
 def test_run_suite_dumps_full_trajectory_when_asked(tmp_path: Path) -> None:
     benchmark = _FakeBenchmarkForRunner()
     agent = _FakeAgentForRunner()
