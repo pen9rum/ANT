@@ -44,7 +44,7 @@ _MANIFESTS = {
     / "third_party"
     / "manifests"
     / "sweqa_pro"
-    / "sample_manifest_sweqa_pro_80.json",
+    / "ablation_subset_sweqa_pro_40.json",
     "niah_512k": REPO_ROOT
     / "third_party"
     / "manifests"
