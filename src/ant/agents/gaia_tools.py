@@ -296,7 +296,15 @@ class GaiaToolRegistry:
         except Exception as exc:
             self._record(TOOL_SEARCH, arguments, ok=False, summary="", error=repr(exc))
             raise
-        self._record(TOOL_SEARCH, arguments, ok=True, summary=f"{len(hits)} hits")
+        # `FallbackSearchBackend` (Tavily-primary/DuckDuckGo-secondary) tracks
+        # which backend actually answered on itself (`last_used`) but never
+        # surfaces it -- a run degrading to DuckDuckGo mid-task was
+        # previously invisible in the call log, indistinguishable from a
+        # normal Tavily hit. A plain single-backend object has neither
+        # attribute, so both getattr calls fall back to no-ops for it.
+        backend_used = getattr(self.search_backend, "last_used", None)
+        summary = f"{len(hits)} hits" + (f" via {backend_used}" if backend_used else "")
+        self._record(TOOL_SEARCH, arguments, ok=True, summary=summary)
         return hits
 
     def open_url(self, url: str) -> str:
