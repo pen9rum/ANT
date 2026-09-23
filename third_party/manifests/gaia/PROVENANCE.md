@@ -54,6 +54,50 @@ matters more than our opinion of the code:
    touching this file.
 7. `import numpy as np` is unused upstream but retained verbatim.
 
+## `gaia_text_103_manifest.json`
+
+**This is the PRIMARY GAIA evaluation set for this project going forward**
+-- `manifest.json`'s broader 152-task capability-covered set is kept on
+disk but is no longer what actual runs use.
+
+GAIA-Text-103 is a fixed, community-standard text-only subset of the
+GAIA 2023 validation split. It was NOT selected or derived by this
+project (not from `manifest.json`, not from any modality-support rule,
+not from model performance) -- it is defined by
+[WebThinker (RUC-NLPIR)](https://github.com/RUC-NLPIR/WebThinker) and
+adopted verbatim (same URL, no re-filtering) by
+[MiroThinker/MiroFlow](https://github.com/MiroMindAI/MiroFlow)'s own
+`utils/prepare_benchmark/gen_gaia_text_only.py` for consistency with
+prior open-source agent-research work.
+
+| Field | Value |
+|---|---|
+| Source | `https://raw.githubusercontent.com/RUC-NLPIR/WebThinker/refs/heads/main/data/GAIA/dev.json` |
+| Pinned commit | `991ff7775231823b2059e2409e2d9ff70c144932` (2025-03-31, last touch to this file) |
+| Count | 103 |
+| Level distribution | L1=39, L2=52, L3=12 (matches every published GAIA-Text-103 report checked) |
+| Retrieved | 2026-09-22, direct HTTPS GET of the pinned URL |
+
+**Only `task_id` and the aggregate `level_distribution` are stored** in
+`gaia_text_103_manifest.json` -- the upstream `dev.json` itself also
+contains `Question`, `answer`, and `Annotator_Metadata` for every row
+(that file predates, and is independent of, this project's own
+gold-leakage-prevention discipline; redistributing that content is
+WebThinker's own choice, made outside this project). We read those
+fields only transiently to compute the level distribution, then
+discarded them -- they were never written to disk or committed.
+
+Cross-checked against `manifest.json`: all 103 Text-103 task_ids are a
+strict subset of the 152-task capability-covered set (intersection =
+103, nothing in Text-103 is missing from `manifest.json`) -- expected,
+since every Text-103 task requires no file attachment at all (confirmed
+on the upstream rows), which trivially satisfies `manifest.json`'s own
+"every required modality is supported" selection rule. The 49 tasks in
+`manifest.json` but not in Text-103 are exactly the ones GAIA-Text-103
+excludes for having *any* attachment (even a substrate-supported one
+like PDF/XLSX) -- Text-103 is a stricter "no attachment whatsoever" cut,
+not a looser one.
+
 ## Dataset content is deliberately NOT vendored
 
 `gaia-benchmark/GAIA`'s own gate text reads:
