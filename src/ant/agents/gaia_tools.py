@@ -83,6 +83,7 @@ from ant.evaluation_suite.gaia_scope import (
     GaiaSubstrateError,
     TableView,
 )
+from ant.providers.openai_provider import _loads_json_object
 
 TOOL_SEARCH = "search"
 TOOL_OPEN_URL = "open_url"
@@ -425,10 +426,32 @@ class GaiaCoordinatorSearchTool:
     same reason; the difference is that it could delegate to a real
     `LocalSearchTool` over materialized page files, whereas GAIA has no
     single materialized corpus to delegate to.
+
+    THE `reasoner` PARAMETER -- WHY IT EXISTS: `rank_symbols()` always
+    returning `[]` (above) has a second consequence beyond "no structural
+    evidence": `AutonomousWorker.run()` only routes to `worker_reasoner`
+    (`select_lookups`/`plan_worker_actions`) when `candidate_symbols` is
+    non-empty, so on this substrate those calls NEVER fire and a
+    worker-model swap (ANTMAN-H's Qwen3-8B) is otherwise architecturally
+    inert here -- `AutonomousWorker.run()`'s own `self.tools.search(...)`
+    call is unconditional and un-reasoned for every substrate, repo-QA
+    included; repo-QA just also has a second, symbol-gated call site that
+    happens to carry the swap. GAIA has no symbol-gated call site to piggy
+    back on, so the swap has to live in the one call site GAIA does have:
+    this method. When `reasoner` is set, `search()` uses it to (1) turn
+    the coordinator's need text into a search query instead of forwarding
+    it verbatim, and (2) decide which, if any, hits are worth fetching in
+    full via `open_url` -- both real local-reasoning decisions, not a new
+    capability: a ReAct-shaped agent over the same registry already makes
+    both decisions itself, per tool-call, with its own model. `reasoner`
+    defaults to `None` and every call below degrades to the prior
+    deterministic behaviour on `None` or on any reasoning-call failure, so
+    this is additive and never changes the no-`reasoner` runtime.
     """
 
-    def __init__(self, registry: GaiaToolRegistry) -> None:
+    def __init__(self, registry: GaiaToolRegistry, reasoner: Any | None = None) -> None:
         self.registry = registry
+        self.reasoner = reasoner
 
     def search(
         self, query: str, files: list[str], limit: int = 8, context_lines: int = 6
@@ -440,7 +463,11 @@ class GaiaCoordinatorSearchTool:
         del files, context_lines
         evidence: list[Evidence] = []
         if self.registry.search_backend is not None:
-            for hit in self.registry.search(query, limit=limit):
+            search_query = query
+            if self.reasoner is not None:
+                search_query = self._reasoned_query(query)
+            hits = self.registry.search(search_query, limit=limit)
+            for hit in hits:
                 evidence.append(
                     Evidence(
                         path=hit.url,
@@ -450,9 +477,76 @@ class GaiaCoordinatorSearchTool:
                         reason=f"web search hit: {hit.title}",
                     )
                 )
+            if self.reasoner is not None and hits and self.registry.fetch_backend is not None:
+                evidence.extend(self._reasoned_follow_up(query, hits, limit))
         if self.registry.environment.has_attachment():
             evidence.extend(self._attachment_evidence(query, limit))
         return evidence[:limit]
+
+    def _reasoned_query(self, need: str) -> str:
+        """Worker-local reasoning step 1 (see `reasoner` note on the class
+        docstring): let the worker model rewrite `need` into a search
+        query. Falls back to `need` verbatim on any failure -- a bad
+        reasoning call must degrade to the old deterministic behaviour,
+        never abort the search."""
+        prompt = (
+            "You are a search assistant. Rewrite the following information "
+            "need as a single, effective web search query. Reply with ONLY "
+            "the query text -- no quotes, no explanation.\n\n"
+            f"Information need: {need}"
+        )
+        try:
+            refined = self.reasoner.responses_text(prompt, max_output_tokens=64).text.strip()
+        except Exception:
+            return need
+        return refined.strip('"') or need
+
+    def _reasoned_follow_up(
+        self, need: str, hits: list[SearchHit], limit: int
+    ) -> list[Evidence]:
+        """Worker-local reasoning step 2 (see `reasoner` note on the class
+        docstring): decide which (0-2) search hits are worth fetching in
+        full via `open_url`, instead of only ever returning search-engine
+        snippets. Bounded to 2 fetches per call regardless of `limit`, so
+        the added cost/latency stays comparable across worker models."""
+        listing = "\n".join(
+            f"{i}. {hit.title} -- {hit.url}\n   {hit.snippet[:200]}"
+            for i, hit in enumerate(hits)
+        )
+        prompt = (
+            "Given this information need and these web search results, decide "
+            "which results (0 to 2 of them) are worth opening in full to answer "
+            'the need. Reply with ONLY a JSON object: {"open": [<indices>]}.\n\n'
+            f"Information need: {need}\n\nSearch results:\n{listing}"
+        )
+        try:
+            decision = _loads_json_object(
+                self.reasoner.responses_json(prompt, max_output_tokens=64).text
+            )
+            indices = decision.get("open", [])
+        except Exception:
+            return []
+        out: list[Evidence] = []
+        for index in indices:
+            if len(out) >= 2 or len(out) >= limit:
+                break
+            if not isinstance(index, int) or not (0 <= index < len(hits)):
+                continue
+            hit = hits[index]
+            try:
+                text = self.registry.open_url(hit.url)
+            except Exception:
+                continue
+            out.append(
+                Evidence(
+                    path=hit.url,
+                    line_start=0,
+                    line_end=0,
+                    quote=text[:2000],
+                    reason=f"worker-reasoned follow-up fetch: {hit.title}",
+                )
+            )
+        return out
 
     def _attachment_evidence(self, query: str, limit: int) -> list[Evidence]:
         """Keyword-locates query terms inside the attachment. Failures are
