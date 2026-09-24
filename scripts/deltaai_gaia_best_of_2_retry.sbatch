@@ -4,11 +4,11 @@
 #   WORKER_BASE_URL=http://host:8000/v1 sbatch scripts/deltaai_gaia_best_of_2_retry.sbatch
 #SBATCH --job-name=gaia-best-of-2
 #SBATCH --account=bchx-dtai-gh
-#SBATCH --partition=ghx4
+#SBATCH --partition=ghx4-interactive
 #SBATCH --gpus=1
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=32G
-#SBATCH --time=6:00:00
+#SBATCH --time=2:00:00
 #SBATCH --output=logs/%x-%j.out
 #SBATCH --error=logs/%x-%j.err
 
