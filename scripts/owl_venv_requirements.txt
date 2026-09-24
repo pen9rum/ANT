@@ -1,0 +1,17 @@
+# Pinned, verified-working dependency set for the OWL GAIA baseline's
+# ISOLATED .venv-owl -- never install these into the project's main
+# .venv (see gaia_owl_bridge.py's own docstring: doing so once downgraded
+# pydantic/pydantic-core/tiktoken and broke 325 unrelated tests).
+#
+# `camel-ai`'s own PyPI dependency constraint on `mcp` resolves to mcp>=2
+# by default, which removes `mcp.server.FastMCP` that camel-ai's own
+# BaseToolkit imports at module load time -- confirmed live
+# (ImportError: cannot import name 'FastMCP' from 'mcp.server').
+# Pinning mcp<2 (last known-good: 1.30.0) fixes this.
+#
+# Setup:
+#   python3.12 -m venv .venv-owl
+#   export CPATH=/sw/user/python/miniforge3-pytorch-2.12.0/include/python3.12
+#   .venv-owl/bin/pip install -r scripts/owl_venv_requirements.txt
+camel-ai==0.2.90
+mcp==1.30.0
