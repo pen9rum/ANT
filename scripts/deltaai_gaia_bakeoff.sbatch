@@ -11,7 +11,12 @@
 #SBATCH --partition=ghx4-interactive
 #SBATCH --gpus=1
 #SBATCH --cpus-per-task=4
-#SBATCH --mem=16G
+#SBATCH --mem=64G
+# Bumped from 16G: dense_retrieval_gaia's embedding pipeline OOM-killed at
+# 15/103 questions (job 3200562, 37m45s in) -- same unexplained per-question
+# memory accumulation already seen and mitigated the same way for the
+# worker-model bakeoff driver (see deltaai_worker_model_bakeoff.sbatch's own
+# comment); root cause not investigated further here either.
 #SBATCH --time=2:00:00
 #SBATCH --output=logs/%x-%j.out
 #SBATCH --error=logs/%x-%j.err
