@@ -27,6 +27,7 @@ sys.path.insert(0, str(REPO_ROOT / "src"))
 import ant.agents.dense_retrieval_gaia  # noqa: E402, F401
 import ant.agents.direct_gaia  # noqa: E402, F401
 import ant.agents.matched_react_gaia  # noqa: E402, F401
+import ant.agents.owl_gaia  # noqa: E402, F401
 import ant.agents.retrieval_gaia  # noqa: E402, F401
 import ant.external_wrappers.s2g_rag_gaia  # noqa: E402, F401
 from ant.benchmarks.gaia import GaiaAdapter  # noqa: E402
@@ -41,6 +42,7 @@ ALL_METHODS = [
     "dense_retrieval_gaia",
     "matched_react_gaia",
     "s2g_rag_gaia",
+    "owl_gaia",
 ]
 
 

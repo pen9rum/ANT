@@ -1,5 +1,6 @@
 #!/bin/bash
-# Runs ant_gaia_h -> s2g_rag_gaia -> dense_retrieval_gaia in STRICT sequence
+# Runs ant_gaia_h -> s2g_rag_gaia -> owl_gaia (36-question stratified
+# sample) -> dense_retrieval_gaia in STRICT sequence
 # on ghx4-interactive (the fast-turnaround, 1-job-per-user QOS partition).
 # Each stage is watched to full completion (103/103 rows, resubmitting on
 # every timeout) BEFORE the next stage's job is even submitted -- so a
@@ -61,6 +62,21 @@ while true; do
     echo "[$(date)] s2g_rag_gaia: resubmitted as job $JOB_ID"
 done
 echo "[$(date)] === Stage 2 DONE: s2g_rag_gaia 103/103 ==="
+
+echo "[$(date)] === Stage 2.5: owl_gaia (36-question stratified sample, NOT full 103) ==="
+JOB_ID=$(METHODS="owl_gaia" PER_LEVEL=12 SKIP_PER_LEVEL=0 \
+    sbatch scripts/deltaai_gaia_level_stratified_baselines.sbatch | awk '{print $4}')
+echo "[$(date)] Submitted owl_gaia as job $JOB_ID"
+while true; do
+    _wait_for_job "$JOB_ID"
+    N=$(_row_count "output/runs/gaia-level-stratified-r10/owl_gaia/owl_gaia.jsonl")
+    echo "[$(date)] owl_gaia: $N/36 rows."
+    [ "$N" -ge 36 ] && break
+    JOB_ID=$(METHODS="owl_gaia" PER_LEVEL=12 SKIP_PER_LEVEL=0 \
+        sbatch scripts/deltaai_gaia_level_stratified_baselines.sbatch | awk '{print $4}')
+    echo "[$(date)] owl_gaia: resubmitted as job $JOB_ID"
+done
+echo "[$(date)] === Stage 2.5 DONE: owl_gaia 36/36 ==="
 
 echo "[$(date)] === Stage 3: dense_retrieval_gaia ==="
 JOB_ID=$(METHODS="dense_retrieval_gaia" sbatch scripts/deltaai_gaia_bakeoff.sbatch | awk '{print $4}')
